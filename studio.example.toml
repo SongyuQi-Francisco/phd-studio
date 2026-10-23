@@ -1,0 +1,22 @@
+# Copy to studio.toml (git-ignored) and adjust.
+
+[paths]
+vault = "~/Documents/ResearchVault"            # Obsidian vault root
+papers = "Literature/Papers"                   # one note per paper, relative to the vault
+pdfs = "Literature/PDFs"                       # optional local PDFs named <note name>.pdf
+reading_queue = "Reading Queue.md"             # [[wikilinks]] in this note define the reading order
+rules = "AGENTS.md"                            # vault rules Claude must follow when editing
+zotero = "~/Zotero"                            # Zotero data dir (read-only)
+secrets = "~/.config/secrets"                  # claude.env / deepseek.env live here
+# claude_cli = "~/.local/bin/claude"           # default: `claude` on PATH
+# data = "~/Library/Application Support/PhD Studio"  # downloaded and translated PDFs
+extra_read_dirs = []                           # other folders Claude may read, e.g. ["../code"]
+
+[profile]
+# Who you are and what you work on; goes into Claude's system prompt.
+about = "AI PhD student. Prefers answers in Chinese; reads English papers slowly."
+answer_language = "中文"
+# Notes Claude reads first when relating a paper to your work.
+research_notes = ["Atlas/PhD Roadmap.md", "Ideas/Idea Radar.md"]
+# Current projects, used in prompts like “和我的课题有什么关系”.
+current_focus = "Project A (target venue, deadline); Project B"

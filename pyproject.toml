@@ -1,0 +1,16 @@
+[project]
+name = "phd-studio"
+version = "0.1.0"
+description = "Local PhD reading workbench: PDF reader + Claude co-reader over the Obsidian vault and Zotero"
+requires-python = ">=3.12"
+dependencies = [
+    "claude-agent-sdk>=0.2.173",
+    "fastapi>=0.115",
+    "httpx>=0.28",
+    "pymupdf>=1.25",
+    "pyyaml>=6.0",
+    "uvicorn[standard]>=0.34",
+]
+
+[tool.uv]
+package = false
