@@ -22,7 +22,7 @@ _PCT_RE = re.compile(r"(\d{1,3})%")
 
 
 def _dir(stem: str) -> Path:
-    return BILINGUAL_DIR / stem
+    return BILINGUAL_DIR / library.safe_name(stem)
 
 
 def output(stem: str, variant: str) -> Path | None:

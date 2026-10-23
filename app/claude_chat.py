@@ -20,6 +20,7 @@ from typing import Any
 
 from claude_agent_sdk import (
     AssistantMessage,
+    query,
     ClaudeAgentOptions,
     ClaudeSDKClient,
     PermissionResultAllow,
@@ -90,7 +91,7 @@ def _save_session(stem: str, session_id: str | None) -> None:
 
 
 def _log_path(stem: str) -> Path:
-    return CHATS_DIR / f"{stem}.jsonl"
+    return CHATS_DIR / f"{library.safe_name(stem)}.jsonl"
 
 
 def history(stem: str) -> list[dict[str, Any]]:
@@ -125,7 +126,7 @@ def _system_prompt(stem: str) -> str:
 - 不确定就直说，不要编造实验数字、会议或代码是否开源。
 
 # 当前论文
-- 笔记：{paper["note_rel"]}（Obsidian vault 根目录即你的工作目录）
+- 笔记：{paper["note_rel"] or "还没有。用户要求时，按 AGENTS.md 的 paper intake 规则在论文笔记文件夹里新建（文件名形如“简称 年份.md”）"}（Obsidian vault 根目录即你的工作目录）
 - 标题：{paper["title"]}
 - PDF：{pdf or "尚未下载"}
 - 全文文本（带 <!-- page N --> 标记，需要时用 Read 读取，可按页定位）：{text or "暂无"}
@@ -264,7 +265,7 @@ class PaperChat:
         _save_session(self.stem, None)
         log = _log_path(self.stem)
         if log.exists():
-            log.rename(log.with_name(f"{self.stem}.{int(time.time())}.archived.jsonl"))
+            log.rename(log.with_name(f"{library.safe_name(self.stem)}.{int(time.time())}.archived.jsonl"))
 
     def answer_permission(self, pid: str, allow: bool) -> None:
         fut = self.pending.get(pid)
@@ -349,12 +350,35 @@ class PaperChat:
             self.last_used = time.time()
 
 
+async def draft_takeaway(stem: str) -> str:
+    """One-line takeaway for the reading list, drafted from a fork of the paper's conversation."""
+    session = _load_sessions().get(stem)
+    lang = PROFILE.get("answer_language", "中文")
+    prompt = (f"用{lang}写一句话（不超过 60 字）总结这篇论文对我的价值：它解决了什么、我能拿走什么。"
+              "只输出这句话。" + ("" if session else f"先读全文：{library.text_file(stem)}"))
+    opts = ClaudeAgentOptions(
+        cwd=str(VAULT_DIR), add_dirs=[str(TEXT_DIR)], tools=["Read"], allowed_tools=["Read"],
+        setting_sources=[], resume=session, fork_session=bool(session), max_turns=4,
+        model=load_settings().get("claude_model") or None, env=_claude_env(),
+        cli_path=str(CLAUDE_CLI) if CLAUDE_CLI.exists() else None,
+    )
+    out = ""
+    async for msg in query(prompt=prompt, options=opts):
+        if isinstance(msg, AssistantMessage):
+            if msg.error:
+                raise RuntimeError(_friendly_error(msg.error, msg.content))
+            out = " ".join(b.text for b in msg.content if isinstance(b, TextBlock)) or out
+        elif isinstance(msg, ResultMessage) and msg.is_error:
+            raise RuntimeError(_friendly_error(msg.result or msg.subtype))
+    return out.strip()
+
+
 class ChatRegistry:
     def __init__(self) -> None:
         self.chats: dict[str, PaperChat] = {}
 
     def get(self, stem: str) -> PaperChat:
-        library.note_path(stem)  # validates the stem
+        library.validate(stem)
         if stem not in self.chats:
             self.chats[stem] = PaperChat(stem)
         return self.chats[stem]

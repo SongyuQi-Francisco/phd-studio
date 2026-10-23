@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Reading-list CLI. Example: studio push --paper "Note Name" --tier T1 --reason "why" --by "who"
+set -e
+DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+UV="$(command -v uv || echo "$HOME/.local/bin/uv")"
+exec "$UV" run --quiet --project "$DIR" python -c 'import sys; sys.path.insert(0, sys.argv[1]); from app.cli import main; sys.exit(main(sys.argv[2:]))' "$DIR" "$@"

@@ -8,6 +8,7 @@ export const PROMPTS = {
   relate: "这篇论文和我正在推进的课题有什么关系？分别列出：可以借鉴的、需要在论文里区分开的、可能构成威胁（撞车）的。先看我的 Roadmap 和研究线笔记。",
   explainSel: "用中文讲解选中的这段：先给通俗意思，再拆关键术语和符号，最后说它在本文论证里起什么作用。",
   explainImg: "这是从论文里框选的区域。用中文讲解：它表达了什么；如果是公式，逐个解释符号并推导关键步骤；如果是图表，说明每个轴/列的含义和主要结论。",
+  intake: "为这篇论文按 AGENTS.md 的 Paper Intake 规则新建论文笔记：用 Paper Note Template 的结构，先核对一手来源（arXiv 页面），只写有原文依据的内容，并按规则更新 Literature Matrix。动手前先说明笔记文件名和打算写的要点。",
   note: (rel) => `根据我们目前的讨论和论文原文，更新这篇论文的笔记（${rel}）。只补充或修正有原文依据的内容，保持现有结构和语言，遵守 AGENTS.md 的 Claim Gate。动手前先用两三句话说明打算改哪里。`,
 };
 
@@ -204,7 +205,9 @@ export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, r
         <button class="chip" disabled=${busy} onClick=${() => send(PROMPTS.brief, { selection: null, images: [], label: "速读" })}>速读</button>
         <button class="chip" disabled=${busy} onClick=${() => { const p = getPage(); send(PROMPTS.page(p), { includePageText: true, page: p, selection: null, images: [], label: `讲解第 ${p} 页` }); }}>讲解本页</button>
         <button class="chip" disabled=${busy} onClick=${() => send(PROMPTS.relate, { selection: null, images: [], label: "和我的课题有什么关系" })}>和我的课题</button>
-        <button class="chip" disabled=${busy || !paper} onClick=${() => send(PROMPTS.note(paper.note_rel), { selection: null, images: [], label: "更新笔记" })}>更新笔记</button>
+        <button class="chip" disabled=${busy || !paper} onClick=${() => paper.note_rel
+          ? send(PROMPTS.note(paper.note_rel), { selection: null, images: [], label: "更新笔记" })
+          : send(PROMPTS.intake, { selection: null, images: [], label: "建笔记" })}>${paper && !paper.note_rel ? "建笔记" : "更新笔记"}</button>
       </div>
       ${hasAttach && html`<div class="attach">
         ${attachments.selection && html`<div class="att"><${Icon} name="quote" sm /><span>${attachments.selection.text}</span>
@@ -221,13 +224,17 @@ export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, r
     </div>`;
 }
 
-export function NotePanel({ paper, version, onAskUpdate }) {
+export function NotePanel({ paper, version, onAskUpdate, onAskIntake }) {
   const [md, setMd] = useState(paper?.note_markdown || "");
   useEffect(() => {
-    if (!paper) return;
+    if (!paper?.note_rel) return;
     api(`/api/papers/${encodeURIComponent(paper.stem)}`).then((p) => setMd(p.note_markdown));
   }, [paper?.stem, version]);
   if (!paper) return null;
+  if (!paper.note_rel) return html`
+    <div class="side-head"><div class="meta"><span>还没有笔记</span></div></div>
+    <div class="note-empty"><p>这篇只有 arXiv 链接，还没有 Obsidian 笔记。</p>
+      <button class="btn primary" onClick=${onAskIntake}>让 Claude 建笔记</button></div>`;
   const body = md.replace(/^---\n[\s\S]*?\n---\n?/, "");
   const statusCls = paper.status === "verified" ? "ok" : paper.status?.includes("preprint") ? "warn" : "";
   const obsidian = paper.obsidian_url;

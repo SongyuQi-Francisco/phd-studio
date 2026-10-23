@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from "preact/hooks"
 import { html, Icon, api, prefs } from "/lib.js";
 import { PdfView } from "/pdfview.js";
 import { ChatPanel, NotePanel, PROMPTS } from "/chat.js";
+import { ReadingPage, DoneDialog } from "/reading.js";
 
 // ---------------- library ----------------
 
@@ -47,7 +48,7 @@ function Library({ papers, current, open, onPick, onClose }) {
 
 // ---------------- reader ----------------
 
-function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef, toast }) {
+function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef, toast, onDone, onAddToList }) {
   const containerRef = useRef();
   const wrapRef = useRef();
   const [page, setPage] = useState(1);
@@ -195,7 +196,14 @@ function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef
 
   return html`<div class="reader" ref=${wrapRef} onMouseDownCapture=${startDrag}>
     <div class="toolbar">
-      <span class="tb-title" title=${paper?.title}>${stem}</span>
+      <span class="tb-title" title=${paper?.title}>${paper?.arxiv && !paper?.note_rel ? paper.title : stem}</span>
+      ${paper && (paper.reading
+        ? html`<span class="rchip">
+            <span class=${"tier " + (paper.reading.status === "queued" ? paper.reading.tier : paper.reading.status === "reading" ? "R" : "D")}>
+              ${{ queued: paper.reading.tier, reading: "在读", done: "读完", inbox: "收件箱", snoozed: "稍后", dismissed: "不读" }[paper.reading.status]}</span>
+            ${paper.reading.status !== "done" && html`<button class="tb-btn" title="记为读完" onClick=${onDone}><${Icon} name="check" sm />读完</button>`}
+          </span>`
+        : html`<button class="tb-btn" title="加入阅读清单 (T2)" onClick=${onAddToList}><${Icon} name="plus" sm />清单</button>`)}
       <span class="grow" />
       <span class="pageinput"><input value=${page} onKeyDown=${(e) => e.key === "Enter" && v.goTo(Number(e.target.value))} />/ ${pages || "–"}</span>
       <div class="tb-sep" />
@@ -296,23 +304,12 @@ function Settings({ status, onClose, onSaved }) {
 
 // ---------------- app ----------------
 
-function Home({ papers, onPick }) {
-  const last = prefs.get("lastStem", null);
-  const lastPaper = papers.find((p) => p.stem === last);
-  const queue = papers.filter((p) => p.queue_rank != null && p.pdf !== "none" && p.stem !== last).sort((a, b) => a.queue_rank - b.queue_rank).slice(0, 5);
-  const row = (p) => html`<button class="row" onClick=${() => onPick(p.stem)}><span class=${"dot" + (p.pdf === "local" ? " ok" : "")} />
-    <span style="min-width:0"><b>${p.stem}</b><span class="t">${p.title}</span></span></button>`;
-  return html`<div class="empty"><div class="empty-inner">
-    <h1>读点什么</h1>
-    <p>按 <span class="kbd">⌘K</span> 搜索全部 ${papers.length} 篇</p>
-    ${lastPaper && html`<div class="label">继续阅读</div><div class="card-list">${row(lastPaper)}</div>`}
-    ${queue.length > 0 && html`<div class="label">待读</div><div class="card-list">${queue.map(row)}</div>`}
-  </div></div>`;
-}
-
 function App() {
   const [papers, setPapers] = useState([]);
   const [stem, setStem] = useState(prefs.get("lastStem", null));
+  const [view, setView] = useState("list");
+  const [doneOpen, setDoneOpen] = useState(false);
+  const [listVersion, setListVersion] = useState(0);
   const [paper, setPaper] = useState(null);
   const [drawer, setDrawer] = useState(false);
   const [tab, setTab] = useState("claude");
@@ -339,17 +336,28 @@ function App() {
     return () => window.removeEventListener("keydown", k);
   }, []);
 
+  const loadPaper = (s) => api(`/api/papers/${encodeURIComponent(s)}`).then(setPaper)
+    .catch(() => { setStem(null); prefs.set("lastStem", null); setView("list"); });
+
   useEffect(() => {
-    if (!stem) return;
+    if (!stem || view !== "reader") return;
     prefs.set("lastStem", stem);
     setPaper(null);
     setAttachments({ selection: null, images: [] });
-    api(`/api/papers/${encodeURIComponent(stem)}`).then(setPaper).catch(() => { setStem(null); prefs.set("lastStem", null); });
-  }, [stem]);
+    // Opening a paper moves its reading-list entry to "reading".
+    api("/api/reading/opened", { json: { key: stem } }).finally(() => loadPaper(stem));
+  }, [stem, view]);
 
   useEffect(() => { document.documentElement.style.setProperty("--side-w", sideW + "px"); prefs.set("sideW", sideW); }, [sideW]);
 
-  const pick = (s) => { setStem(s); setDrawer(false); };
+  const pick = (s) => { setStem(s); setView("reader"); setDrawer(false); };
+  const addToList = async () => {
+    try {
+      await api("/api/reading", { json: paper.arxiv && !paper.note_rel ? { arxiv: paper.arxiv, tier: "T2" } : { paper: stem, tier: "T2" } });
+      toast("已加入阅读清单 · T2");
+      loadPaper(stem);
+    } catch (e) { toast(e.message); }
+  };
 
   const toChat = () => { setTab("claude"); setTimeout(() => chatRef.current?.focus(), 50); };
   const onSelectionAction = (kind, pop) => {
@@ -373,11 +381,14 @@ function App() {
 
   const claudeOk = status?.claude?.ok;
 
-  return html`<div class=${"shell" + (stem ? "" : " no-side")}>
+  const reading = view === "reader" && stem;
+  return html`<div class=${"shell" + (reading ? "" : " no-side")}>
     <nav class="rail">
       <div class="logo" title="PhD Studio" />
+      <button class=${"rail-btn" + (view === "list" && !drawer ? " on" : "")} title="阅读清单" onClick=${() => { setView("list"); setDrawer(false); setListVersion((n) => n + 1); }}><${Icon} name="inbox" /></button>
       <button class=${"rail-btn" + (drawer ? " on" : "")} title="论文库 (⌘K)" onClick=${() => setDrawer(!drawer)}><${Icon} name="library" /></button>
-      ${stem && html`
+      ${stem && view === "list" && html`<button class="rail-btn" title="回到正在读的论文" onClick=${() => setView("reader")}><${Icon} name="book" /></button>`}
+      ${reading && html`
         <button class=${"rail-btn" + (tab === "claude" ? " on" : "")} title="Claude 伴读" onClick=${() => setTab("claude")}><${Icon} name="chat" /></button>
         <button class=${"rail-btn" + (tab === "note" ? " on" : "")} title="笔记" onClick=${() => setTab("note")}><${Icon} name="note" /></button>`}
       <div class="spacer" />
@@ -388,13 +399,14 @@ function App() {
 
     <div class="center">
       <${Library} papers=${papers} current=${stem} open=${drawer} onPick=${pick} onClose=${() => setDrawer(false)} />
-      ${stem
+      ${reading
         ? html`<${Reader} key=${stem} stem=${stem} paper=${paper} pageRef=${pageRef} viewRef=${viewRef} toast=${toast}
-            onSelectionAction=${onSelectionAction} onCropAction=${onCropAction} />`
-        : html`<${Home} papers=${papers} onPick=${pick} />`}
+            onSelectionAction=${onSelectionAction} onCropAction=${onCropAction}
+            onDone=${() => setDoneOpen(true)} onAddToList=${addToList} />`
+        : html`<${ReadingPage} version=${listVersion} toast=${toast} onOpen=${(i) => pick(i.key)} />`}
     </div>
 
-    ${stem && html`<div class="resizer" onMouseDown=${startResize} />
+    ${reading && html`<div class="resizer" onMouseDown=${startResize} />
     <aside class="side">
       <div style=${{ display: tab === "claude" ? "contents" : "none" }}>
         <${ChatPanel} stem=${stem} paper=${paper} getPage=${() => pageRef.current} attachments=${attachments} setAttachments=${setAttachments}
@@ -402,9 +414,12 @@ function App() {
           onNoteChanged=${() => setNoteVersion((n) => n + 1)} />
       </div>
       ${tab === "note" && html`<${NotePanel} paper=${paper} version=${noteVersion}
-        onAskUpdate=${() => { setTab("claude"); chatRef.current?.send(PROMPTS.note(paper.note_rel), { selection: null, images: [], label: "更新笔记" }); }} />`}
+        onAskUpdate=${() => { setTab("claude"); chatRef.current?.send(PROMPTS.note(paper.note_rel), { selection: null, images: [], label: "更新笔记" }); }}
+        onAskIntake=${() => { setTab("claude"); chatRef.current?.send(PROMPTS.intake, { selection: null, images: [], label: "建笔记" }); }} />`}
     </aside>`}
 
+    ${doneOpen && paper?.reading && html`<${DoneDialog} item=${{ ...paper.reading, key: stem, title: paper.title }}
+      onClose=${() => setDoneOpen(false)} onSaved=${() => { setDoneOpen(false); toast("已记为读完"); loadPaper(stem); }} />`}
     ${settingsOpen && status && html`<${Settings} status=${status} onClose=${() => setSettingsOpen(false)} onSaved=${refreshStatus} />`}
     ${toastMsg && html`<div class="toast">${toastMsg}</div>`}
   </div>`;

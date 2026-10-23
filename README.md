@@ -18,6 +18,25 @@ built on top of an Obsidian vault and a Zotero library you already have.
 - **Claude co-reader**: one persistent session per paper (resumed after restarts), streamed.
   Claude can read the vault, the paper's full text and the web. Any edit to the vault is shown as a diff and only applied after you approve it. If Claude is unavailable you get an error, never a silent switch to another model.
 - **Note**: the paper's Obsidian note, with an Obsidian deep link and "ask Claude to update".
+- **Reading list**: `inbox → T1/T2/T3 → reading → done`, plus snooze and dismiss.
+  - Every push records the date, source and a required one-line reason.
+  - Urgency (tier) is set before reading. Depth (skim/deep), verdict (key/useful/irrelevant) and a one-line takeaway are recorded after; Claude can draft the takeaway.
+  - Keyboard triage: `1/2/3`, `S`, `X`, `D`, `J/K`, `↵`.
+  - Opening a paper marks it as reading.
+  - Inbox items left for 3 weeks fold into an archive.
+  - Data lives in one YAML file in the vault, and a summary block is regenerated at the top of the reading-queue note.
+
+### Pushing papers from other agents or scripts
+
+```bash
+./studio push --paper "Attention 2017" --tier T1 --line "Project A" --reason "what to look for" --by "planning session"
+./studio push --arxiv 2606.17328 --reason "cited by X; check their metric" --by "weekly tracker" --source tracker
+./studio list --status inbox
+./studio done "Attention 2017" --depth deep --verdict key --takeaway "..."
+```
+
+`--reason` is required. Papers already read or dismissed are not re-added. The CLI works with or without the server running.
+Tell your agents about it in the vault rules file (e.g. `AGENTS.md`).
 
 ## Setup
 

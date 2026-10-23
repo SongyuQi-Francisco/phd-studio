@@ -30,6 +30,11 @@ const PATHS = {
   down: "M6 9l6 6 6-6",
   copy: "M9 9h11v11H9zM5 15H4V4h11v1",
   quote: "M7 7h4v4c0 3-2 5-4 5M14 7h4v4c0 3-2 5-4 5",
+  check: "M20 6 9 17l-5-5",
+  clock: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2",
+  right: "M9 6l6 6-6 6",
+  inbox: "M22 12h-6l-2 3h-4l-2-3H2M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z",
+  book: "M2 4h7a3 3 0 0 1 3 3v13a2 2 0 0 0-2-2H2zM22 4h-7a3 3 0 0 0-3 3v13a2 2 0 0 1 2-2h8z",
 };
 
 export function Icon({ name, sm }) {

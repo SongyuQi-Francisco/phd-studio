@@ -1,0 +1,406 @@
+"""Reading list: one YAML file in the vault, shared by the web UI and the `studio` CLI.
+
+States: inbox -> queued (tier T1/T2/T3) -> reading -> done, with side exits
+snoozed (until a date, then back to inbox) and dismissed (kept, so it is never
+pushed again). Urgency (tier) is set before reading; depth/verdict/takeaway after.
+Every save also regenerates a read-only view block in the Reading Queue note.
+"""
+from __future__ import annotations
+
+import fcntl
+import os
+import re
+import secrets
+from contextlib import contextmanager
+from datetime import date, timedelta
+from pathlib import Path
+from typing import Any, Iterator
+
+import httpx
+import yaml
+
+from . import library
+from .config import DATA_DIR, PAPERS_DIR, PROFILE, READING_LIST, READING_QUEUE
+
+STATUSES = ("inbox", "queued", "reading", "done", "snoozed", "dismissed")
+TIERS = ("T1", "T2", "T3")
+SOURCES = ("tracker", "claude", "advisor", "self")
+DEPTHS = ("skim", "deep")
+VERDICTS = ("key", "useful", "irrelevant")
+CAPS = {"T1": 5, "queued": 12}
+STALE_DAYS = 21
+FIELDS = ("id", "paper", "arxiv", "title", "url", "status", "tier", "lines", "source", "pushed_by",
+          "pushed_at", "reason", "due", "snooze_until", "opened_at", "read_at", "depth", "verdict",
+          "takeaway")
+
+HEADER = """# Reading list, managed by PhD Studio. Edit through the app or the CLI:
+#   studio push --paper "Note Name" --tier T1 --line "Project A" --reason "why" --by "who"
+#   studio push --arxiv 2606.17328 --reason "why" --by "who"
+# status: inbox | queued | reading | done | snoozed | dismissed   tier: T1 (this week) | T2 | T3
+"""
+VIEW_BEGIN = "<!-- BEGIN STUDIO_READING_LIST -->"
+VIEW_END = "<!-- END STUDIO_READING_LIST -->"
+_LOCK = DATA_DIR / "reading.lock"
+_ARXIV_RE = re.compile(r"(?:arxiv\.org/(?:abs|pdf)/|arXiv[: ]\s*)(\d{4}\.\d{4,5})", re.I)
+
+
+def today() -> str:
+    return date.today().isoformat()
+
+
+@contextmanager
+def _locked() -> Iterator[None]:
+    with _LOCK.open("w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def _norm(item: dict[str, Any]) -> dict[str, Any]:
+    out = {}
+    for k in FIELDS:
+        v = item.get(k)
+        if isinstance(v, date):
+            v = v.isoformat()
+        if v in (None, "", []):
+            continue
+        out[k] = v
+    out.setdefault("lines", [])
+    return out
+
+
+def _load_raw() -> list[dict[str, Any]]:
+    if not READING_LIST.exists():
+        return []
+    data = yaml.safe_load(READING_LIST.read_text(encoding="utf-8")) or {}
+    return [_norm(i) for i in data.get("items", [])]
+
+
+def _save_raw(items: list[dict[str, Any]]) -> None:
+    clean = []
+    for i in items:
+        d = _norm(i)
+        if not d["lines"]:
+            d.pop("lines")
+        clean.append(d)
+    body = yaml.safe_dump({"items": clean}, allow_unicode=True, sort_keys=False, width=1000)
+    tmp = READING_LIST.with_suffix(".tmp")
+    tmp.write_text(HEADER + body, encoding="utf-8")
+    os.replace(tmp, READING_LIST)
+    _write_view(clean)
+
+
+def _wake_snoozed(items: list[dict[str, Any]]) -> bool:
+    changed = False
+    for i in items:
+        if i["status"] == "snoozed" and i.get("snooze_until", "9999") <= today():
+            i["status"] = "inbox"
+            i.pop("snooze_until", None)
+            changed = True
+    return changed
+
+
+def _link_notes(items: list[dict[str, Any]]) -> bool:
+    """Attach arXiv-only items to a paper note once one exists for that arXiv id."""
+    loose = [i for i in items if not i.get("paper") and i.get("arxiv")]
+    if not loose:
+        return False
+    by_arxiv = library.arxiv_index()
+    changed = False
+    for i in loose:
+        if stem := by_arxiv.get(i["arxiv"]):
+            i["paper"] = stem
+            changed = True
+    return changed
+
+
+def load() -> list[dict[str, Any]]:
+    with _locked():
+        if not READING_LIST.exists():
+            items = import_reading_queue()
+            _save_raw(items)
+            return items
+        items = _load_raw()
+        if _wake_snoozed(items) | _link_notes(items):
+            _save_raw(items)
+        return items
+
+
+@contextmanager
+def editing() -> Iterator[list[dict[str, Any]]]:
+    with _locked():
+        items = _load_raw()
+        yield items
+        _save_raw(items)
+
+
+def key_of(item: dict[str, Any]) -> str:
+    """The reader's paper key: the note stem, or arxiv:<id> before a note exists."""
+    return item.get("paper") or f"arxiv:{item['arxiv']}"
+
+
+def find(items: list[dict[str, Any]], key: str) -> dict[str, Any] | None:
+    for i in items:
+        if i["id"] == key or i.get("paper") == key or (i.get("arxiv") and f"arxiv:{i['arxiv']}" == key):
+            return i
+    return None
+
+
+# ---------- mutations ----------
+
+
+class ReadingError(ValueError):
+    pass
+
+
+def push(*, paper: str | None = None, arxiv: str | None = None, title: str | None = None,
+         reason: str, source: str = "self", pushed_by: str | None = None, tier: str | None = None,
+         lines: list[str] | None = None, due: str | None = None, status: str | None = None,
+         force: bool = False) -> tuple[dict[str, Any], str]:
+    """Add a paper, or update the existing entry. Returns (item, what happened)."""
+    if not reason.strip():
+        raise ReadingError("reason is required: one line on why this paper should be read")
+    if source not in SOURCES:
+        raise ReadingError(f"source must be one of {SOURCES}")
+    if tier and tier not in TIERS:
+        raise ReadingError(f"tier must be one of {TIERS}")
+    if arxiv:
+        arxiv = re.sub(r"v\d+$", "", arxiv.strip().removeprefix("arXiv:").removeprefix("arxiv:"))
+    if paper:
+        try:
+            library.note_path(paper)
+        except FileNotFoundError:
+            raise ReadingError(f"no paper note named '{paper}'; use --arxiv for papers without a note")
+    elif arxiv:
+        paper = library.arxiv_index().get(arxiv)
+    else:
+        raise ReadingError("give --paper (note name) or --arxiv")
+
+    with editing() as items:
+        existing = find(items, paper) if paper else None
+        existing = existing or (find(items, f"arxiv:{arxiv}") if arxiv else None)
+        if existing:
+            if existing["status"] == "dismissed" and not force:
+                return existing, "dismissed earlier; not re-added (use --force to bring it back)"
+            if existing["status"] == "done" and not force:
+                return existing, f"already read on {existing.get('read_at', '?')}"
+            existing["lines"] = sorted(set(existing.get("lines", [])) | set(lines or []))
+            if tier and (not existing.get("tier") or tier < existing["tier"]):
+                existing["tier"] = tier
+                if existing["status"] == "inbox":
+                    existing["status"] = "queued"
+            if due:
+                existing["due"] = due
+            if existing["status"] in ("dismissed", "done", "snoozed"):
+                existing["status"] = "inbox"
+            existing["reason"] = f"{existing.get('reason', '')} | {reason}".strip(" |")
+            return existing, f"already listed ({existing['status']}); merged"
+        item = {
+            "id": "r" + secrets.token_hex(3),
+            "paper": paper,
+            "arxiv": arxiv,
+            "title": title or (None if paper else fetch_arxiv_title(arxiv)),
+            "status": status or ("queued" if tier and source == "self" else "inbox"),
+            "tier": tier,
+            "lines": sorted(set(lines or [])),
+            "source": source,
+            "pushed_by": pushed_by,
+            "pushed_at": today(),
+            "reason": reason.strip(),
+            "due": due,
+        }
+        items.append(item)
+        return _norm(item), "added"
+
+
+def update(item_id: str, patch: dict[str, Any]) -> dict[str, Any]:
+    with editing() as items:
+        item = find(items, item_id)
+        if item is None:
+            raise ReadingError(f"no reading-list item {item_id}")
+        if "status" in patch and patch["status"] not in STATUSES:
+            raise ReadingError("bad status")
+        if patch.get("tier") and patch["tier"] not in TIERS:
+            raise ReadingError("bad tier")
+        if patch.get("depth") and patch["depth"] not in DEPTHS:
+            raise ReadingError("bad depth")
+        if patch.get("verdict") and patch["verdict"] not in VERDICTS:
+            raise ReadingError("bad verdict")
+        for k in ("status", "tier", "lines", "due", "snooze_until", "depth", "verdict", "takeaway", "reason"):
+            if k in patch:
+                item[k] = patch[k]
+        if patch.get("tier") and item["status"] == "inbox":
+            item["status"] = "queued"
+        if item["status"] == "done":
+            item.setdefault("read_at", today())
+        if item["status"] != "snoozed":
+            item.pop("snooze_until", None)
+        return _norm(item)
+
+
+def mark_opened(key: str) -> dict[str, Any] | None:
+    """Opening a paper in the reader moves its entry to `reading`."""
+    with editing() as items:
+        item = find(items, key)
+        if item is None:
+            return None
+        item["opened_at"] = today()
+        if item["status"] in ("inbox", "queued"):
+            item["status"] = "reading"
+        return _norm(item)
+
+
+# ---------- views ----------
+
+
+def summary(items: list[dict[str, Any]]) -> dict[str, Any]:
+    t = date.today()
+    week_ago = (t - timedelta(days=7)).isoformat()
+    for i in items:
+        i["age_days"] = (t - date.fromisoformat(i["pushed_at"])).days if i.get("pushed_at") else 0
+        i["stale"] = i["status"] == "inbox" and i["age_days"] > STALE_DAYS
+        i["key"] = key_of(i)
+        if not i.get("title"):
+            i["title"] = i.get("paper") or i.get("arxiv")
+    active_inbox = [i for i in items if i["status"] == "inbox" and not i["stale"]]
+    queued = [i for i in items if i["status"] == "queued"]
+    return {
+        "inbox": len(active_inbox),
+        "T1": sum(1 for i in queued if i.get("tier") == "T1"),
+        "queued": len(queued),
+        "reading": sum(1 for i in items if i["status"] == "reading"),
+        "done_week": sum(1 for i in items if i["status"] == "done" and i.get("read_at", "") >= week_ago),
+        "caps": CAPS,
+        "lines": sorted({ln for i in items for ln in i.get("lines", [])}),
+    }
+
+
+def _link(i: dict[str, Any]) -> str:
+    if i.get("paper"):
+        return f"[[{i['paper']}]]"
+    return f"[{i.get('title') or i['arxiv']}](https://arxiv.org/abs/{i['arxiv']})"
+
+
+def _write_view(items: list[dict[str, Any]]) -> None:
+    """Regenerate the read-only summary block at the top of the Reading Queue note."""
+    if not READING_QUEUE.exists():
+        return
+    def rows(sel: list[dict[str, Any]]) -> list[str]:
+        return [f"- {_link(i)}" + (f" · {', '.join(i['lines'])}" if i.get("lines") else "")
+                + (f" — {i['reason']}" if i.get("reason") else "") for i in sel]
+    order = {"T1": 0, "T2": 1, "T3": 2}
+    queued = sorted((i for i in items if i["status"] == "queued"),
+                    key=lambda i: (order.get(i.get("tier"), 3), i.get("due") or "9", i.get("pushed_at", "")))
+    reading = [i for i in items if i["status"] == "reading"]
+    cutoff = (date.today() - timedelta(days=STALE_DAYS)).isoformat()
+    inbox = [i for i in items if i["status"] == "inbox" and i.get("pushed_at", "") >= cutoff]
+    parts = [VIEW_BEGIN, "## Now (generated from reading.yaml by PhD Studio; do not edit here)", ""]
+    if reading:
+        parts += ["**Reading**", *rows(reading), ""]
+    for t in TIERS:
+        sel = [i for i in queued if i.get("tier") == t]
+        if sel:
+            parts += [f"**{t}**", *rows(sel), ""]
+    if inbox:
+        parts += [f"**Inbox ({len(inbox)} to triage)**", *rows(inbox), ""]
+    parts.append(VIEW_END)
+    block = "\n".join(parts)
+    text = READING_QUEUE.read_text(encoding="utf-8")
+    if VIEW_BEGIN in text and VIEW_END in text:
+        a, rest = text.split(VIEW_BEGIN, 1)
+        _, b = rest.split(VIEW_END, 1)
+        new = a + block + b
+    else:
+        m = re.search(r"^# .+\n", text, re.M)
+        at = m.end() if m else 0
+        new = text[:at] + "\n" + block + "\n" + text[at:]
+    if new != text:
+        READING_QUEUE.write_text(new, encoding="utf-8")
+
+
+def fetch_arxiv_title(arxiv: str | None) -> str | None:
+    if not arxiv:
+        return None
+    try:
+        r = httpx.get("https://export.arxiv.org/api/query", params={"id_list": arxiv}, timeout=10)
+        m = re.search(r"<entry>.*?<title>(.*?)</title>", r.text, re.S)
+        return " ".join(m.group(1).split()) if m else None
+    except httpx.HTTPError:
+        return None
+
+
+# ---------- one-time import of the hand-written Reading Queue ----------
+
+_DATE_RE = re.compile(r"(20\d\d-\d\d-\d\d)")
+
+
+def import_reading_queue() -> list[dict[str, Any]]:
+    """Turn the existing Reading Queue note into inbox items, keeping each section's date.
+
+    Sections older than STALE_DAYS land in the collapsed "untriaged" archive, so
+    the inbox starts with only recent pushes. "Full text read" lines become done.
+    """
+    if not READING_QUEUE.exists():
+        return []
+    text = READING_QUEUE.read_text(encoding="utf-8")
+    created = (_DATE_RE.search(text) or [None, today()])[1]
+    by_arxiv = library.arxiv_index()
+    items: dict[str, dict[str, Any]] = {}
+    section, sec_date, lines_tag, source, by = "", created, [], "claude", ""
+    for raw in text.splitlines():
+        if raw.startswith("## "):
+            section = raw[3:].strip()
+            m = _DATE_RE.search(section)
+            sec_date = m.group(1) if m else created
+            low = section.lower()
+            lines_tag = [ln for ln in PROFILE.get("lines", []) if ln.lower() in low][:1]
+            source = "tracker" if "tracker" in low else "claude"
+            by = f"Reading Queue · {section}"
+            continue
+        line = raw.strip()
+        if not section or not line or line.startswith("<!--"):
+            continue
+        done = line.lower().startswith("- full text read")
+        if len(_ARXIV_RE.findall(line)) > 1:
+            pieces = re.split(r" · |;\s+", line)
+        else:
+            pieces = [line]
+        label = ""
+        if m := re.match(r"^(?:(?:\d+\.|-)\s*)?([^:\[]{3,80}):\s+(?!https?://)", line):
+            label = m.group(1).strip()
+        for piece in pieces:
+            stems = [s for s in re.findall(r"\[\[([^\]|#]+)", piece) if (PAPERS_DIR / f"{s}.md").exists()]
+            ids = _ARXIV_RE.findall(piece)
+            text = re.sub(r"^(\d+\.|-)\s*", "", piece)
+            text = re.sub(r"https?://\S+|arXiv[: ]\s*\d{4}\.\d{4,5}", "", text, flags=re.I)
+            if label and text.startswith(label):
+                text = text[len(label):]
+            text = text.strip(" :—-·,.")
+            targets: list[tuple[str | None, str | None, str | None, str]] = []
+            if len(stems) > 1 or (stems and not text.replace("[[" + stems[0] + "]]", "").strip(" :—-·,.")):
+                targets = [(s, None, None, label or section) for s in stems]
+            elif stems:
+                reason = re.sub(r"^\[\[[^\]]+\]\]\s*[:—-]?\s*", "", text).replace("[[", "").replace("]]", "")
+                targets = [(stems[0], None, None, " · ".join(x for x in (label, reason) if x) or section)]
+            else:
+                for aid in ids:
+                    parts = re.split(r"\s[—–-]\s|:\s", text, maxsplit=1)
+                    title = parts[0].strip(' "')[:120] or None
+                    reason = " · ".join(x for x in (label, parts[1].strip(' ".') if len(parts) > 1 else "") if x)
+                    targets.append((by_arxiv.get(aid), aid, title, reason or section))
+            for stem, aid, title, reason in targets:
+                k = stem or f"arxiv:{aid}"
+                prev = items.get(k)
+                if prev and prev["pushed_at"] >= sec_date:
+                    prev["lines"] = sorted(set(prev["lines"]) | set(lines_tag))
+                    continue
+                items[k] = {
+                    "id": "r" + secrets.token_hex(3), "paper": stem, "arxiv": aid, "title": title,
+                    "status": "done" if done else "inbox", "lines": sorted(set(lines_tag) | set(prev["lines"] if prev else [])),
+                    "source": source, "pushed_by": by, "pushed_at": sec_date,
+                    "reason": reason[:300], "read_at": sec_date if done else None,
+                    "depth": "deep" if done else None,
+                }
+    return [_norm(i) for i in items.values()]

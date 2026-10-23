@@ -91,7 +91,46 @@ def list_papers() -> list[dict[str, Any]]:
     return papers
 
 
+_ARXIV_KEY = re.compile(r"^arxiv:(\d{4}\.\d{4,5})$")
+
+
+def arxiv_key(key: str) -> str | None:
+    """The arXiv id when the key is "arxiv:<id>" (a paper without a note yet)."""
+    m = _ARXIV_KEY.match(key)
+    return m.group(1) if m else None
+
+
+def safe_name(key: str) -> str:
+    return key.replace(":", "_").replace("/", "_")
+
+
+def validate(key: str) -> None:
+    if not arxiv_key(key):
+        note_path(key)
+
+
+@lru_cache(maxsize=1)
+def _arxiv_index(_stamp: float) -> dict[str, str]:
+    out = {}
+    for p in PAPERS_DIR.glob("*.md"):
+        info = _parse_note(p)
+        ids = [info["arxiv"]] + re.findall(r"arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5})", info["source"])
+        for i in ids:
+            if i:
+                out.setdefault(re.sub(r"v\d+$", "", i), info["stem"])
+    return out
+
+
+def arxiv_index() -> dict[str, str]:
+    """arXiv id -> paper note stem."""
+    return _arxiv_index(PAPERS_DIR.stat().st_mtime)
+
+
 def get_paper(stem: str) -> dict[str, Any]:
+    if aid := arxiv_key(stem):
+        return {"stem": stem, "title": stem, "arxiv": aid, "year": None, "status": "", "source": "",
+                "zotero_key": "", "tags": [], "research_line": [], "note_rel": None, "note_markdown": "",
+                "obsidian_url": None, "pdf": "local" if local_pdf(stem) else "remote"}
     path = note_path(stem)
     info = _parse_note(path)
     info["note_rel"] = str(path.relative_to(VAULT_DIR))
@@ -182,7 +221,7 @@ def pdf_urls(info: dict[str, Any]) -> list[str]:
 
 
 def local_pdf(stem: str) -> Path | None:
-    for p in (VAULT_PDFS_DIR / f"{stem}.pdf", PDF_CACHE_DIR / f"{stem}.pdf"):
+    for p in (VAULT_PDFS_DIR / f"{stem}.pdf", PDF_CACHE_DIR / f"{safe_name(stem)}.pdf"):
         if p.exists():
             return p
     return None
@@ -192,14 +231,15 @@ def ensure_pdf(stem: str) -> Path:
     """Return a local PDF for the paper, downloading it into the cache if needed."""
     if p := local_pdf(stem):
         return p
-    info = _parse_note(note_path(stem))
+    aid = arxiv_key(stem)
+    info = {"arxiv": aid} if aid else _parse_note(note_path(stem))
     errors = []
     headers = {"User-Agent": "Mozilla/5.0 (Macintosh) PhD-Studio/0.1"}
     for url in pdf_urls(info):
         try:
             r = httpx.get(url, headers=headers, follow_redirects=True, timeout=60)
             if r.status_code == 200 and r.content[:5] == b"%PDF-":
-                dest = PDF_CACHE_DIR / f"{stem}.pdf"
+                dest = PDF_CACHE_DIR / f"{safe_name(stem)}.pdf"
                 dest.write_bytes(r.content)
                 return dest
             errors.append(f"{url}: HTTP {r.status_code}")
@@ -211,7 +251,7 @@ def ensure_pdf(stem: str) -> Path:
 def text_file(stem: str) -> Path:
     """Plain-text dump of the PDF with page markers, for Claude to Read on demand."""
     pdf = ensure_pdf(stem)
-    out = TEXT_DIR / f"{stem}.md"
+    out = TEXT_DIR / f"{safe_name(stem)}.md"
     if out.exists() and out.stat().st_mtime >= pdf.stat().st_mtime:
         return out
     with fitz.open(pdf) as doc:

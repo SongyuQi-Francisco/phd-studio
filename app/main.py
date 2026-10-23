@@ -14,8 +14,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import bilingual, library
-from .claude_chat import claude_status, history, registry
+from . import bilingual, library, reading
+from .claude_chat import claude_status, draft_takeaway, history, registry
 from .config import CROPS_DIR, PROFILE, STUDIO_DIR, load_settings, save_settings
 from .translate import translate
 
@@ -35,7 +35,7 @@ app = FastAPI(title="PhD Studio", lifespan=lifespan)
 
 def _stem_or_404(stem: str) -> str:
     try:
-        library.note_path(stem)
+        library.validate(stem)
     except FileNotFoundError:
         raise HTTPException(404, f"没有这篇论文的笔记：{stem}")
     return stem
@@ -51,6 +51,10 @@ def paper(stem: str) -> dict[str, Any]:
     _stem_or_404(stem)
     info = library.get_paper(stem)
     info["bilingual"] = bilingual.status(stem)
+    item = reading.find(reading.load(), stem)
+    info["reading"] = item
+    if item and library.arxiv_key(stem) and item.get("title"):
+        info["title"] = item["title"]
     return info
 
 
@@ -119,6 +123,56 @@ def start_bilingual(stem: str) -> dict[str, Any]:
 def bilingual_status(stem: str) -> dict[str, Any]:
     _stem_or_404(stem)
     return bilingual.status(stem)
+
+
+@app.get("/api/reading")
+def reading_list() -> dict[str, Any]:
+    items = reading.load()
+    return {"items": items, "summary": reading.summary(items)}
+
+
+class PushReq(BaseModel):
+    paper: str | None = None
+    arxiv: str | None = None
+    reason: str = "自己加的"
+    tier: str | None = None
+    lines: list[str] = []
+
+
+@app.post("/api/reading")
+def reading_push(req: PushReq) -> dict[str, Any]:
+    try:
+        item, what = reading.push(paper=req.paper, arxiv=req.arxiv, reason=req.reason, source="self",
+                                  tier=req.tier, lines=req.lines)
+    except reading.ReadingError as e:
+        raise HTTPException(400, str(e))
+    return {"item": item, "result": what}
+
+
+@app.patch("/api/reading/{item_id}")
+def reading_update(item_id: str, patch: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return {"item": reading.update(item_id, patch)}
+    except reading.ReadingError as e:
+        raise HTTPException(400, str(e))
+
+
+class OpenedReq(BaseModel):
+    key: str
+
+
+@app.post("/api/reading/opened")
+def reading_opened(req: OpenedReq) -> dict[str, Any]:
+    return {"item": reading.mark_opened(req.key)}
+
+
+@app.post("/api/reading/draft/{stem}")
+async def reading_draft(stem: str) -> dict[str, str]:
+    _stem_or_404(stem)
+    try:
+        return {"takeaway": await draft_takeaway(stem)}
+    except Exception as e:  # noqa: BLE001 - shown in the dialog
+        raise HTTPException(502, str(e))
 
 
 @app.get("/api/status")
