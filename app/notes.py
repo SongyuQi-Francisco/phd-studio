@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import glob
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import quote
 
@@ -92,7 +92,16 @@ def _plain(fm: dict[str, Any]) -> dict[str, Any]:
 
 
 def find_by_name(name: str) -> Path | None:
-    """Resolve an Obsidian [[wikilink]] target by file name anywhere in the vault."""
+    """Resolve an Obsidian [[wikilink]] target to a note inside the vault.
+
+    A folder path ('02 Ideas/Idea A') matches from the vault root first, since the shallowest match wins.
+    Absolute paths, '..' segments and matches that resolve outside the vault (symlinks) give None.
+    """
     name = name.strip()
-    hits = [p for p in VAULT_DIR.rglob(f"{glob.escape(name)}.md") if ".obsidian" not in p.parts and ".trash" not in p.parts]
+    target = PurePosixPath(name)
+    if not name or target.is_absolute() or ".." in target.parts:
+        return None
+    root = VAULT_DIR.resolve()
+    hits = [p for p in VAULT_DIR.rglob(f"{glob.escape(name)}.md")
+            if ".obsidian" not in p.parts and ".trash" not in p.parts and p.resolve().is_relative_to(root)]
     return min(hits, key=lambda p: len(p.parts)) if hits else None
