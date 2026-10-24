@@ -12,12 +12,15 @@ built on top of an Obsidian vault and a Zotero library you already have.
 - **Library** (⌘K): one row per paper note, ordered by your reading-queue note.
   PDFs are taken from the vault, or downloaded once (Zotero attachment URL, arXiv, OpenReview, ACL Anthology, ACM) into a local cache.
 - **Reader**: pdf.js viewer with outline, find (⌘F) and zoom.
-  - Select text → **翻译 / Translate** (DeepSeek or Google; the engine used is shown), **讲解 / Explain**, **Ask Claude**.
+  - Select text → **翻译 / Translate** (DeepSeek or Google; the engine used is shown), **讲解 / Explain**, **Ask Claude**, **摘录 / Excerpt**.
+  - Excerpt appends one line, `- "quote" [p.N] — your comment`, to a section of the paper's note (default: a new `## Excerpts`). You see the line before it is written, and can undo it from the toast (byte for byte, unless the note was edited in between; then just that line goes). The quote is escaped, so `<tags>` or `$` from the PDF stay text; the note is rewritten in place (same file, creation time and line endings).
   - ⌥-drag (or the crop tool) on a figure, table or formula → the actual image is sent to Claude.
   - **Bilingual / translated PDF** of the whole paper via [pdf2zh-next](https://github.com/PDFMathTranslate/PDFMathTranslate-next) (keeps formulas and layout), generated in the background.
 - **Claude co-reader**: one persistent session per paper (resumed after restarts), streamed.
   Claude can read the vault, the paper's full text and the web. Any edit to the vault is shown as a diff and only applied after you approve it. If Claude is unavailable you get an error, never a silent switch to another model.
 - **Note**: the paper's Obsidian note, with an Obsidian deep link and "ask Claude to update".
+  Page references in notes and chat ([p.5], p. 5, pp. 4-5) jump to that page; section references (§5.1, Section 3) jump to that section, via the PDF outline or, without one, the heading in the text.
+- **Claim Gate audit**: one click checks every claim in the note against the full text and primary sources (venue status, code), shows an audit table, then proposes edits to the note's Claim Gate section for your approval.
 - **Reading list**: `inbox → T1/T2/T3 → reading → done`, plus snooze and dismiss.
   - Every push records the date, source and a required one-line reason.
   - Urgency (tier) is set before reading. Depth (skim/deep), verdict (key/useful/irrelevant) and a one-line takeaway are recorded after; Claude can draft the takeaway.
@@ -33,9 +36,18 @@ built on top of an Obsidian vault and a Zotero library you already have.
 ./studio push --arxiv 2606.17328 --reason "cited by X; check their metric" --by "weekly tracker" --source tracker
 ./studio list --status inbox
 ./studio done "Attention 2017" --depth deep --verdict key --takeaway "..."
+./studio milestone "Draft experiments" --date 2026-11-15 --line "Project A" --kind gate
+./studio milestone list --status todo            # soonest first; also --line, --json
+./studio milestone done "Draft experiments"      # by id, title or part of the title
+./studio idea "use X as a verifier for Y" --line "Project A"
+./studio idea list --status new                  # newest first; also --line, --json
+./studio deadlines --days 90
 ```
 
-`--reason` is required. Papers already read or dismissed are not re-added. The CLI works with or without the server running.
+`--reason` is required. Papers already read or dismissed are not re-added.
+`milestone "Title" ...` and `idea "text"` are short for `milestone add` and `idea add` (use the long form for a title that is literally `list` or `done`).
+`milestone done` needs a title or id that matches exactly one milestone, and prefers open ones when titles repeat.
+The CLI works with or without the server running: it uses the same stores and the same locked, atomic writes as the app.
 Tell your agents about it in the vault rules file (e.g. `AGENTS.md`).
 
 ## Setup

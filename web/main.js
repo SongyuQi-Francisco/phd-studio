@@ -1,6 +1,6 @@
 import { render } from "preact";
 import { useEffect, useMemo, useRef, useState, useCallback } from "preact/hooks";
-import { html, Icon, api, prefs, copyText } from "/lib.js";
+import { html, Icon, api, prefs, copyText, composing } from "/lib.js";
 import { PdfView } from "/pdfview.js";
 import { ChatPanel, NotePanel, PROMPTS } from "/chat.js";
 import { ReadingPage, DoneDialog } from "/reading.js";
@@ -54,7 +54,14 @@ function Library({ papers, current, open, onPick, onClose }) {
 
 // ---------------- reader ----------------
 
-function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef, toast, onDone, onAddToList }) {
+// Exactly the line the server appends to the note (see app/excerpt.py line_for).
+function excerptLine(text, page, comment) {
+  const q = text.replace(/\s+/g, " ").trim().replace(/"/g, "'").replace(/([\\<>&$])/g, "\\$1");
+  const c = (comment || "").replace(/\s+/g, " ").trim();
+  return `- "${q}"` + (page ? ` [p.${page}]` : "") + (c ? ` — ${c}` : "");
+}
+
+function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef, jumpRef, toast, onDone, onAddToList, onExcerpted }) {
   const containerRef = useRef();
   const wrapRef = useRef();
   const [page, setPage] = useState(1);
@@ -98,7 +105,12 @@ function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef
 
   useEffect(() => {
     setVariant("original"); setShowOutline(false); setFindOpen(false);
-    load("original");
+    // A page / section link from a note may have asked to open this paper at a given place.
+    const jump = jumpRef.current?.stem === stem ? jumpRef.current : null;
+    jumpRef.current = null;
+    load("original", jump?.page).then(async () => {
+      if (jump?.sec && (await viewRef.current.goToSection(jump.sec)) === false) toast(`PDF 里找不到 §${jump.sec}`);
+    });
   }, [stem]);
 
   useEffect(() => { if (pages) prefs.set("page:" + stem, page); }, [page]);
@@ -147,7 +159,7 @@ function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef
     const down = (e) => { if (!e.target.closest(".pop")) setPop(null); };
     el.addEventListener("mouseup", up);
     wrapRef.current.addEventListener("mousedown", down, true);
-    const hide = () => setPop((p) => (p && !p.trans ? null : p));
+    const hide = () => setPop((p) => (p && !p.trans && !p.excerpt ? null : p));
     el.addEventListener("scroll", hide);
     return () => { el.removeEventListener("mouseup", up); el.removeEventListener("scroll", hide); };
   }, [cropMode, page]);
@@ -185,6 +197,31 @@ function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef
     } catch (e) { setPop((p) => p && { ...p, trans: { text: e.message, engine: "错误" } }); }
   };
 
+  // ---- excerpt: append the selection with its page to a section of the note ----
+  const openExcerpt = async () => {
+    try {
+      const r = await api(`/api/excerpt/${encodeURIComponent(stem)}`);
+      const isNew = !r.sections.includes(r.default);
+      const sections = isNew ? [...r.sections, r.default] : r.sections;
+      const last = prefs.get("excerptSection", r.default);
+      setPop((p) => p && { ...p, trans: null, excerpt: { sections, isNew, section: sections.includes(last) ? last : r.default, comment: "" } });
+    } catch (e) { toast(e.message); }
+  };
+  const setEx = (patch) => setPop((p) => p && { ...p, excerpt: { ...p.excerpt, ...patch } });
+  const saveExcerpt = async () => {
+    const { text, page: pg, excerpt: x } = pop;
+    if (x.saving) return;
+    setEx({ saving: true });
+    try {
+      const r = await api(`/api/excerpt/${encodeURIComponent(stem)}`, { json: { text, page: pg, section: x.section, comment: x.comment.trim() || null } });
+      prefs.set("excerptSection", x.section);
+      setPop(null);
+      window.getSelection()?.removeAllRanges();
+      if (r.duplicate) toast("这段已经摘录过");
+      else onExcerpted({ ...r, page: pg, stem });
+    } catch (e) { setEx({ saving: false }); toast(e.message); }
+  };
+
   // keyboard
   useEffect(() => {
     const k = (e) => {
@@ -198,7 +235,7 @@ function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef
 
   const v = viewRef.current;
   const popStyle = pop && { left: Math.max(8, pop.x - (pop.trans ? 210 : 120)) + "px", top: Math.max(8, pop.y - 48) + "px" };
-  const transStyle = pop?.trans && { left: Math.max(8, pop.x - 210) + "px", top: Math.max(8, pop.y - 48) + "px", transform: "none" };
+  const transStyle = (pop?.trans || pop?.excerpt) && { left: Math.max(8, pop.x - 210) + "px", top: Math.max(8, pop.y - 48) + "px", transform: "none" };
 
   return html`<div class="reader" ref=${wrapRef} onMouseDownCapture=${startDrag}>
     <div class="toolbar">
@@ -252,12 +289,27 @@ function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef
       <div class="row-end"><button class="btn ghost" onClick=${() => setConfirmBi(false)}>取消</button><button class="btn primary" onClick=${startBi}>开始生成</button></div>
     </div>`}
 
-    ${pop && pop.kind === "sel" && html`<div class="pop" style=${pop.trans ? transStyle : popStyle}>
+    ${pop && pop.kind === "sel" && html`<div class="pop" style=${transStyle || popStyle}>
       <div class="pop-actions">
         <button class="primary" onClick=${doTranslate}><${Icon} name="translate" sm />翻译</button>
         <button onClick=${() => { onSelectionAction("explain", pop); setPop(null); }}><${Icon} name="sparkle" sm />讲解</button>
         <button onClick=${() => { onSelectionAction("ask", pop); setPop(null); }}><${Icon} name="chat" sm />问 Claude</button>
+        <button class=${pop.excerpt ? "on" : ""} disabled=${!paper?.note_rel} title=${paper?.note_rel ? "摘录到笔记（带页码）" : "先建笔记"}
+          onClick=${() => (pop.excerpt ? setPop({ ...pop, excerpt: null }) : openExcerpt())}><${Icon} name="quote" sm />摘录</button>
       </div>
+      ${pop.excerpt && html`<div class="excerpt">
+        <label class="ex-row"><span>小节</span>
+          <select value=${pop.excerpt.section} onChange=${(e) => setEx({ section: e.target.value })}>
+            ${pop.excerpt.sections.map((sec) => html`<option value=${sec}>${sec}${pop.excerpt.isNew && sec === "Excerpts" ? "（新建）" : ""}</option>`)}
+          </select></label>
+        <input class="ex-comment" placeholder="批注（可选）· Enter 摘录" value=${pop.excerpt.comment}
+          ref=${(el) => { if (el && !el.dataset.focused) { el.dataset.focused = "1"; el.focus(); } }}
+          onInput=${(e) => setEx({ comment: e.target.value })}
+          onKeyDown=${(e) => { if (e.key === "Enter" && !composing(e)) { e.preventDefault(); saveExcerpt(); } if (e.key === "Escape") setPop(null); }} />
+        <div class="ex-preview" title="将追加到笔记的这一行">${excerptLine(pop.text, pop.page, pop.excerpt.comment)}</div>
+        <div class="row-end"><button class="btn ghost" onClick=${() => setPop(null)}>取消</button>
+          <button class="btn primary" disabled=${pop.excerpt.saving} onClick=${saveExcerpt}>${pop.excerpt.saving ? "写入中…" : "摘录"}</button></div>
+      </div>`}
       ${pop.trans && html`<div class="trans">
         ${pop.trans.loading ? html`<div class="typing"><i /><i /><i /></div>` : html`<div>${pop.trans.text}</div>
           <div class="meta"><span>${pop.trans.engine}</span><button onClick=${async () => toast((await copyText(pop.trans.text)) ? "已复制" : "复制失败，请手动选中")}>复制</button></div>`}
@@ -337,14 +389,20 @@ function App() {
   const [attachments, setAttachments] = useState({ selection: null, images: [] });
   const [studioAtt, setStudioAtt] = useState({ selection: null, images: [] });
   const [noteVersion, setNoteVersion] = useState(0);
-  const [toastMsg, setToastMsg] = useState("");
+  const [toastMsg, setToastMsg] = useState(null); // {text, action?: {label, run}}
   const [sideW, setSideW] = useState(prefs.get("sideW", 420));
   const pageRef = useRef(1);
   const viewRef = useRef(null);
+  const jumpRef = useRef(null); // {stem, page?|sec?}: where to land when that paper opens
+  const toastTimer = useRef(null);
   const chatRef = useRef(null);
   const studioRef = useRef(null);
 
-  const toast = useCallback((m) => { setToastMsg(m); setTimeout(() => setToastMsg(""), 2400); }, []);
+  const toast = useCallback((text, { action } = {}) => {
+    clearTimeout(toastTimer.current);
+    setToastMsg({ text, action });
+    toastTimer.current = setTimeout(() => setToastMsg(null), action ? 6000 : 2400);
+  }, []);
   const refreshStatus = () => api("/api/status").then(setStatus).catch(() => {});
   const bump = () => setDataVersion((n) => n + 1);
 
@@ -362,8 +420,12 @@ function App() {
   }, []);
   useEffect(() => prefs.set("assistant", assistant), [assistant]);
 
-  const loadPaper = (s) => api(`/api/papers/${encodeURIComponent(s)}`).then(setPaper)
-    .catch(() => { setStem(null); prefs.set("lastStem", null); setView("list"); });
+  const stemRef = useRef(stem);
+  stemRef.current = stem;
+  // Only the paper still open gets its data applied (a reply can arrive after you switched papers).
+  const loadPaper = (s) => api(`/api/papers/${encodeURIComponent(s)}`)
+    .then((p) => { if (stemRef.current === s) setPaper(p); })
+    .catch(() => { if (stemRef.current !== s) return; setStem(null); prefs.set("lastStem", null); setView("list"); });
 
   useEffect(() => {
     if (!stem || view !== "reader") return;
@@ -401,7 +463,30 @@ function App() {
     if (kind === "explain") { setTab("claude"); chatRef.current?.send(PROMPTS.explainImg, { images: [crop], selection: null, label: "讲解" }); }
     else { setAttachments((a) => ({ ...a, images: [...a.images, crop] })); toChat(); }
   };
-  const goPage = (n) => viewRef.current?.goTo(n);
+  const goPage = (n) => {
+    const v = viewRef.current;
+    if (v?.doc && (n < 1 || n > v.doc.numPages)) toast(`这篇只有 ${v.doc.numPages} 页`);
+    else v?.goTo(n);
+  };
+  const goSection = async (sec) => {
+    const ok = await viewRef.current?.goToSection(sec);
+    if (ok === false) toast(`PDF 里找不到 §${sec}`);
+    else if (!ok) toast("PDF 还没打开，没法跳转");
+  };
+  // r.stem is the paper the excerpt went into; you may have switched papers before pressing 撤销.
+  const onExcerpted = (r) => {
+    const refresh = () => { if (stemRef.current === r.stem) { loadPaper(r.stem); setNoteVersion((n) => n + 1); } };
+    refresh();
+    const undo = async () => {
+      try {
+        const u = await api(`/api/excerpt/${encodeURIComponent(r.stem)}/undo`,
+          { json: { line: r.line, inserted: r.inserted, section: r.section, created: r.created, mtime_ns: r.mtime_ns } });
+        refresh();
+        toast(u.ok ? "已撤销摘录" : "撤销失败：笔记里已找不到这一行");
+      } catch (e) { toast(e.message); }
+    };
+    toast(`已摘录到 ${r.section}${r.page ? " · p." + r.page : ""}`, { action: { label: "撤销", run: undo } });
+  };
   // Hand a task to the workbench assistant (opens its panel if needed).
   const ask = (prompt, label) => {
     setAssistant(true);
@@ -409,7 +494,16 @@ function App() {
       : n > 0 && setTimeout(() => trySend(n - 1), 120);
     setTimeout(() => trySend(20), 60);
   };
-  const openPaper = (s) => { setNotePath(null); pick(s); };
+  // target: {page} or {sec} from a page / section link in a note
+  const openPaper = (s, target) => {
+    setNotePath(null);
+    if (target && view === "reader" && stem === s) {
+      if (target.page) goPage(target.page); else goSection(target.sec);
+      return;
+    }
+    jumpRef.current = target ? { stem: s, ...target } : null;
+    pick(s);
+  };
 
   const startResize = (e) => {
     e.preventDefault();
@@ -426,8 +520,9 @@ function App() {
     onClick=${() => go(v)}><${Icon} name=${icon} /></button>`;
 
   let page;
-  if (reading) page = html`<${Reader} key=${stem} stem=${stem} paper=${paper} pageRef=${pageRef} viewRef=${viewRef} toast=${toast}
-      onSelectionAction=${onSelectionAction} onCropAction=${onCropAction} onDone=${() => setDoneOpen(true)} onAddToList=${addToList} />`;
+  if (reading) page = html`<${Reader} key=${stem} stem=${stem} paper=${paper} pageRef=${pageRef} viewRef=${viewRef} jumpRef=${jumpRef} toast=${toast}
+      onSelectionAction=${onSelectionAction} onCropAction=${onCropAction} onDone=${() => setDoneOpen(true)} onAddToList=${addToList}
+      onExcerpted=${onExcerpted} />`;
   else if (view === "list") page = html`<${ReadingPage} version=${dataVersion} toast=${toast} onOpen=${(i) => pick(i.key)} />`;
   else if (view === "timeline") page = html`<${TimelinePage} version=${dataVersion} tab=${tlTab} onOpenVenue=${setVenueKey} toast=${toast} onChanged=${bump} />`;
   else if (view === "ideas") page = html`<${IdeasPage} version=${dataVersion} lines=${status?.lines || []} radarPath=${status?.idea_radar}
@@ -468,10 +563,10 @@ function App() {
     <aside class="side">
       <div style=${{ display: tab === "claude" ? "contents" : "none" }}>
         <${ChatPanel} stem=${stem} paper=${paper} getPage=${() => pageRef.current} attachments=${attachments} setAttachments=${setAttachments}
-          registerSend=${(api_) => (chatRef.current = api_)} onPage=${goPage} claudeOk=${claudeOk}
+          registerSend=${(api_) => (chatRef.current = api_)} onPage=${goPage} onSection=${goSection} claudeOk=${claudeOk}
           onNoteChanged=${() => setNoteVersion((n) => n + 1)} />
       </div>
-      ${tab === "note" && html`<${NotePanel} paper=${paper} version=${noteVersion}
+      ${tab === "note" && html`<${NotePanel} paper=${paper} version=${noteVersion} onPage=${goPage} onSection=${goSection}
         onAskUpdate=${() => { setTab("claude"); chatRef.current?.send(PROMPTS.note(paper.note_rel), { selection: null, images: [], label: "更新笔记" }); }}
         onAskIntake=${() => { setTab("claude"); chatRef.current?.send(PROMPTS.intake, { selection: null, images: [], label: "建笔记" }); }} />`}
     </aside>`}
@@ -491,7 +586,8 @@ function App() {
     ${doneOpen && paper?.reading && html`<${DoneDialog} item=${{ ...paper.reading, key: stem, title: paper.title }}
       onClose=${() => setDoneOpen(false)} onSaved=${() => { setDoneOpen(false); toast("已记为读完"); loadPaper(stem); }} />`}
     ${settingsOpen && status && html`<${Settings} status=${status} onClose=${() => setSettingsOpen(false)} onSaved=${refreshStatus} />`}
-    ${toastMsg && html`<div class="toast">${toastMsg}</div>`}
+    ${toastMsg && html`<div class="toast"><span>${toastMsg.text}</span>
+      ${toastMsg.action && html`<button onClick=${() => { const a = toastMsg.action; setToastMsg(null); a.run(); }}>${toastMsg.action.label}</button>`}</div>`}
     ${quitState === "confirm" && html`<div class="modal-bg" onClick=${(e) => e.target === e.currentTarget && setQuitState("")}>
       <div class="modal">
         <h2>关闭工作台？</h2>

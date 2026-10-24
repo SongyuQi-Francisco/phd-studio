@@ -87,6 +87,34 @@ def add_milestone(title: str, date_: str, line: str | None = None, kind: str = "
                                          "status": status, "notes": notes}, "m")
 
 
+def milestones() -> list[dict[str, Any]]:
+    """Live milestones, soonest first."""
+    return sorted(plan_store.load()["milestones"], key=lambda m: (m.get("date", ""), m.get("title", "")))
+
+
+def find_milestone(key: str, prefer_open: bool = False) -> dict[str, Any]:
+    """A milestone by id, title (case-insensitive) or a part of its title; it must match exactly one.
+
+    With prefer_open, finished milestones only count when no open one matches at that step.
+    """
+    key = key.strip()
+    if not key:
+        raise ValueError("milestone title or id is required")
+    folded = key.casefold()
+    ms = milestones()
+    for matches in (lambda m: m["id"] == key, lambda m: (m.get("title") or "").casefold() == folded,
+                    lambda m: folded in (m.get("title") or "").casefold()):
+        hits = [m for m in ms if matches(m)]
+        if prefer_open and any(m.get("status") != "done" for m in hits):
+            hits = [m for m in hits if m.get("status") != "done"]
+        if len(hits) == 1:
+            return hits[0]
+        if hits:
+            raise ValueError(f"'{key}' matches {len(hits)} milestones, use the id: "
+                             + "; ".join(f"{m['id']} {m.get('date', '')} {m.get('title', '')}" for m in hits))
+    raise ValueError(f"no milestone matches '{key}'")
+
+
 def update(collection: str, rid: str, patch: dict[str, Any]) -> dict[str, Any]:
     if collection == "milestones":
         _check(patch.get("kind"), KINDS, "kind")

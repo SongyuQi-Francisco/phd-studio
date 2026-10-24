@@ -1,6 +1,6 @@
 // Right panel: Claude co-reader (one persistent session per paper) and the paper's Obsidian note.
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
-import { html, Icon, renderMarkdown, api } from "/lib.js";
+import { html, Icon, renderMarkdown, api, composing } from "/lib.js";
 
 export const PROMPTS = {
   brief: "给我这篇论文的中文速读：①要解决的问题 ②方法核心（一句话 + 关键机制）③主要证据（关键数字，带页码）④局限 ⑤和我当前课题的关系。先读全文再回答。",
@@ -10,15 +10,23 @@ export const PROMPTS = {
   explainImg: "这是从论文里框选的区域。用中文讲解：它表达了什么；如果是公式，逐个解释符号并推导关键步骤；如果是图表，说明每个轴/列的含义和主要结论。",
   intake: "为这篇论文按 AGENTS.md 的 Paper Intake 规则新建论文笔记：用 Paper Note Template 的结构，先核对一手来源（arXiv 页面），只写有原文依据的内容，并按规则更新 Literature Matrix。动手前先说明笔记文件名和打算写的要点。",
   note: (rel) => `根据我们目前的讨论和论文原文，更新这篇论文的笔记（${rel}）。只补充或修正有原文依据的内容，保持现有结构和语言，遵守 AGENTS.md 的 Claim Gate。动手前先用两三句话说明打算改哪里。`,
+  audit: (rel, today) => `对这篇论文的笔记（${rel}）做一次 Claim Gate 审计，严格遵守 AGENTS.md。今天是 ${today}。
+1. 逐条核对笔记里的每个论断（Problem、Method、Evidence、Relevance、Excerpts 以及其他小节），对照论文全文标为：✅ 有原文支持（给出页码 [p.N]）/ ⚠️ 原文里找不到或表述过度 / ❌ 与原文矛盾。数字、数据集、指标、基线逐个对。
+2. 发表状态（同行评审的会议/期刊，还是 arXiv 预印本）和代码是否开源，必须到一手来源核实（arXiv、OpenReview、ACL Anthology、ACM/出版社页面、官方项目页），不要凭记忆。
+3. 先给一张审计表（论断 | 结论 | 依据与页码），再列出需要修改的地方。
+4. 然后用 Edit 修改笔记：更新 ## Claim Gate 小节（Verified source / Still uncertain，写明核实日期 ${today}），修正有问题的论断。只改有依据的地方，保持原有结构和语言。如果某个重要论断变了，按规则同时更新 07 Evidence/Verification Log.md。每处修改都会先给我看差异。`,
 };
 
-function Markdown({ text, onPage }) {
+// loose: also link "p. 3" / "§5.4" written in prose (paper notes, the paper's own chat).
+function Markdown({ text, onPage, onSection, loose }) {
   const ref = useRef();
   const click = (e) => {
     const a = e.target.closest(".pagelink");
-    if (a) onPage?.(Number(a.dataset.page));
+    if (!a) return;
+    if (a.dataset.sec) onSection?.(a.dataset.sec);
+    else onPage?.(Number(a.dataset.page));
   };
-  return html`<div class="md" ref=${ref} onClick=${click} dangerouslySetInnerHTML=${{ __html: renderMarkdown(text) }} />`;
+  return html`<div class="md" ref=${ref} onClick=${click} dangerouslySetInnerHTML=${{ __html: renderMarkdown(text, { loose }) }} />`;
 }
 
 function Diff({ text }) {
@@ -39,10 +47,10 @@ function Permission({ p, answer }) {
   </div>`;
 }
 
-function AssistantMsg({ m, onPage, answer }) {
+function AssistantMsg({ m, onPage, onSection, answer }) {
   return html`<div class="msg-ai">
     ${(m.segments || []).map((s) => s.type === "text"
-      ? html`<${Markdown} text=${s.text} onPage=${onPage} />`
+      ? html`<${Markdown} text=${s.text} onPage=${onPage} onSection=${onSection} loose=${!!onPage} />`
       : s.type === "tool"
       ? html`<div class="tool"><${Icon} name=${s.name === "Edit" || s.name === "Write" ? "file" : "search"} sm /><span>${s.summary}</span></div>`
       : s.type === "perm"
@@ -63,7 +71,7 @@ function UserMsg({ m }) {
   </div>`;
 }
 
-export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, registerSend, onPage, onNoteChanged, claudeOk,
+export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, registerSend, onPage, onSection, onNoteChanged, claudeOk,
   chips, emptyHint, title, onStudioChanged }) {
   const [msgs, setMsgs] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -179,7 +187,7 @@ export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, r
   };
 
   const onKey = (e) => {
-    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); }
+    if (e.key === "Enter" && !e.shiftKey && !composing(e)) { e.preventDefault(); submit(); }
   };
   const autosize = (e) => {
     setText(e.target.value);
@@ -202,7 +210,7 @@ export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, r
     <div class="chat" ref=${listRef} onScroll=${onScroll}>
       ${msgs.length === 0
         ? html`<div class="chat-empty"><${Icon} name="sparkle" /><div>${emptyHint || "划选文字，或按住 ⌥ 框选图表 / 公式"}</div></div>`
-        : msgs.map((m) => m.role === "user" ? html`<${UserMsg} m=${m} />` : html`<${AssistantMsg} m=${m} onPage=${onPage} answer=${answer} />`)}
+        : msgs.map((m) => m.role === "user" ? html`<${UserMsg} m=${m} />` : html`<${AssistantMsg} m=${m} onPage=${onPage} onSection=${onSection} answer=${answer} />`)}
     </div>
     <div class="composer">
       ${chips ? html`<div class="chips">${chips.map((c) => html`<button class="chip" disabled=${busy}
@@ -214,6 +222,8 @@ export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, r
         <button class="chip" disabled=${busy || !paper} onClick=${() => paper.note_rel
           ? send(PROMPTS.note(paper.note_rel), { selection: null, images: [], label: "更新笔记" })
           : send(PROMPTS.intake, { selection: null, images: [], label: "建笔记" })}>${paper && !paper.note_rel ? "建笔记" : "更新笔记"}</button>
+        <button class="chip" disabled=${busy || !paper?.note_rel} title=${paper?.note_rel ? "逐条核对笔记论断和发表状态，更新 Claim Gate" : "先建笔记"}
+          onClick=${() => send(PROMPTS.audit(paper.note_rel, new Date().toLocaleDateString("sv")), { selection: null, images: [], label: "Claim Gate 审计" })}>Claim Gate 审计</button>
       </div>`}
       ${hasAttach && html`<div class="attach">
         ${attachments.selection && html`<div class="att"><${Icon} name="quote" sm /><span>${attachments.selection.text}</span>
@@ -230,7 +240,7 @@ export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, r
     </div>`;
 }
 
-export function NotePanel({ paper, version, onAskUpdate, onAskIntake }) {
+export function NotePanel({ paper, version, onAskUpdate, onAskIntake, onPage, onSection }) {
   const [md, setMd] = useState(paper?.note_markdown || "");
   useEffect(() => {
     if (!paper?.note_rel) return;
@@ -258,6 +268,6 @@ export function NotePanel({ paper, version, onAskUpdate, onAskIntake }) {
         ${paper.year && html`<span class="tag">${paper.year}</span>`}
         ${paper.tags.slice(0, 6).map((t) => html`<span class="tag">${t}</span>`)}
       </div>
-      <${Markdown} text=${body} />
+      <${Markdown} text=${body} onPage=${onPage} onSection=${onSection} loose />
     </div>`;
 }

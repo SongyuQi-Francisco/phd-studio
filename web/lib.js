@@ -54,8 +54,33 @@ function esc(s) {
   return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 }
 
+// Page and section references as written in notes: "p. 3", "(pp. 4-5)", "page 7", "§5.4.1", "Section 3.2".
+const LOOSE_REF = /\b(?:pp?\.\s?|page\s)(\d{1,3})(?:\s?[-–]\s?\d{1,3})?\b|(?:§\s?|\b(?:Section|Sec\.)\s?)(\d{1,2}(?:\.\d{1,2}){0,3})(?![\d.]*\d)/gi;
+
+// Link loose references in text only: not inside tags, code, math (MathML or KaTeX), links or [[wikilinks]].
+function linkLoose(out) {
+  let skip = null, depth = 0, afterCode = false;
+  return out.split(/(<[^>]+>)/).map((part) => {
+    if (part.startsWith("<")) {
+      const t = /^<(\/?)([a-z]+)/i.exec(part);
+      afterCode = /^<\/code>/i.test(part);
+      if (!t) return part;
+      const name = t[2].toLowerCase();
+      if (skip) { if (name === skip) depth += t[1] ? -1 : 1; if (depth === 0) skip = null; }
+      else if (!t[1] && (/^(code|pre|a|math)$/.test(name) || /class="(?:wikilink|katex)/.test(part))) { skip = name; depth = 1; }
+      return part;
+    }
+    // "`PROPOSAL.md` §2.7" points into another document, not this paper.
+    if (skip || (afterCode && /^\s*§/.test(part))) return part;
+    return part.replace(LOOSE_REF, (m, page, sec) => page
+      ? `<a class="pagelink" data-page="${page}">${m}</a>`
+      : `<a class="pagelink sec" data-sec="${sec}">${m}</a>`);
+  }).join("");
+}
+
 // Markdown with $...$ / $$...$$ math, [p.5] page links and [[wikilinks]].
-export function renderMarkdown(src) {
+// loose: also link "p. 3" / "§5.4" style references (paper notes and the paper's own chat).
+export function renderMarkdown(src, { loose = false } = {}) {
   const maths = [];
   const stash = (tex, display) => { maths.push({ tex, display }); return `\u0000M${maths.length - 1}\u0000`; };
   let s = (src || "")
@@ -72,7 +97,31 @@ export function renderMarkdown(src) {
   out = out.replace(/\[(?:p\.|P\.|第)\s?(\d+)(?:\s?页)?\]/g, '<a class="pagelink" data-page="$1">p.$1</a>');
   out = out.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, t, a) =>
     `<span class="wikilink" data-target="${esc(t.split("#")[0].trim())}">${a || t}</span>`);
-  return out;
+  return sanitize(loose ? linkLoose(out) : out);
+}
+
+// Notes come from many places (PDF text, the web, other tools) and marked keeps raw HTML:
+// drop active elements, on* handlers and script URLs before the HTML reaches the page.
+const DROP = new Set(["SCRIPT", "IFRAME", "FRAME", "FRAMESET", "OBJECT", "EMBED", "LINK", "META", "BASE", "STYLE",
+  "FORM", "INPUT", "BUTTON", "TEXTAREA", "SELECT"]);
+const URL_ATTR = new Set(["href", "src", "xlink:href", "action", "formaction", "srcset", "poster", "background"]);
+function sanitize(markup) {
+  const t = document.createElement("template"); // inert: nothing in it loads or runs
+  t.innerHTML = markup;
+  for (const el of [...t.content.querySelectorAll("*")]) {
+    if (DROP.has(el.tagName.toUpperCase())) { el.remove(); continue; }
+    for (const a of [...el.attributes]) {
+      const n = a.name.toLowerCase();
+      if (n.startsWith("on") || n === "srcdoc" || (URL_ATTR.has(n) && /^\s*(?:javascript|vbscript|data):/i.test(a.value) &&
+          !(n === "src" && /^\s*data:image\/(?:png|jpe?g|gif|webp);/i.test(a.value)))) el.removeAttribute(a.name);
+    }
+  }
+  return t.innerHTML;
+}
+
+// Enter that only confirms an IME candidate (WebKit fires compositionend first, then keyCode 229).
+export function composing(e) {
+  return e.isComposing || e.keyCode === 229;
 }
 
 export async function api(path, opts = {}) {
