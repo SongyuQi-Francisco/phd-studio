@@ -72,7 +72,7 @@ function UserMsg({ m }) {
 }
 
 export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, registerSend, onPage, onSection, onNoteChanged, claudeOk,
-  chips, emptyHint, title, onStudioChanged }) {
+  chips, emptyHint, title, onStudioChanged, onBack, backLabel, banner }) {
   const [msgs, setMsgs] = useState([]);
   const [busy, setBusy] = useState(false);
   const [text, setText] = useState("");
@@ -130,7 +130,8 @@ export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, r
     setMsgs([]); setBusy(false);
     api(`/api/chat/${encodeURIComponent(stem)}`).then((r) => {
       if (!alive) return;
-      setMsgs(r.messages.map((m) => m.role === "assistant" ? { ...m, segments: m.segments } : m));
+      // keep anything sent before the history arrived (a prompt handed to a panel that just mounted)
+      setMsgs((prev) => [...r.messages.map((m) => m.role === "assistant" ? { ...m, segments: m.segments } : m), ...prev]);
       stick.current = true;
     });
     return () => { alive = false; wsRef.current?.close(); wsRef.current = null; };
@@ -169,7 +170,8 @@ export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, r
     }
   }, [busy, attachments, connect, getPage]);
 
-  useEffect(() => { registerSend?.({ send, focus: () => taRef.current?.focus() }); }, [send]);
+  // busy: answering or waiting on an approval (send changes with it, so this re-registers)
+  useEffect(() => { registerSend?.({ send, focus: () => taRef.current?.focus(), busy }); }, [send]);
 
   const answer = (id, allow) => wsRef.current?.send(JSON.stringify({ type: "permission", id, allow }));
   const stop = () => wsRef.current?.send(JSON.stringify({ type: "stop" }));
@@ -204,9 +206,11 @@ export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, r
 
   return html`
     <div class="side-head">
+      ${onBack && html`<button class="tb-btn back" title=${"回到" + backLabel} onClick=${onBack}><${Icon} name="left" sm />${backLabel}</button>`}
       <div class="meta"><span class=${"dot " + (claudeOk ? "ok" : "bad")} /><span>${claudeOk ? (title ? `${title} · ${lastModel || "Claude"}` : lastModel || "Claude") : "Claude 未连接"}</span></div>
       <button class="tb-btn" title="新对话" onClick=${reset}><${Icon} name="refresh" sm /></button>
     </div>
+    ${banner}
     <div class="chat" ref=${listRef} onScroll=${onScroll}>
       ${msgs.length === 0
         ? html`<div class="chat-empty"><${Icon} name="sparkle" /><div>${emptyHint || "划选文字，或按住 ⌥ 框选图表 / 公式"}</div></div>`
@@ -214,7 +218,7 @@ export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, r
     </div>
     <div class="composer">
       ${chips ? html`<div class="chips">${chips.map((c) => html`<button class="chip" disabled=${busy}
-          onClick=${() => c.fill ? (setText(c.prompt), setTimeout(() => taRef.current?.focus(), 0)) : send(c.prompt, { selection: null, images: [], label: c.label })}>${c.label}</button>`)}</div>` : html`
+          onClick=${() => c.run ? c.run(send) : c.fill ? (setText(c.prompt), setTimeout(() => taRef.current?.focus(), 0)) : send(c.prompt, { selection: null, images: [], label: c.label })}>${c.label}</button>`)}</div>` : html`
       <div class="chips">
         <button class="chip" disabled=${busy} onClick=${() => send(PROMPTS.brief, { selection: null, images: [], label: "速读" })}>速读</button>
         <button class="chip" disabled=${busy} onClick=${() => { const p = getPage(); send(PROMPTS.page(p), { includePageText: true, page: p, selection: null, images: [], label: `讲解第 ${p} 页` }); }}>讲解本页</button>

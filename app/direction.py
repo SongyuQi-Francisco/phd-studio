@@ -7,7 +7,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from . import notes, plan, reading
+from . import line_chat, notes, plan, reading
 from .config import IDEA_RADAR, IDEAS_DIR, PROFILE, ROADMAP
 
 _KILL_HIT = re.compile(r"\b(K\d+)\b[^\n]{0,80}?(partially triggered|部分触发|triggered|已触发|触发)", re.I)
@@ -17,7 +17,8 @@ _KILL_HIT_REV = re.compile(r"(partially triggered|部分触发|triggered|已触�
 def _line_for(name: str, fm: dict[str, Any]) -> str | None:
     """Which configured research line ('Project A', 'Project B') a note belongs to."""
     hay = (name + " " + " ".join(map(str, fm.get("tags") or []))).lower().replace(" ", "")
-    for ln in PROFILE.get("lines", []):
+    # longest first: a note on "Project AB" must not count as "Project A"
+    for ln in sorted(PROFILE.get("lines", []), key=lambda x: -len(x.replace(" ", ""))):
         if ln.lower().replace(" ", "") in hay:
             return ln
     return None
@@ -91,6 +92,7 @@ def lines() -> list[dict[str, Any]]:
         })
     out.sort(key=lambda x: (x["kind"] != "research-line", str(x["status"]) in ("paused", "archived"),
                             x["priority"] if isinstance(x["priority"], int) else 9, x["name"]))
+    line_chat.annotate(out)  # chat key, chat size and last review packet per research line
     return out
 
 

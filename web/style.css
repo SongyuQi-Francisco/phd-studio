@@ -976,3 +976,24 @@ rect.heat-4, i.heat-4 { fill: var(--heat-4); background: var(--heat-4); }
 .lesson:hover { background: var(--hover); }
 @container (max-width: 680px) { .phases { grid-template-columns: 1fr; } }
 @container (max-width: 520px) { .lines { grid-template-columns: 1fr; } .line-head { flex-direction: column; } }
+
+/* ---------- research-line chats (方向) ---------- */
+/* A long chat must scroll inside the side panel, not stretch the grid row (pushes the composer off-screen). */
+.shell > .side { min-height: 0; }
+.side-head .back { flex: none; padding-left: 3px; color: var(--accent); }
+.side-head .back + .meta { margin-right: auto; }
+.line-ctx { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 11.5px; }
+.line-ctx .lc { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px 2px 6px; border-radius: 99px; background: var(--hover); color: var(--text-2); font-size: 11.5px; }
+.line-ctx .lc i { width: 6px; height: 6px; border-radius: 50%; background: var(--good); }
+.line-ctx .lc.off { opacity: .55; }
+.line-ctx .lc.off i { background: var(--text-3); }
+.line-ctx button.lc:not(:disabled):hover { color: var(--text); background: color-mix(in srgb, var(--accent) 12%, var(--hover)); }
+.line-ctx button.lc:disabled { cursor: default; }
+.line-ctx .lc-more { display: inline-flex; gap: 5px; align-items: center; margin-left: auto; }
+.line-ctx .lc-more .lc { background: var(--accent-soft); color: var(--accent); }
+.lh-title { font: inherit; color: inherit; text-align: left; padding: 0; }
+.lh-title:hover { color: var(--accent); }
+.card.line.talking { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); box-shadow: 0 0 0 3px var(--accent-soft); }
+.tag.talk { display: inline-flex; gap: 4px; align-items: center; background: var(--accent-soft); color: var(--accent); }
+.chip-n { font-weight: 650; color: var(--text); margin-left: 2px; }
+.chip.quiet { border-style: dashed; color: var(--text-3); }
