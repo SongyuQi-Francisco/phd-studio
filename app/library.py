@@ -21,6 +21,7 @@ import pymupdf as fitz
 import httpx
 import yaml
 
+from . import sources
 from .config import (
     DATA_DIR,
     VAULT_NAME,
@@ -58,6 +59,7 @@ def _parse_note(path: Path) -> dict[str, Any]:
         "status": fm.get("status") or "",
         "source": fm.get("source") or "",
         "arxiv": str(fm.get("arxiv") or ""),
+        "doi": sources.norm_doi(str(fm["doi"])) if fm.get("doi") else "",
         "zotero_key": zkey,
         "tags": [t for t in tags if isinstance(t, str) and t != "paper"],
         "research_line": _WIKILINK_RE.findall(str(fm.get("research_line") or "")),
@@ -102,12 +104,23 @@ def arxiv_key(key: str) -> str | None:
     return m.group(1) if m else None
 
 
+def ext_key(key: str) -> tuple[str, str] | None:
+    """("doi" | "openreview" | "acl", id) when the key is doi:<doi>, openreview:<id> or acl:<id>
+    (a paper without a note or an arXiv id, e.g. one captured from a DOI or an OpenReview link)."""
+    return sources.ext_parts(key)
+
+
+def is_external(key: str) -> bool:
+    """A paper that has no note yet: its key is arxiv:<id> or one of the external keys."""
+    return bool(arxiv_key(key) or ext_key(key))
+
+
 def safe_name(key: str) -> str:
-    return key.replace(":", "_").replace("/", "_")
+    return key.replace(":", "_").replace("/", "_").replace("|", "_")
 
 
 def validate(key: str) -> None:
-    if not arxiv_key(key):
+    if not is_external(key):
         note_path(key)
 
 
@@ -128,11 +141,29 @@ def arxiv_index() -> dict[str, str]:
     return _arxiv_index(PAPERS_DIR.stat().st_mtime)
 
 
+@lru_cache(maxsize=1)
+def _ext_index(_stamp: float) -> dict[str, str]:
+    out = {}
+    for p in PAPERS_DIR.glob("*.md"):
+        info = _parse_note(p)
+        keys = [sources.ext_key("doi", info["doi"])] if info["doi"] else []
+        keys += [k for k in (sources.ext_from_url(info["source"]),) if k]
+        for k in keys:
+            if sources.ext_parts(k):
+                out.setdefault(k, info["stem"])
+    return out
+
+
+def ext_index() -> dict[str, str]:
+    """doi:/openreview:/acl: key -> paper note stem, from a note's `doi` and its `source` link."""
+    return _ext_index(PAPERS_DIR.stat().st_mtime)
+
+
 def get_paper(stem: str) -> dict[str, Any]:
-    if aid := arxiv_key(stem):
-        return {"stem": stem, "title": stem, "arxiv": aid, "year": None, "status": "", "source": "",
+    if is_external(stem):
+        return {"stem": stem, "title": stem, "arxiv": arxiv_key(stem), "year": None, "status": "", "source": "",
                 "zotero_key": "", "tags": [], "research_line": [], "note_rel": None, "note_markdown": "",
-                "obsidian_url": None, "pdf": "local" if local_pdf(stem) else "remote"}
+                "obsidian_url": None, "external": True, "pdf": "local" if local_pdf(stem) else "remote"}
     path = note_path(stem)
     info = _parse_note(path)
     info["note_rel"] = str(path.relative_to(VAULT_DIR))
@@ -209,12 +240,29 @@ def _zotero_stamp() -> float:
     return max((f.stat().st_mtime for f in files), default=0.0)
 
 
+def _doi_pdf_urls(doi: str) -> list[str]:
+    """Links a DOI gives away without a lookup: the arXiv and ACL Anthology copies, the ACM page."""
+    if m := re.match(r"10\.48550/arxiv\.(\d{4}\.\d{4,5})", doi, re.I):
+        return [f"https://arxiv.org/pdf/{m.group(1)}"]
+    if m := re.match(r"10\.18653/v1/(.+)$", doi):
+        return [f"https://aclanthology.org/{m.group(1)}.pdf"]
+    if doi.startswith("10.1145/"):
+        return [f"https://dl.acm.org/doi/pdf/{doi}"]
+    return []
+
+
 def pdf_urls(info: dict[str, Any]) -> list[str]:
     urls: list[str] = []
     if info.get("zotero_key"):
         urls += _zotero_pdf_urls(_zotero_stamp()).get(info["zotero_key"], [])
     if info.get("arxiv"):
         urls.append(f"https://arxiv.org/pdf/{info['arxiv']}")
+    if info.get("openreview"):
+        urls.append(f"https://openreview.net/pdf?id={info['openreview']}")
+    if info.get("acl"):
+        urls.append(f"https://aclanthology.org/{info['acl']}.pdf")
+    if info.get("doi"):
+        urls += _doi_pdf_urls(info["doi"])
     src = info.get("source") or ""
     if m := re.search(r"arxiv\.org/(?:abs|pdf)/([\w.]+?)(?:v\d+)?(?:\.pdf)?$", src):
         urls.append(f"https://arxiv.org/pdf/{m.group(1)}")
@@ -244,11 +292,14 @@ def ensure_pdf(stem: str) -> Path:
     """Return a local PDF for the paper, downloading it into the cache if needed."""
     if p := local_pdf(stem):
         return p
-    aid = arxiv_key(stem)
-    info = {"arxiv": aid} if aid else _parse_note(note_path(stem))
+    aid, ext = arxiv_key(stem), ext_key(stem)
+    info = {"arxiv": aid} if aid else {ext[0]: ext[1]} if ext else _parse_note(note_path(stem))
     errors = []
     headers = {"User-Agent": "Mozilla/5.0 (Macintosh) PhD-Studio/0.1"}
-    for url in pdf_urls(info):
+    urls = pdf_urls(info)
+    if info.get("doi"):  # last resort, a lookup: an open-access copy OpenAlex knows about
+        urls += [u for u in sources.doi_pdf_urls(info["doi"]) if u not in urls]
+    for url in urls:
         try:
             r = httpx.get(url, headers=headers, follow_redirects=True, timeout=60)
             if r.status_code == 200 and r.content[:5] == b"%PDF-":

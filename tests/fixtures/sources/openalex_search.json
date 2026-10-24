@@ -1,0 +1,147 @@
+{
+ "meta": {
+  "count": 4
+ },
+ "results": [
+  {
+   "id": "https://openalex.org/W4416017185",
+   "doi": "https://doi.org/10.1145/3746252.3761612",
+   "title": "Generative Recommendation with Semantic IDs: A Practitioner's Handbook",
+   "publication_year": 2025,
+   "primary_location": {
+    "landing_page_url": "https://doi.org/10.1145/3746252.3761612",
+    "pdf_url": null,
+    "source": {
+     "display_name": "ACM International Conference on Information and Knowledge Management (CIKM)"
+    }
+   },
+   "authorships": [
+    {
+     "author": {
+      "display_name": "Ada Example"
+     }
+    },
+    {
+     "author": {
+      "display_name": "Ben Sample"
+     }
+    }
+   ],
+   "locations": [
+    {
+     "landing_page_url": "https://doi.org/10.1145/3746252.3761612",
+     "pdf_url": null
+    }
+   ],
+   "best_oa_location": null,
+   "type": "conference-paper"
+  },
+  {
+   "id": "https://openalex.org/W7129655334",
+   "doi": "https://doi.org/10.48550/arxiv.2602.13573",
+   "title": "Unleash the Potential of Long Semantic IDs for Generative Recommendation",
+   "publication_year": 2026,
+   "primary_location": {
+    "landing_page_url": "https://arxiv.org/abs/2602.13573",
+    "pdf_url": "https://arxiv.org/pdf/2602.13573",
+    "source": {
+     "display_name": "arXiv (Cornell University)"
+    }
+   },
+   "authorships": [
+    {
+     "author": {
+      "display_name": "Ada Example"
+     }
+    },
+    {
+     "author": {
+      "display_name": "Ben Sample"
+     }
+    }
+   ],
+   "locations": [
+    {
+     "landing_page_url": "https://arxiv.org/abs/2602.13573",
+     "pdf_url": "https://arxiv.org/pdf/2602.13573"
+    },
+    {
+     "landing_page_url": "https://doi.org/10.48550/arxiv.2602.13573",
+     "pdf_url": null
+    }
+   ],
+   "best_oa_location": null,
+   "type": "preprint"
+  },
+  {
+   "id": "https://openalex.org/W7214275318",
+   "doi": "https://doi.org/10.48550/arxiv.2609.29973",
+   "title": "Learning Better Reasoning for Generative Recommendation with Semantic IDs",
+   "publication_year": 2026,
+   "primary_location": {
+    "landing_page_url": "https://arxiv.org/abs/2609.29973",
+    "pdf_url": "https://arxiv.org/pdf/2609.29973",
+    "source": {
+     "display_name": "arXiv (Cornell University)"
+    }
+   },
+   "authorships": [
+    {
+     "author": {
+      "display_name": "Ada Example"
+     }
+    },
+    {
+     "author": {
+      "display_name": "Ben Sample"
+     }
+    }
+   ],
+   "locations": [
+    {
+     "landing_page_url": "https://arxiv.org/abs/2609.29973",
+     "pdf_url": "https://arxiv.org/pdf/2609.29973"
+    },
+    {
+     "landing_page_url": "https://doi.org/10.48550/arxiv.2609.29973",
+     "pdf_url": null
+    }
+   ],
+   "best_oa_location": null,
+   "type": "preprint"
+  },
+  {
+   "id": "https://openalex.org/W7140954464",
+   "doi": null,
+   "title": "Reasoning over Semantic IDs Enhances Generative Recommendation",
+   "publication_year": 2026,
+   "primary_location": {
+    "landing_page_url": "https://arxiv.org/abs/2603.23183",
+    "pdf_url": "https://arxiv.org/pdf/2603.23183",
+    "source": {
+     "display_name": "arXiv (Cornell University)"
+    }
+   },
+   "authorships": [
+    {
+     "author": {
+      "display_name": "Ada Example"
+     }
+    },
+    {
+     "author": {
+      "display_name": "Ben Sample"
+     }
+    }
+   ],
+   "locations": [
+    {
+     "landing_page_url": "https://arxiv.org/abs/2603.23183",
+     "pdf_url": "https://arxiv.org/pdf/2603.23183"
+    }
+   ],
+   "best_oa_location": null,
+   "type": "preprint"
+  }
+ ]
+}

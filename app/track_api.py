@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 
-from . import scholar_capture, scholar_refresh, scholars, tracker_run, tracking
+from . import reading, scholar_capture, scholar_refresh, scholars, tracker_run, tracking
 
 router = APIRouter(prefix="/api/track")
 IMG_HEADERS = {"Cache-Control": "max-age=604800"}
@@ -164,6 +164,19 @@ async def follow_feed(refresh: bool = False, days: int = 30) -> dict[str, Any]:
     def load() -> dict[str, Any]:  # file reads and the plan.yaml lock stay off the event loop
         return {"feed": tracking.feed(days, 25, refresh), "linkage": tracking.linkage()}
     return await run_in_threadpool(load)
+
+
+@router.post("/capture/pick")
+def capture_pick(body: dict[str, Any]) -> dict[str, Any]:
+    """One match of a title search, or a feed card without an arXiv id, into the reading inbox."""
+    cand = body.get("candidate")
+    if not isinstance(cand, dict):
+        raise HTTPException(400, "missing candidate")
+    lines = [str(x) for x in body.get("lines") or []]
+    try:
+        return tracking.capture_pick(cand, str(body.get("reason") or ""), body.get("tier"), lines)
+    except (ValueError, reading.ReadingError) as e:
+        raise HTTPException(400, str(e))
 
 
 @router.get("/labs/matrix")

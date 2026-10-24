@@ -1,11 +1,15 @@
-"""Tracking page: weekly lab-tracker runs, lab activity, and a live arXiv feed for follows.
+"""Tracking page: weekly lab-tracker runs, lab activity, and a live feed for follows.
 
 - Runs come from the tracker's runs/<date>/candidates.json plus the vault report
   (its Claude-written ANALYSIS block).
 - Labs come from the vault's Lab Tracker/Labs notes; activity is counted across runs.
-- Follows (keywords, people) live in plan.yaml and are queried live against the
-  arXiv API (cached 6 h, one request every 3 s as arXiv asks). They are also exported to
-  the tracker's config/follows.json so the weekly run fetches and keeps them too.
+- Follows (keywords, people) live in plan.yaml and are queried live against arXiv (cached 6 h,
+  one request every 3 s as arXiv asks), OpenReview (cached 6 h) and the ACL Anthology (volumes
+  cached on disk), each source on its own: one that fails shows as a status, the rest still
+  answer. They are also exported to the tracker's config/follows.json so the weekly run
+  fetches and keeps them too (arXiv only).
+- Capture: an arXiv, OpenReview, DOI or ACL Anthology link or id goes straight into the reading
+  inbox; a title is searched (arXiv, Crossref, OpenAlex) and the user picks the match.
 """
 from __future__ import annotations
 
@@ -13,24 +17,20 @@ import json
 import os
 import re
 import tempfile
-import threading
 import time
-import xml.etree.ElementTree as ET
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-import httpx
-
-from . import library, notes, plan, reading
+from . import library, notes, plan, reading, sources
 from .config import DATA_DIR, LAB_TRACKER_DIR, TRACKER_DIR
 
-ARXIV_API = "https://export.arxiv.org/api/query"
 FEED_CACHE = DATA_DIR / "follow_feed"
 CACHE_TTL = 6 * 3600
-_arxiv_lock = threading.Lock()
-_last_call = [0.0]
+FEED_SOURCES = (("arxiv", "arXiv"), ("openreview", "OpenReview"), ("acl", "ACL Anthology"))
+OPENREVIEW_DAYS = 90  # what the cached OpenReview answer covers; the page cuts it to its own window
 _ANALYSIS = re.compile(r"<!-- BEGIN ANALYSIS -->(.*?)<!-- END ANALYSIS -->", re.S)
 
 
@@ -229,65 +229,158 @@ def _query(f: dict[str, Any]) -> str:
 
 
 def _fetch(q: str, max_results: int) -> list[dict[str, Any]]:
-    with _arxiv_lock:
-        wait = 3.0 - (time.time() - _last_call[0])
-        if wait > 0:
-            time.sleep(wait)
-        r = httpx.get(ARXIV_API, params={"search_query": q, "sortBy": "submittedDate", "sortOrder": "descending",
-                                         "max_results": max_results}, timeout=30)
-        _last_call[0] = time.time()
-    r.raise_for_status()
-    ns = {"a": "http://www.w3.org/2005/Atom"}
+    return sources.arxiv_query(q, max_results)
+
+
+def _read_cache(f: Path) -> list[dict[str, Any]]:
+    try:
+        data = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _failure(label: str, e: Exception) -> str:
+    return str(e) if isinstance(e, sources.SourceError) else f"{label} 查询失败：{e.__class__.__name__}"
+
+
+def _source_papers(sid: str, f: dict[str, Any], refresh: bool, today: date) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """One source's papers for one follow, with its status. Never raises: a failing source serves
+    its last cached answer (marked stale) or nothing, and says why."""
+    label = dict(FEED_SOURCES)[sid]
+    status: dict[str, Any] = {"id": sid, "label": label, "ok": True, "n": 0, "error": None, "stale": False, "loading": False}
+    cache = FEED_CACHE / (f"{f['id']}.json" if sid == "arxiv" else f"{f['id']}.{sid}.json")
+    papers: list[dict[str, Any]] = []
+    try:
+        if sid == "acl":  # filters volumes already on disk; the missing ones download in the background
+            papers, progress = sources.feed_acl(f, today)
+            if progress["done"] < progress["total"]:
+                status.update(loading=True, progress=progress)
+        elif not refresh and cache.exists() and time.time() - cache.stat().st_mtime < CACHE_TTL:
+            papers = _read_cache(cache)
+        else:
+            papers = _fetch(_query(f), 25) if sid == "arxiv" else sources.feed_openreview(f, OPENREVIEW_DAYS, today)
+            cache.write_text(json.dumps(papers, ensure_ascii=False), encoding="utf-8")
+    except Exception as e:  # noqa: BLE001 - whatever one source does, the others must still answer
+        status.update(ok=False, error=_failure(label, e))
+        papers = _read_cache(cache) if sid != "acl" else []
+        status["stale"] = bool(papers)
+    for p in papers:
+        p["source"] = sid
+    status["n"] = len(papers)
+    return papers, status
+
+
+def _merge_sources(papers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The same paper found by several sources shows once (arXiv first); the others ride along as `also`."""
+    order = {sid: n for n, (sid, _) in enumerate(FEED_SOURCES)}
+    seen: dict[str, dict[str, Any]] = {}
     out = []
-    for e in ET.fromstring(r.text).findall("a:entry", ns):
-        aid = (e.findtext("a:id", "", ns) or "").rsplit("/", 1)[-1]
-        out.append({"arxiv": re.sub(r"v\d+$", "", aid), "title": " ".join((e.findtext("a:title", "", ns) or "").split()),
-                    "authors": [a.findtext("a:name", "", ns) for a in e.findall("a:author", ns)][:6],
-                    "categories": [c.get("term") for c in e.findall("a:category", ns)],
-                    "published": (e.findtext("a:published", "", ns) or "")[:10],
-                    "summary": " ".join((e.findtext("a:summary", "", ns) or "").split())[:500]})
+    for p in sorted(papers, key=lambda p: order.get(p["source"], 9)):
+        t = re.sub(r"[^a-z0-9]+", "", p["title"].lower())
+        if t and t in seen:
+            seen[t].setdefault("also", []).append({k: p.get(k) for k in ("source", "ext", "venue", "url")})
+            continue
+        if t:
+            seen[t] = p
+        out.append(p)
+    out.sort(key=lambda p: p["published"], reverse=True)
     return out
 
 
-def feed(days: int = 30, per_follow: int = 8, refresh: bool = False) -> list[dict[str, Any]]:
+def feed(days: int = 30, per_follow: int = 8, refresh: bool = False, today: date | None = None) -> list[dict[str, Any]]:
+    """Recent papers per follow from arXiv, OpenReview and the ACL Anthology (at most `per_follow` of
+    each, so a burst on one source cannot crowd out the others), each labelled with its source, plus
+    the state of every source (`sources`). Anthology papers are dated by the month of their event,
+    so they use a year-long window instead of `days`."""
     FEED_CACHE.mkdir(parents=True, exist_ok=True)
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).date().isoformat()
+    today = today or datetime.now(timezone.utc).date()
+    cutoff = {sid: (today - timedelta(days=sources.ACL_WINDOW_DAYS if sid == "acl" else days)).isoformat()
+              for sid, _ in FEED_SOURCES}
     items = reading.load()
     listed = {i.get("arxiv"): i["status"] for i in items if i.get("arxiv")}
-    idx = library.arxiv_index()
+    listed_ext = {i["ext"]: i["status"] for i in items if i.get("ext")}
+    idx, ext_idx = library.arxiv_index(), library.ext_index()
     out = []
     for f in follows():
-        cache = FEED_CACHE / f"{f['id']}.json"
-        papers, error = [], None
-        if not refresh and cache.exists() and time.time() - cache.stat().st_mtime < CACHE_TTL:
-            papers = json.loads(cache.read_text(encoding="utf-8"))
-        else:
-            try:
-                papers = _fetch(_query(f), 25)
-                cache.write_text(json.dumps(papers, ensure_ascii=False), encoding="utf-8")
-            except (httpx.HTTPError, ET.ParseError) as e:
-                error = f"arXiv 查询失败：{e.__class__.__name__}"
-                if cache.exists():
-                    papers = json.loads(cache.read_text(encoding="utf-8"))
-        recent = [p for p in papers if p["published"] >= cutoff][:per_follow]
+        with ThreadPoolExecutor(len(FEED_SOURCES)) as pool:  # different hosts: no reason to queue behind arXiv's 3 s
+            results = list(pool.map(lambda s: _source_papers(s[0], f, refresh, today), FEED_SOURCES))
+        recent = []
+        for (papers, st), (sid, _) in zip(results, FEED_SOURCES):
+            inside = sorted((p for p in papers if p.get("published", "") >= cutoff[sid]), key=lambda p: p["published"], reverse=True)
+            st["n"] = len(inside)  # what the source had inside the window; the page lists at most per_follow of each
+            recent += inside[:per_follow]
+        recent = _merge_sources(recent)
         for p in recent:
-            p["listed"] = listed.get(p["arxiv"])
-            p["note"] = idx.get(p["arxiv"])
-        out.append({**f, "papers": recent, "error": error})
+            if p.get("arxiv"):
+                p["listed"], p["note"] = listed.get(p["arxiv"]), idx.get(p["arxiv"])
+            else:
+                p["listed"], p["note"] = listed_ext.get(p.get("ext")), ext_idx.get(p.get("ext"))
+        statuses = [st for _, st in results]
+        out.append({**f, "papers": recent, "sources": statuses,  # every message already names its source
+                    "error": "；".join(st["error"] for st in statuses if st["error"]) or None})
     return out
 
 
 # ---------- capture ----------
 
-_ARXIV_ANY = re.compile(r"(?:arxiv\.org/(?:abs|pdf)/)?(\d{4}\.\d{4,5})(?:v\d+)?", re.I)
+KIND_LABELS = {"openreview": "OpenReview", "acl": "ACL Anthology", "doi": "DOI"}
+
+
+def _push(cand: dict[str, Any], reason: str, tier: str | None, lines: list[str] | None) -> dict[str, Any]:
+    cand = sources.with_ids(cand)
+    key = sources.candidate_key(cand)
+    if not key:
+        raise ValueError("not a paper this app can list")
+    title = (cand.get("title") or "").strip()[:300] or None
+    if cand.get("arxiv"):
+        item, what = reading.push(arxiv=cand["arxiv"], title=title, reason=reason, source="self",
+                                  pushed_by="追踪 · 捕捉", tier=tier, lines=lines)
+    else:
+        url = cand.get("url") if str(cand.get("url") or "").startswith("https://") else None
+        item, what = reading.push(ext=key, title=title, url=url, reason=reason, source="self",
+                                  pushed_by="追踪 · 捕捉", tier=tier, lines=lines)
+    return {"ok": True, "item": item, "result": what, "resolved": {"key": key, "title": title, "venue": cand.get("venue"),
+                                                                    "year": cand.get("year")}}
+
+
+def _capture_identified(kind: str, ident: str, reason: str, tier: str | None, lines: list[str] | None) -> dict[str, Any]:
+    warning = None
+    try:
+        cand = sources.resolve(kind, ident)
+    except sources.NotFound:
+        return {"ok": False, "error": f"{KIND_LABELS[kind]} 里找不到 {ident}，链接或编号是不是写错了？"}
+    except sources.SourceError as e:  # the identifier alone is enough to list it; the title can wait
+        url = {"openreview": f"https://openreview.net/forum?id={ident}", "acl": f"https://aclanthology.org/{ident}/",
+               "doi": f"https://doi.org/{ident}"}[kind]
+        cand = sources.candidate(**{kind: ident}, url=url)
+        warning = f"{e}：先按编号记进收件箱，标题没取到"
+    out = _push(cand, reason, tier, lines)
+    return {**out, "warning": warning} if warning else out
 
 
 def capture(text: str, reason: str, tier: str | None = None, lines: list[str] | None = None) -> dict[str, Any]:
-    """A pasted arXiv link / id goes straight into the reading inbox; anything else is
-    returned as `unresolved` so the UI can hand it to the assistant."""
-    m = _ARXIV_ANY.search(text or "")
-    if not m:
+    """A pasted arXiv / OpenReview / DOI / ACL Anthology link or id goes straight into the reading
+    inbox. A title is searched and the matches come back as `candidates` to pick from (see
+    capture_pick). Anything else is returned as `unresolved` so the UI can hand it to the assistant."""
+    text = (text or "").strip()
+    reason = reason or "手动捕捉"
+    if hit := sources.classify(text):
+        kind, ident = hit
+        if kind == "arxiv":
+            item, what = reading.push(arxiv=ident, reason=reason, source="self", pushed_by="追踪 · 捕捉", tier=tier, lines=lines)
+            return {"ok": True, "item": item, "result": what}
+        return _capture_identified(kind, ident, reason, tier, lines)
+    if len(text) < 6 or sources.looks_like_url(text):
         return {"ok": False, "unresolved": True}
-    item, what = reading.push(arxiv=m.group(1), reason=reason or "手动捕捉", source="self",
-                              pushed_by="追踪 · 捕捉", tier=tier, lines=lines)
-    return {"ok": True, "item": item, "result": what}
+    found = sources.search_title(text[:300])
+    if found["candidates"]:
+        return {"ok": False, "candidates": found["candidates"], "sources": found["sources"]}
+    if not any(s["ok"] for s in found["sources"]):
+        return {"ok": False, "error": "检索来源都没连上：" + "；".join(s["error"] for s in found["sources"]), "sources": found["sources"]}
+    return {"ok": False, "unresolved": True, "sources": found["sources"]}
+
+
+def capture_pick(cand: dict[str, Any], reason: str, tier: str | None = None, lines: list[str] | None = None) -> dict[str, Any]:
+    """Put one match of a title search (or a feed card without an arXiv id) into the reading inbox."""
+    return _push(cand, reason or "手动捕捉", tier, lines)

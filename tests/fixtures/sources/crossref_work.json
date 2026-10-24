@@ -1,0 +1,41 @@
+{
+ "status": "ok",
+ "message-type": "work",
+ "message": {
+  "DOI": "10.1145/3626772.3657833",
+  "title": [
+   "M\n            <sup>2</sup>\n            -RAAP: A Multi-Modal Recipe for Advancing Adaptation-based Pre-training towards Effective and Efficient Zero-shot Video-text Retrieval"
+  ],
+  "container-title": [
+   "Proceedings of the 47th International ACM SIGIR Conference on Research and Development in Information Retrieval"
+  ],
+  "issued": {
+   "date-parts": [
+    [
+     2024,
+     7,
+     10
+    ]
+   ]
+  },
+  "type": "proceedings-article",
+  "URL": "https://doi.org/10.1145/3626772.3657833",
+  "author": [
+   {
+    "given": "Ada",
+    "family": "Example",
+    "sequence": "first"
+   },
+   {
+    "given": "Ben",
+    "family": "Sample",
+    "sequence": "additional"
+   },
+   {
+    "given": "Cleo",
+    "family": "Fixture",
+    "sequence": "additional"
+   }
+  ]
+ }
+}

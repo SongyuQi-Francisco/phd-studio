@@ -83,6 +83,7 @@ def sandbox(monkeypatch: pytest.MonkeyPatch) -> Path:
               config.BILINGUAL_DIR, config.TEXT_DIR, config.CROPS_DIR):
         d.mkdir(parents=True, exist_ok=True)
     library._arxiv_index.cache_clear()
+    library._ext_index.cache_clear()
     library._zotero_pdf_urls.cache_clear()
     venues._catalog.cache_clear()
     monkeypatch.setattr(venues, "DETAILS_FILE", ROOT / "venue_details.json")
@@ -119,6 +120,7 @@ def make_note() -> Callable[..., Path]:
         p = config.PAPERS_DIR / f"{stem}.md"
         p.write_text(text, encoding="utf-8")
         library._arxiv_index.cache_clear()
+        library._ext_index.cache_clear()
         return p
     return make
 

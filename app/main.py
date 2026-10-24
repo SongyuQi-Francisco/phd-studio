@@ -84,7 +84,7 @@ def paper(stem: str) -> dict[str, Any]:
     info["bilingual"] = bilingual.status(stem)
     item = reading.find(reading.load(), stem)
     info["reading"] = item
-    if item and library.arxiv_key(stem) and item.get("title"):
+    if item and library.is_external(stem) and item.get("title"):
         info["title"] = item["title"]
     return info
 
@@ -212,6 +212,7 @@ def reading_list() -> dict[str, Any]:
 class PushReq(BaseModel):
     paper: str | None = None
     arxiv: str | None = None
+    ext: str | None = None  # doi:<doi> / openreview:<id> / acl:<id>, for a paper without a note or arXiv id
     reason: str = "自己加的"
     tier: str | None = None
     lines: list[str] = []
@@ -220,7 +221,7 @@ class PushReq(BaseModel):
 @app.post("/api/reading")
 def reading_push(req: PushReq) -> dict[str, Any]:
     try:
-        item, what = reading.push(paper=req.paper, arxiv=req.arxiv, reason=req.reason, source="self",
+        item, what = reading.push(paper=req.paper, arxiv=req.arxiv, ext=req.ext, reason=req.reason, source="self",
                                   tier=req.tier, lines=req.lines)
     except reading.ReadingError as e:
         raise HTTPException(400, str(e))

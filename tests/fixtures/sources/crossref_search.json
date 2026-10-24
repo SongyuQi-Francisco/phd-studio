@@ -1,0 +1,144 @@
+{
+ "status": "ok",
+ "message-type": "work-list",
+ "message": {
+  "items": [
+   {
+    "DOI": "10.1145/3773078.3831806",
+    "title": [
+     "Codebook-Based Semantic IDs in Generative Recommendation: Enabling Interface, Emerging Bottleneck"
+    ],
+    "issued": {
+     "date-parts": [
+      [
+       2026,
+       9,
+       27
+      ]
+     ]
+    },
+    "container-title": [
+     "Proceedings of the 20th ACM Conference on Recommender Systems"
+    ],
+    "author": [
+     {
+      "given": "Ada",
+      "family": "Example"
+     },
+     {
+      "given": "Ben",
+      "family": "Sample"
+     }
+    ],
+    "type": "proceedings-article",
+    "URL": "https://doi.org/10.1145/3773078.3831806"
+   },
+   {
+    "DOI": "10.1016/j.inffus.2026.104853",
+    "title": [
+     "CSG4Rec: Collaborative-similarity guided semantic IDs tokenization for generative sequential recommendation"
+    ],
+    "issued": {
+     "date-parts": [
+      [
+       2027,
+       3
+      ]
+     ]
+    },
+    "container-title": [
+     "Information Fusion"
+    ],
+    "author": [
+     {
+      "given": "Ada",
+      "family": "Example"
+     },
+     {
+      "given": "Ben",
+      "family": "Sample"
+     }
+    ],
+    "type": "journal-article",
+    "URL": "https://doi.org/10.1016/j.inffus.2026.104853"
+   },
+   {
+    "DOI": "10.1609/aaai.v40i17.38508",
+    "title": [
+     "From IDs to Semantics: A Generative Framework for Cross-Domain Recommendation with Adaptive Semantic Tokenization"
+    ],
+    "issued": {
+     "date-parts": [
+      [
+       2026,
+       3,
+       14
+      ]
+     ]
+    },
+    "container-title": [
+     "Proceedings of the AAAI Conference on Artificial Intelligence"
+    ],
+    "author": [
+     {
+      "given": "Ada",
+      "family": "Example"
+     },
+     {
+      "given": "Ben",
+      "family": "Sample"
+     }
+    ],
+    "type": "journal-article",
+    "URL": "https://doi.org/10.1609/aaai.v40i17.38508",
+    "abstract": "<jats:p>Cross-domain recommendation (CDR) is crucial for improving recommendation accuracy and generalization, yet traditional methods are often hindered by the reliance on shared user/item IDs, which are unavailable in most real-world scenarios. Consequently, many efforts have focused on learning disentangled representations through multi-domain joint training to bridge the domain gaps.  Recent Large Language Model (LLM)-based approaches show promise, they still face critical challenges, including: (1) the \\textbf{item ID tokenization dilemma}, which leads to vocabulary explosion and fails to capture high-order collaborative knowledge; and (2) \\textbf{insufficient domain-specific modeling} for the complex evolution of user interests and item semantics. To address these limitations, we propose \\textbf{GenCDR}, a novel \\textbf{Gen}erative \\textbf{C}ross-\\textbf{D}omain \\textbf{R}ecommendation framework. GenCDR first employs a \\textbf{Domain-adaptive Tokenization} module, which generates disentangled semantic IDs for items by dynamically routing between a universal encoder and domain-specific adapters. Symmetrically, a \\textbf{Cross-domain Autoregressive Recommendation} module models user preferences by fusing universal and domain-specific interests. Finally, a \\textbf{Domain-aware Prefix-tree} enables efficient and accurate generation. Extensive experiments on multiple real-world datasets demonstrate that GenCDR significantly outperforms state-of-the-art baselines. Our code is available in the supplementary materials.</jats:p>"
+   },
+   {
+    "DOI": "10.1145/3746252.3761612",
+    "title": [
+     "Generative Recommendation with Semantic IDs: A Practitioner's Handbook"
+    ],
+    "issued": {
+     "date-parts": [
+      [
+       2025,
+       11,
+       10
+      ]
+     ]
+    },
+    "container-title": [
+     "Proceedings of the 34th ACM International Conference on Information and Knowledge Management"
+    ],
+    "author": [
+     {
+      "given": "Ada",
+      "family": "Example"
+     },
+     {
+      "given": "Ben",
+      "family": "Sample"
+     }
+    ],
+    "type": "proceedings-article",
+    "URL": "https://doi.org/10.1145/3746252.3761612"
+   },
+   {
+    "DOI": "10.5555/review.1",
+    "title": [
+     "Review of Generative Recommendation with Semantic IDs"
+    ],
+    "type": "peer-review",
+    "issued": {
+     "date-parts": [
+      [
+       2025
+      ]
+     ]
+    },
+    "URL": "https://doi.org/10.5555/review.1",
+    "author": []
+   }
+  ]
+ }
+}
