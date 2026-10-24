@@ -12,12 +12,15 @@ built on top of an Obsidian vault and a Zotero library you already have.
 - **Library** (⌘K): one row per paper note, ordered by your reading-queue note.
   PDFs are taken from the vault, or downloaded once (Zotero attachment URL, arXiv, OpenReview, ACL Anthology, ACM) into a local cache.
 - **Reader**: pdf.js viewer with outline, find (⌘F) and zoom.
-  - Select text → **翻译 / Translate** (DeepSeek or Google; the engine used is shown), **讲解 / Explain**, **Ask Claude**.
+  - Select text → **翻译 / Translate** (DeepSeek or Google; the engine used is shown), **讲解 / Explain**, **Ask Claude**, **摘录 / Excerpt**.
+  - Excerpt appends one line, `- "quote" [p.N] — your comment`, to a section of the paper's note (default: a new `## Excerpts`). You see the line before it is written, and can undo it from the toast.
   - ⌥-drag (or the crop tool) on a figure, table or formula → the actual image is sent to Claude.
   - **Bilingual / translated PDF** of the whole paper via [pdf2zh-next](https://github.com/PDFMathTranslate/PDFMathTranslate-next) (keeps formulas and layout), generated in the background.
 - **Claude co-reader**: one persistent session per paper (resumed after restarts), streamed.
   Claude can read the vault, the paper's full text and the web. Any edit to the vault is shown as a diff and only applied after you approve it. If Claude is unavailable you get an error, never a silent switch to another model.
 - **Note**: the paper's Obsidian note, with an Obsidian deep link and "ask Claude to update".
+  Page references in notes and chat ([p.5], p. 5, pp. 4-5) jump to that page; section references (§5.1, Section 3) jump to that section, via the PDF outline or, without one, the heading in the text.
+- **Claim Gate audit**: one click checks every claim in the note against the full text and primary sources (venue status, code), shows an audit table, then proposes edits to the note's Claim Gate section for your approval.
 - **Reading list**: `inbox → T1/T2/T3 → reading → done`, plus snooze and dismiss.
   - Every push records the date, source and a required one-line reason.
   - Urgency (tier) is set before reading. Depth (skim/deep), verdict (key/useful/irrelevant) and a one-line takeaway are recorded after; Claude can draft the takeaway.

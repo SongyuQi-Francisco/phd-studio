@@ -54,8 +54,33 @@ function esc(s) {
   return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 }
 
+// Page and section references as written in notes: "p. 3", "(pp. 4-5)", "page 7", "§5.4.1", "Section 3.2".
+const LOOSE_REF = /\b(?:pp?\.\s?|page\s)(\d{1,3})(?:\s?[-–]\s?\d{1,3})?\b|(?:§\s?|\b(?:Section|Sec\.)\s?)(\d{1,2}(?:\.\d{1,2}){0,3})(?![\d.]*\d)/gi;
+
+// Link loose references in text only: not inside tags, code, math (MathML or KaTeX), links or [[wikilinks]].
+function linkLoose(out) {
+  let skip = null, depth = 0, afterCode = false;
+  return out.split(/(<[^>]+>)/).map((part) => {
+    if (part.startsWith("<")) {
+      const t = /^<(\/?)([a-z]+)/i.exec(part);
+      afterCode = /^<\/code>/i.test(part);
+      if (!t) return part;
+      const name = t[2].toLowerCase();
+      if (skip) { if (name === skip) depth += t[1] ? -1 : 1; if (depth === 0) skip = null; }
+      else if (!t[1] && (/^(code|pre|a|math)$/.test(name) || /class="(?:wikilink|katex)/.test(part))) { skip = name; depth = 1; }
+      return part;
+    }
+    // "`PROPOSAL.md` §2.7" points into another document, not this paper.
+    if (skip || (afterCode && /^\s*§/.test(part))) return part;
+    return part.replace(LOOSE_REF, (m, page, sec) => page
+      ? `<a class="pagelink" data-page="${page}">${m}</a>`
+      : `<a class="pagelink sec" data-sec="${sec}">${m}</a>`);
+  }).join("");
+}
+
 // Markdown with $...$ / $$...$$ math, [p.5] page links and [[wikilinks]].
-export function renderMarkdown(src) {
+// loose: also link "p. 3" / "§5.4" style references (paper notes and the paper's own chat).
+export function renderMarkdown(src, { loose = false } = {}) {
   const maths = [];
   const stash = (tex, display) => { maths.push({ tex, display }); return `\u0000M${maths.length - 1}\u0000`; };
   let s = (src || "")
@@ -72,7 +97,7 @@ export function renderMarkdown(src) {
   out = out.replace(/\[(?:p\.|P\.|第)\s?(\d+)(?:\s?页)?\]/g, '<a class="pagelink" data-page="$1">p.$1</a>');
   out = out.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, t, a) =>
     `<span class="wikilink" data-target="${esc(t.split("#")[0].trim())}">${a || t}</span>`);
-  return out;
+  return loose ? linkLoose(out) : out;
 }
 
 export async function api(path, opts = {}) {

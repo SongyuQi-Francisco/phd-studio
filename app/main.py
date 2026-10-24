@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import bilingual, direction, library, notes, plan, reading, tracking, venues
+from . import bilingual, direction, excerpt, library, notes, plan, reading, tracking, venues
 from .claude_chat import claude_status, draft_takeaway, history, registry
 from .config import CROPS_DIR, IDEA_RADAR, PROFILE, STUDIO_DIR, load_settings, save_settings
 from .translate import translate
@@ -130,6 +130,51 @@ def save_crop(req: CropReq) -> dict[str, str]:
     name = f"{uuid.uuid4().hex[:12]}.png"
     (CROPS_DIR / name).write_bytes(data)
     return {"name": name}
+
+
+class ExcerptReq(BaseModel):
+    text: str
+    page: int | None = None
+    section: str = excerpt.NEW_SECTION
+    comment: str | None = None
+
+
+@app.get("/api/excerpt/{stem}")
+def excerpt_sections(stem: str) -> dict[str, Any]:
+    _stem_or_404(stem)
+    try:
+        text = library.note_path(stem).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raise HTTPException(400, "这篇还没有笔记，先建笔记再摘录")
+    return {"sections": excerpt.headings(text), "default": excerpt.NEW_SECTION}
+
+
+@app.post("/api/excerpt/{stem}")
+def excerpt_add(stem: str, req: ExcerptReq) -> dict[str, Any]:
+    _stem_or_404(stem)
+    try:
+        return excerpt.append(stem, req.text, req.page, req.section, req.comment)
+    except FileNotFoundError:
+        raise HTTPException(400, "这篇还没有笔记，先建笔记再摘录")
+    except KeyError:
+        raise HTTPException(400, f"笔记里没有「{req.section}」这一节")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+class ExcerptUndoReq(BaseModel):
+    line: str
+    section: str
+    created: bool = False
+
+
+@app.post("/api/excerpt/{stem}/undo")
+def excerpt_undo(stem: str, req: ExcerptUndoReq) -> dict[str, bool]:
+    _stem_or_404(stem)
+    try:
+        return {"ok": excerpt.undo(stem, req.line, req.section, req.created)}
+    except FileNotFoundError:
+        raise HTTPException(404, "没有这篇笔记")
 
 
 @app.get("/api/crops/{name}")
@@ -363,7 +408,10 @@ def vault_note(path: str) -> dict[str, Any]:
         n = notes.read(notes.resolve(path))
     except FileNotFoundError:
         raise HTTPException(404, "没有这篇笔记")
-    return {k: n[k] for k in ("path", "name", "frontmatter", "body", "obsidian_url")}
+    p = notes.resolve(path)
+    out = {k: n[k] for k in ("path", "name", "frontmatter", "body", "obsidian_url")}
+    out["paper"] = p.stem if p.parent == library.PAPERS_DIR.resolve() else None
+    return out
 
 
 @app.get("/api/note/find")

@@ -27,6 +27,7 @@ export class PdfView {
     this.eventBus.on("pagesinit", () => {
       this.viewer.currentScaleValue = this.initialScale || "page-width";
       if (this.initialPage > 1) this.viewer.currentPageNumber = this.initialPage;
+      this._ready?.();
       onReady?.();
     });
     this.onPages = onPages;
@@ -41,6 +42,7 @@ export class PdfView {
   async open(url, { page = 1, scale } = {}) {
     this.initialPage = page;
     this.initialScale = scale;
+    this.ready = new Promise((r) => (this._ready = r)); // resolves once pages are laid out
     const task = pdfjsLib.getDocument({
       url,
       cMapUrl: "/vendor/pdfjs/cmaps/",
@@ -67,6 +69,41 @@ export class PdfView {
     return (await this.doc.getOutline()) || [];
   }
   goToDest(dest) { this.linkService.goToDestination(dest); }
+
+  // "5.4.1" -> the outline entry titled "5.4.1 …" / "5. …"; false when there is no outline or no match.
+  async goToSection(num) {
+    if (!this.doc) return false;
+    await this.ready;
+    const want = String(num).replace(/\.$/, "");
+    const re = new RegExp("^\\s*(?:§\\s*)?" + want.replace(/\./g, "\\.") + "(?:\\.?\\s|\\.?$)");
+    const walk = (items) => {
+      for (const o of items || []) {
+        if (re.test(o.title || "")) return o;
+        const hit = walk(o.items);
+        if (hit) return hit;
+      }
+      return null;
+    };
+    const outline = await this.outline();
+    const hit = walk(outline);
+    if (hit?.dest) { await this.linkService.goToDestination(hit.dest); return true; }
+    // No numbered outline entry: find the heading line "5.4.1 Title" in the page text.
+    const head = new RegExp("(?:^|\\n)\\s*" + want.replace(/\./g, "\\.") + "\\.?\\s+([A-Z][^\\n]*)");
+    for (let n = 1; n <= this.doc.numPages; n++) {
+      const tc = await (await this.doc.getPage(n)).getTextContent();
+      const m = head.exec(tc.items.map((i) => i.str + (i.hasEOL ? "\n" : "")).join(""));
+      if (!m) continue;
+      // Outlines often carry the bare title ("Validation protocol"): use it to land on the heading itself.
+      const title = m[1].trim().toLowerCase();
+      const same = (function find(items) {
+        for (const o of items || []) { if ((o.title || "").trim().toLowerCase() === title) return o; const h = find(o.items); if (h) return h; }
+        return null;
+      })(outline);
+      if (same?.dest) await this.linkService.goToDestination(same.dest); else this.goTo(n);
+      return true;
+    }
+    return false;
+  }
 
   find(query, previous = false) {
     this.eventBus.dispatch("find", {
