@@ -14,7 +14,7 @@ from typing import Any
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
-from . import plan, reading, tracking, venues
+from . import idea_ops, plan, reading, tracking, venues
 
 SERVER = "studio"
 
@@ -140,7 +140,8 @@ def build(emit: Callable[[dict[str, Any]], Awaitable[None]]):
         await changed("plan", f"{'关注' if res['watched'] else '取消关注'}：{res['venue'].upper()}", res)
         return _ok(res)
 
-    @tool("idea_add", "记一个想法到想法收件箱。", _obj({"text": S, "line": S, "tags": SA, "paper": S}, ["text"]))
+    @tool("idea_add", "记一个想法到想法收件箱。tags 是自由标签（先 idea_list 看看已有的，尽量复用）。",
+          _obj({"text": S, "line": S, "tags": SA, "paper": S}, ["text"]))
     async def idea_add(a):
         try:
             rec = plan.add_idea(a["text"], line=a.get("line"), tags=a.get("tags"), paper=a.get("paper"), source="assistant")
@@ -149,16 +150,40 @@ def build(emit: Callable[[dict[str, Any]], Awaitable[None]]):
         await changed("ideas", f"想法：{rec['text'][:40]}", rec)
         return _ok(rec)
 
-    @tool("idea_update", "修改想法：status(new/kept/promoted/dropped)、line、text、note（整理成的 idea 笔记的 vault 路径）。",
-          _obj({"id": S, "status": S, "line": S, "text": S, "note": S}, ["id"]))
+    @tool("idea_update", "修改想法：status(new/kept/promoted/dropped)、line、text、note（整理成的 idea 笔记的 vault 路径）；"
+          "标签用 tags_add / tags_remove 增删；restore=true 把被合并掉的想法恢复。",
+          _obj({"id": S, "status": S, "line": S, "text": S, "note": S, "tags_add": SA, "tags_remove": SA,
+                "restore": {"type": "boolean"}}, ["id"]))
     async def idea_update(a):
-        if a.get("status") and a["status"] not in plan.I_STATUS:
-            return _err(f"status must be one of {plan.I_STATUS}")
+        patch = {k: v for k, v in a.items() if k not in ("id", "tags_add", "tags_remove", "restore")}
+        tags = a.get("tags_add") or a.get("tags_remove")
+        if not (patch or tags or a.get("restore")):
+            return _err("没有要改的内容")
         try:
-            rec = plan.idea_store.update("ideas", a["id"], {k: v for k, v in a.items() if k != "id"})
+            if a.get("restore"):
+                rec = idea_ops.restore(a["id"])
+            if patch:
+                rec = idea_ops.update(a["id"], patch)
+            if tags:
+                rec = idea_ops.tag(a["id"], a.get("tags_add") or [], a.get("tags_remove") or [])
         except KeyError:
             return _err(f"no idea {a['id']}")
+        except ValueError as e:
+            return _err(str(e))
         await changed("ideas", f"想法：已更新（{rec.get('status')}）", rec)
+        return _ok(rec)
+
+    @tool("idea_merge", "把两条以上的想法合并成一条（原想法标为 merged，保留来源，可恢复）。ids 至少两个；"
+          "text 是合并后的文字（不填就用第一条的）；line 不填会取多数。已整理成笔记（promoted）的不能合并。",
+          _obj({"ids": SA, "text": S, "line": S}, ["ids"]))
+    async def idea_merge(a):
+        try:
+            rec = idea_ops.merge(a["ids"], text=a.get("text"), line=a.get("line"), source="assistant")
+        except KeyError as e:
+            return _err(f"no idea {e.args[0]}")
+        except ValueError as e:
+            return _err(str(e))
+        await changed("ideas", f"想法：已合并 {len(rec['merged_from'])} 条", rec)
         return _ok(rec)
 
     @tool("follow", "关注一个关键词或学者（追踪页会实时查 arXiv 新论文）；remove=true 取消关注。kind: keyword|person。",
@@ -187,9 +212,16 @@ def build(emit: Callable[[dict[str, Any]], Awaitable[None]]):
         r["papers"] = [{k: p[k] for k in ("arxiv", "title", "tier", "labs", "published", "note", "listed")} for p in r["papers"]]
         return _ok(r)
 
-    @tool("idea_list", "查看想法收件箱。", _obj({}, []))
+    @tool("idea_list", "查看想法收件箱（最新 50 条），可按 status、line、tags（必须全部带上）过滤；"
+          "被合并掉的想法默认不列，status=merged 或 include_merged=true 才显示。",
+          _obj({"status": S, "line": S, "tags": SA, "include_merged": {"type": "boolean"}}, []))
     async def idea_list(a):
-        return _ok(plan.ideas()[:50])
+        if a.get("status") and a["status"] not in plan.I_STATUS_ALL:
+            return _err(f"status must be one of {plan.I_STATUS_ALL}")
+        try:
+            return _ok(idea_ops.listing(a.get("status"), a.get("line"), a.get("tags"), bool(a.get("include_merged")))[:50])
+        except ValueError as e:
+            return _err(str(e))
 
     @tool("timeline", "查看时间线：关注会议的截稿、投稿目标、里程碑（days 天内，默认 120）。",
           _obj({"days": {"type": "integer"}}, []))
@@ -200,7 +232,7 @@ def build(emit: Callable[[dict[str, Any]], Awaitable[None]]):
         return _ok({"today": now, "events": tl["events"], "targets": tl["targets"]})
 
     tools = [reading_push, reading_list, reading_update, milestone_add, milestone_update, target_add,
-             target_update, venue_search, venue_watch, idea_add, idea_update, idea_list, follow,
+             target_update, venue_search, venue_watch, idea_add, idea_update, idea_merge, idea_list, follow,
              tracker_latest, timeline]
     names = [f"mcp__{SERVER}__{t.name}" for t in tools]
     return create_sdk_mcp_server(SERVER, tools=tools), names

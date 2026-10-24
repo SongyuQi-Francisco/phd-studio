@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import bilingual, direction, excerpt, library, notes, plan, reading, tracking, venues
+from . import bilingual, direction, excerpt, idea_ops, library, notes, plan, reading, tracking, venues
 from .claude_chat import claude_status, draft_takeaway, history, registry
 from .config import CROPS_DIR, IDEA_RADAR, PROFILE, STUDIO_DIR, load_settings, save_settings
 from .translate import translate
@@ -385,8 +385,8 @@ def plan_delete(collection: str, rid: str) -> dict[str, bool]:
 
 
 @app.get("/api/ideas")
-def idea_list() -> dict[str, Any]:
-    return {"ideas": plan.ideas()}
+def idea_list(merged: bool = False) -> dict[str, Any]:
+    return {"ideas": idea_ops.listing(include_merged=merged)}
 
 
 @app.post("/api/ideas")
@@ -401,9 +401,11 @@ def idea_add(body: dict[str, Any]) -> dict[str, Any]:
 @app.patch("/api/ideas/{rid}")
 def idea_patch(rid: str, body: dict[str, Any]) -> dict[str, Any]:
     try:
-        return plan.idea_store.update("ideas", rid, body)
+        return idea_ops.update(rid, body)
     except KeyError as e:
         raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.get("/api/note")
@@ -573,4 +575,6 @@ async def chat_ws(ws: WebSocket, stem: str) -> None:
 
 from .track_api import router as track_router  # noqa: E402  (追踪 page: scholars, matrix, 立即巡检)
 app.include_router(track_router)
+from .idea_api import router as idea_router  # noqa: E402  (想法: tags, merge, restore)
+app.include_router(idea_router)
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")

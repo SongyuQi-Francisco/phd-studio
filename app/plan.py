@@ -4,10 +4,13 @@ plan.yaml (vault):  watched   {id, venue}
                     targets   {id, title, line, venue, alternatives[], status, notes}
                     milestones{id, title, date, line, kind, status, notes}
                     follows   {id, kind: keyword|person, value, note}
-ideas.yaml (vault): ideas     {id, text, line, paper, page, tags[], status}
+ideas.yaml (vault): ideas     {id, text, line, paper, page, tags[], status, source, note,
+                               merged_from[], merged_sources[], merged_into, premerge_status}
+                    (merge / restore / tag operations live in idea_ops.py)
 """
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, timezone
 from typing import Any
 
@@ -18,7 +21,10 @@ from .store import Store
 KINDS = ("milestone", "gate", "kill", "deadline")
 M_STATUS = ("todo", "doing", "done", "warn")
 T_STATUS = ("planning", "writing", "submitted", "accepted", "rejected", "dropped")
-I_STATUS = ("new", "kept", "promoted", "dropped")
+I_STATUS = ("new", "kept", "promoted", "dropped")  # what a user or the assistant can set
+MERGED = "merged"                                  # only idea_ops.merge sets it (and restore clears it)
+I_STATUS_ALL = (*I_STATUS, MERGED)
+TAG_MAX = 30
 
 plan_store = Store(PLAN_FILE, ("watched", "targets", "milestones", "follows"),
                    "# Planning data, managed by PhD Studio (studio milestone / studio target / the app).\n")
@@ -133,16 +139,36 @@ def delete(collection: str, rid: str) -> None:
 
 # ---------- ideas ----------
 
+def norm_tags(tags: Any) -> list[str]:
+    """Clean free-form tags: split on commas, drop a leading #, collapse spaces, de-duplicate ignoring case."""
+    if isinstance(tags, str):
+        tags = [tags]
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in tags or []:
+        for part in re.split(r"[,，、;；]", str(raw)):
+            t = " ".join(part.split()).lstrip("#＃").strip()
+            if not t or t.casefold() in seen:
+                continue
+            if len(t) > TAG_MAX:
+                raise ValueError(f"标签太长（最多 {TAG_MAX} 个字符）：{t[:12]}…")
+            seen.add(t.casefold())
+            out.append(t)
+    return out
+
+
 def add_idea(text: str, line: str | None = None, paper: str | None = None, page: int | None = None,
              tags: list[str] | None = None, source: str = "self") -> dict[str, Any]:
     if not text.strip():
         raise ValueError("idea text is empty")
     return idea_store.add("ideas", {"text": text.strip(), "line": line, "paper": paper, "page": page,
-                                    "tags": tags or [], "status": "new", "source": source}, "i")
+                                    "tags": norm_tags(tags), "status": "new", "source": source}, "i")
 
 
-def ideas() -> list[dict[str, Any]]:
-    return sorted(idea_store.load()["ideas"], key=lambda i: i.get("created_at", ""), reverse=True)
+def ideas(include_merged: bool = False) -> list[dict[str, Any]]:
+    """Live ideas, newest first; the ones merged into another idea only when asked (see idea_ops.listing)."""
+    return sorted((i for i in idea_store.load()["ideas"] if include_merged or i.get("status") != MERGED),
+                  key=lambda i: i.get("created_at", ""), reverse=True)
 
 
 # ---------- the combined timeline ----------
