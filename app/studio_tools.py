@@ -159,13 +159,9 @@ def build(emit: Callable[[dict[str, Any]], Awaitable[None]]):
         tags = a.get("tags_add") or a.get("tags_remove")
         if not (patch or tags or a.get("restore")):
             return _err("没有要改的内容")
-        try:
-            if a.get("restore"):
-                rec = idea_ops.restore(a["id"])
-            if patch:
-                rec = idea_ops.update(a["id"], patch)
-            if tags:
-                rec = idea_ops.tag(a["id"], a.get("tags_add") or [], a.get("tags_remove") or [])
+        try:  # one step: a rejected change leaves the restore and the tags undone too
+            rec = idea_ops.update(a["id"], patch, restore=bool(a.get("restore")), tags_add=a.get("tags_add") or [],
+                                  tags_remove=a.get("tags_remove") or [])
         except KeyError:
             return _err(f"no idea {a['id']}")
         except ValueError as e:

@@ -897,7 +897,9 @@ rect.heat-4, i.heat-4 { fill: var(--heat-4); background: var(--heat-4); }
 .from-row { padding: 7px 9px; border-radius: 9px; background: var(--surface-2); border: 1px solid var(--line); }
 .from-text { font-size: 12.5px; line-height: 1.55; color: var(--text-2); white-space: pre-wrap; }
 .from-meta { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 4px; }
-.from-foot { display: flex; align-items: center; gap: 6px; }
+.from-foot { display: flex; align-items: center; gap: 4px 6px; flex-wrap: wrap; }
+.from-foot .small { font-size: 12px; color: var(--text-2); }
+.abtn.warn { color: var(--red); }
 .merge-bar { position: sticky; bottom: 20px; display: flex; gap: 10px; align-items: center; justify-content: center; width: fit-content; margin: 18px auto 0; padding: 8px 10px 8px 18px; border-radius: 99px; background: var(--surface); border: 1px solid var(--line); box-shadow: var(--lift-shadow); font-size: 13px; z-index: 5; animation: rise .26s var(--ease) both; }
 .merge-bar b { font-weight: 650; }
 .modal.wide { width: min(560px, 92vw); }

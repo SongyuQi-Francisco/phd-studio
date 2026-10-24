@@ -139,8 +139,12 @@ def delete(collection: str, rid: str) -> None:
 
 # ---------- ideas ----------
 
-def norm_tags(tags: Any) -> list[str]:
-    """Clean free-form tags: split on commas, drop a leading #, collapse spaces, de-duplicate ignoring case."""
+def norm_tags(tags: Any, strict: bool = True) -> list[str]:
+    """Clean free-form tags: split on commas, drop a leading #, collapse spaces, de-duplicate ignoring case.
+
+    strict (for what a user or the assistant types) refuses a tag over TAG_MAX characters; reading tags that
+    are already stored never fails on one, since older ideas were saved as given.
+    """
     if isinstance(tags, str):
         tags = [tags]
     out: list[str] = []
@@ -150,7 +154,7 @@ def norm_tags(tags: Any) -> list[str]:
             t = " ".join(part.split()).lstrip("#＃").strip()
             if not t or t.casefold() in seen:
                 continue
-            if len(t) > TAG_MAX:
+            if strict and len(t) > TAG_MAX:
                 raise ValueError(f"标签太长（最多 {TAG_MAX} 个字符）：{t[:12]}…")
             seen.add(t.casefold())
             out.append(t)

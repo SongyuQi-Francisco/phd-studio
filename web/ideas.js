@@ -1,7 +1,7 @@
 // Ideas: capture inbox -> keep / drop -> promote into a proper idea note (drafted by the assistant).
 // Free tags (inline, filterable) and merging several ideas into one, with the originals kept and restorable.
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { html, Icon, api } from "/lib.js";
+import { html, Icon, api, composing } from "/lib.js";
 import { C, Funnel, Sparkline, perWeek } from "/charts.js";
 import { Thumb, Glyph, loadThumbs, Skeleton, Empty, transition } from "/ui.js";
 
@@ -32,7 +32,7 @@ function Tags({ i, active, onToggle, onChange, readOnly }) {
     ${!readOnly && (adding
       ? html`<input class="tg-in" list="idea-tags" placeholder="标签，回车添加" value=${val} ref=${ref}
           onInput=${(e) => setVal(e.target.value)}
-          onKeyDown=${(e) => { if (e.isComposing) return; if (e.key === "Enter") commit(); if (e.key === "Escape") { setVal(""); setAdding(false); } }}
+          onKeyDown=${(e) => { if (composing(e)) return; if (e.key === "Enter") commit(); if (e.key === "Escape") { setVal(""); setAdding(false); } }}
           onBlur=${() => { commit(); setAdding(false); }} />`
       : html`<button class="tg add" title="添加标签" onClick=${() => setAdding(true)}>${(i.tags || []).length ? "+" : "+ 标签"}</button>`)}
   </div>`;
@@ -40,6 +40,8 @@ function Tags({ i, active, onToggle, onChange, readOnly }) {
 
 function Provenance({ i, byId, onRestore, onUnmerge, onOpenPaper }) {
   const [open, setOpen] = useState(false);
+  const [ask, setAsk] = useState(false);
+  const edited = !i.merge_untouched; // changed since it was merged
   const srcs = i.merged_sources || [];
   if (!srcs.length) return null;
   const papers = new Set(srcs.map((s) => s.paper).filter(Boolean)).size;
@@ -55,8 +57,12 @@ function Provenance({ i, byId, onRestore, onUnmerge, onOpenPaper }) {
           <span class="grow" />
           ${byId[s.id]?.status === "merged" && html`<button class="abtn txt" title="把这一条放回去" onClick=${() => onRestore(s.id)}>恢复</button>`}
         </div></div>`)}
-      <div class="from-foot"><span class="muted small">原想法没有删除，在「已合并」里也看得到</span><span class="grow" />
-        <button class="abtn txt" onClick=${() => onUnmerge(i)}>全部拆开</button></div>
+      <div class="from-foot">${ask
+        ? html`<span class="small">原想法全部恢复；这条合并结果${edited ? "改过，会放进「丢弃」" : "会被删除"}。</span><span class="grow" />
+          <button class="abtn txt" onClick=${() => setAsk(false)}>取消</button>
+          <button class="abtn txt warn" onClick=${() => { setAsk(false); onUnmerge(i); }}>确认拆开</button>`
+        : html`<span class="muted small">原想法没有删除，在「已合并」里也看得到</span><span class="grow" />
+          <button class="abtn txt" onClick=${() => setAsk(true)}>全部拆开</button>`}</div>
     </div>`}
   </div>`;
 }
@@ -72,7 +78,7 @@ function IdeaCard({ i, lines, update, onTag, tagSel, onToggleTag, onPromote, onO
   const own = !merged && !selecting;
   return html`<div data-id=${i.id} class=${"idea" + (i.status === "dropped" || merged ? " dropped" : "") + (pickable ? " pickable" : "") + (picked ? " picked" : "") + (flash ? " flash" : "")}
     style=${{ "--st": ST_COLOR[i.status], animationDelay: Math.min(n, 10) * 30 + "ms" }}
-    onClick=${pickable ? () => onPick(i.id) : undefined}>
+    onClick=${pickable ? (e) => { if (!e.target.closest("button, a, input, select, textarea")) onPick(i.id); } : undefined}>
     <div class="idea-top">
       ${selecting && html`<button class=${"pickbox" + (picked ? " on" : "")} disabled=${!pickable} aria-label=${picked ? "取消选择" : "选择"}
         title=${pickable ? "选中后合并" : i.status === "promoted" ? "已整理成笔记，不能合并" : "已合并"}
@@ -112,7 +118,7 @@ function MergeDialog({ items, lines, onClose, onMerge }) {
   const ref = useRef();
   useEffect(() => ref.current?.focus(), []);
   const tags = [...new Map(items.flatMap((i) => i.tags || []).map((t) => [key(t), t])).values()];
-  const go = async () => { if (!text.trim() || busy) return; setBusy(true); try { await onMerge(text.trim(), line || null); } finally { setBusy(false); } };
+  const go = async () => { if (!text.trim() || busy) return; setBusy(true); try { await onMerge(text.trim(), line); } finally { setBusy(false); } }; // line "" = 不分组, not "pick one for me"
   return html`<div class="modal-bg" onClick=${(e) => e.target === e.currentTarget && onClose()}>
     <div class="modal wide">
       <h2>合并 ${items.length} 条想法</h2>
@@ -164,7 +170,13 @@ export function IdeasPage({ version, lines, radarPath, onAsk, onOpenNote, onOpen
   const update = (i, patch) => call(() => api(`/api/ideas/${i.id}`, { method: "PATCH", json: patch }));
   const onTag = (i, ops) => call(() => post(`/api/ideas/${i.id}/tags`, ops));
   const restore = (id) => call(() => post(`/api/ideas/${id}/restore`), "已恢复");
-  const unmerge = (i) => call(() => post(`/api/ideas/${i.id}/unmerge`), "已拆开，原来的想法都恢复了");
+  const unmerge = async (i) => {
+    try {
+      const r = await post(`/api/ideas/${i.id}/unmerge`);
+      toast(r.survivor === "dropped" ? "已拆开，原想法都恢复了；改过的合并结果放进了「丢弃」" : "已拆开，原想法都恢复了");
+    } catch (e) { toast(e.message); }
+    load();
+  };
   const toggleTag = (t) => setTagSel((sel) => (sel.includes(t) ? sel.filter((x) => x !== t) : [...sel, t]));
   const pick = (id) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
   const stopSelecting = () => { setSelecting(false); setPicked([]); setMerging(false); };
@@ -199,7 +211,7 @@ export function IdeasPage({ version, lines, radarPath, onAsk, onOpenNote, onOpen
   const byLine = lines.map((l) => [l, live.filter((i) => i.line === l && i.status !== "dropped").length]);
   const capture = html`<div class="capture-row">
     <input placeholder="一句话记下想法，回车保存（任何页面也可以按 ⌘I）" value=${draft} onInput=${(e) => setDraft(e.target.value)}
-      onKeyDown=${(e) => e.key === "Enter" && !e.isComposing && add()} />
+      onKeyDown=${(e) => e.key === "Enter" && !composing(e) && add()} />
     <button class="btn primary" disabled=${!draft.trim()} onClick=${add}>记下</button>
   </div>`;
   return html`<div class="page"><div class="page-inner">

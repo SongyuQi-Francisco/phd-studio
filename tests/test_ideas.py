@@ -104,6 +104,44 @@ def test_tag_on_unknown_or_deleted_idea_is_a_key_error():
             idea_ops.tag(rid, add=["x"])
 
 
+# ---------- ideas saved before tags were cleaned ----------
+
+
+def legacy(text: str, tags: list[str]) -> dict:
+    """An idea as the assistant used to store it: tags exactly as given."""
+    i = plan.add_idea(text)
+    with plan.idea_store.editing() as data:
+        next(r for r in data["ideas"] if r["id"] == i["id"])["tags"] = tags
+    return i
+
+
+def test_listing_shows_stored_tags_cleaned_and_filters_on_them():
+    i = legacy("a", ["#foo", "RL, reward", "Foo"])
+    assert idea_ops.listing()[0]["tags"] == ["foo", "RL", "reward"]
+    assert ids(idea_ops.listing(tags=["foo", "reward"])) == [i["id"]]
+    assert idea_ops.tag_counts(idea_ops.listing()) == [("foo", 1), ("reward", 1), ("RL", 1)]
+
+
+def test_removing_a_tag_works_on_a_legacy_spelling_and_cleans_the_rest():
+    i = legacy("a", ["#foo", "RL, reward", "keep"])
+    assert idea_ops.tag(i["id"], remove=["foo"])["tags"] == ["RL", "reward", "keep"]
+    assert raw(i["id"])["tags"] == ["RL", "reward", "keep"]  # rewritten clean
+    j = legacy("b", ["#foo", "RL, reward"])
+    assert idea_ops.tag(j["id"], remove=["#FOO"])["tags"] == ["RL", "reward"]
+    k = legacy("c", ["RL", "reward", "other"])
+    assert idea_ops.tag(k["id"], remove=["RL, reward"])["tags"] == ["other"]
+
+
+def test_an_over_long_legacy_tag_can_be_removed_and_never_blocks_a_merge():
+    long = "x" * (plan.TAG_MAX + 15)
+    a, b = legacy("a", [long, "short"]), plan.add_idea("b")
+    m = idea_ops.merge([a["id"], b["id"]])
+    assert m["tags"] == [long, "short"]  # kept as it was
+    assert idea_ops.tag(a["id"], remove=[long])["tags"] == ["short"]
+    with pytest.raises(ValueError, match="标签太长"):  # a new tag is still held to the limit
+        idea_ops.tag(b["id"], add=[long])
+
+
 # ---------- listing, filtering, counts ----------
 
 
@@ -156,6 +194,19 @@ def test_update_refuses_merged_status_empty_text_and_unknown_status():
             idea_ops.update(i["id"], patch)
     with pytest.raises(KeyError):
         idea_ops.update("nope", {"text": "x"})
+
+
+def test_update_with_restore_is_all_or_nothing(trio):
+    a, b, _ = trio
+    idea_ops.merge([a["id"], b["id"]])
+    before = plan.idea_store.path.read_text(encoding="utf-8")
+    with pytest.raises(ValueError, match="empty"):
+        idea_ops.update(a["id"], {"text": "  "}, restore=True)
+    with pytest.raises(ValueError, match="must be one of"):
+        idea_ops.update(a["id"], {"status": "maybe"}, restore=True, tags_add=["x"])
+    assert plan.idea_store.path.read_text(encoding="utf-8") == before and raw(a["id"])["status"] == "merged"
+    out = idea_ops.update(a["id"], {"line": "Project B"}, restore=True, tags_add=["x"], tags_remove=["verifier"])
+    assert (out["status"], out["line"], out["tags"]) == ("kept", "Project B", ["Memory", "x"])
 
 
 # ---------- merging ----------
@@ -226,6 +277,13 @@ def test_merge_defaults_to_the_first_ideas_text_and_the_commonest_line(trio):
     assert m["text"] == b["text"]
     assert m["line"] == "Project A"  # two of three
     assert idea_ops.merge([plan.add_idea("x", line="Project B")["id"], plan.add_idea("y")["id"]], line="Project A")["line"] == "Project A"
+
+
+def test_merge_with_an_empty_line_means_no_line_but_none_means_pick_for_me(trio):
+    a, b, _ = trio  # both on Project A
+    assert "line" not in idea_ops.merge([a["id"], b["id"]], line="")  # 不分组 chosen on purpose
+    x, y = plan.add_idea("x", line="Project B"), plan.add_idea("y", line="Project B")
+    assert idea_ops.merge([x["id"], y["id"]], line=None)["line"] == "Project B"
 
 
 def test_merge_status_is_kept_only_if_an_original_was_kept(trio):
@@ -334,6 +392,36 @@ def test_unmerge_restores_all_originals_and_deletes_the_survivor(trio):
         idea_ops.unmerge(m["id"])  # already gone
 
 
+def test_unmerge_deletes_an_untouched_survivor_and_reports_it(trio):
+    a, b, _ = trio
+    m = idea_ops.merge([a["id"], b["id"]])
+    assert idea_ops.unmerge(m["id"])["survivor"] == "deleted" and raw(m["id"])["deleted"] is True
+
+
+@pytest.mark.parametrize("edit", [{"text": "rewritten after the merge"}, {"tags_add": ["later"]}, {"line": "Project B"}])
+def test_unmerge_keeps_an_edited_survivor_as_dropped(trio, edit):
+    a, b, _ = trio
+    m = idea_ops.merge([a["id"], b["id"]], text="merged")
+    patch = {k: v for k, v in edit.items() if k != "tags_add"}
+    idea_ops.update(m["id"], patch, tags_add=edit.get("tags_add", []))
+    out = idea_ops.unmerge(m["id"])
+    assert out["survivor"] == "dropped" and set(out["restored"]) == {a["id"], b["id"]}
+    kept = raw(m["id"])
+    assert kept["status"] == "dropped" and not kept.get("deleted")
+    assert not {"merged_from", "merged_sources", "merge_untouched"} & set(kept)
+    assert kept["text"] == edit.get("text", "merged") and ("later" in kept["tags"]) == ("tags_add" in edit)
+    assert {i["id"] for i in idea_ops.listing()} >= {a["id"], b["id"], m["id"]}  # nothing is hidden or lost
+
+
+def test_a_survivor_edited_on_the_other_mac_is_not_deleted_by_unmerge(trio):
+    a, b, _ = trio
+    m = idea_ops.merge([a["id"], b["id"]], text="merged")
+    edited = {k: v for k, v in raw(m["id"]).items() if k != "merge_untouched"}  # what Mac B's app writes on an edit
+    write_copy([{**edited, "text": "edited on mac b", "updated_at": "2099-01-01T00:00:00"}])
+    assert idea_ops.unmerge(m["id"])["survivor"] == "dropped"
+    assert raw(m["id"])["text"] == "edited on mac b"
+
+
 def test_unmerge_refuses_plain_notes_and_merged_ideas():
     a, b, c = (plan.add_idea(t) for t in "abc")
     with pytest.raises(ValueError, match="no merged ideas"):
@@ -352,6 +440,29 @@ def test_a_merged_idea_cannot_change_status_until_restored(trio):
         idea_ops.update(a["id"], {"status": "kept"})
     idea_ops.update(a["id"], {"text": "reworded"})  # editing the text of an original is harmless
     assert raw(a["id"])["status"] == "merged"
+
+
+def test_restore_never_writes_the_survivor(trio):
+    a, b, _ = trio
+    m = idea_ops.merge([a["id"], b["id"]], text="merged")
+    before = raw(m["id"])
+    idea_ops.restore(a["id"])
+    assert raw(m["id"]) == before  # the file still lists a; listing() derives who belongs on read
+    assert [s["id"] for s in next(i for i in idea_ops.listing() if i["id"] == m["id"])["merged_sources"]] == [b["id"]]
+
+
+def test_restore_on_one_mac_does_not_discard_an_edit_of_the_survivor_on_the_other(trio, monkeypatch):
+    a, b, _ = trio
+    clock = iter(["2026-10-25T10:00:00", "2026-10-25T12:00:00"])
+    monkeypatch.setattr(idea_ops, "now", lambda: next(clock))
+    m = idea_ops.merge([a["id"], b["id"]], text="merged")  # 10:00, both Macs have this
+    idea_ops.restore(a["id"])  # Mac A, 12:00
+    # Mac B edited the merged idea at 11:00 (after the merge, before A's restore) and never saw the restore.
+    write_copy([{**raw(m["id"]), "text": "merged, reworded on mac b", "tags": ["late"], "updated_at": "2026-10-25T11:00:00"}])
+    got = {i["id"]: i for i in idea_ops.listing()}
+    assert (got[m["id"]]["text"], got[m["id"]]["tags"]) == ("merged, reworded on mac b", ["late"])
+    assert got[a["id"]]["status"] == "kept"  # and A's restore stands
+    assert [s["id"] for s in got[m["id"]]["merged_sources"]] == [b["id"]]
 
 
 # ---------- two Macs: Syncthing conflict copies ----------
@@ -485,6 +596,16 @@ def test_tool_idea_merge_then_list_hides_and_restore_brings_back(call):
     assert call("idea_list", {"status": "maybe"})[0]["is_error"]
 
 
+def test_tool_idea_update_restore_with_a_rejected_change_changes_nothing(call):
+    a, b = plan.add_idea("alpha"), plan.add_idea("beta")
+    idea_ops.merge([a["id"], b["id"]])
+    res, ev = call("idea_update", {"id": a["id"], "restore": True, "text": "   "})
+    assert res["is_error"] and ev == []  # not restored, and nothing announced
+    assert raw(a["id"])["status"] == "merged"
+    res, ev = call("idea_update", {"id": a["id"], "restore": True, "tags_add": ["back"]})
+    assert payload(res)["status"] == "new" and payload(res)["tags"] == ["back"] and ev[0]["area"] == "ideas"
+
+
 # ---------- CLI ----------
 
 
@@ -566,6 +687,18 @@ def test_routes_tag_merge_restore_unmerge(client):
     r = client.post(f"/api/ideas/{m['id']}/unmerge")
     assert r.status_code == 200 and r.json()["restored"] == [b["id"]]
     assert set(texts(idea_ops.listing())) == {"alpha", "beta"}
+
+
+def test_route_merge_line_empty_string_means_no_line_and_unmerge_reports_the_survivor(client):
+    a, b = plan.add_idea("alpha", line="Project A"), plan.add_idea("beta", line="Project A")
+    m = client.post("/api/ideas/merge", json={"ids": [a["id"], b["id"]], "text": "both", "line": ""}).json()
+    assert "line" not in m and m["merge_untouched"] is True
+    client.post(f"/api/ideas/{m['id']}/tags", json={"add": ["touched"]})
+    r = client.post(f"/api/ideas/{m['id']}/unmerge")
+    assert r.status_code == 200 and r.json()["survivor"] == "dropped"
+    m2 = client.post("/api/ideas/merge", json={"ids": [a["id"], b["id"]]}).json()
+    assert m2["line"] == "Project A"  # not given: the most common one
+    assert client.post(f"/api/ideas/{m2['id']}/unmerge").json()["survivor"] == "deleted"
 
 
 def test_routes_report_bad_requests_as_4xx(client):
