@@ -36,9 +36,13 @@ def _paper_or_404(key: str) -> str:
 def setup() -> dict[str, Any]:
     """For Settings: which way into Zotero works, collections to choose from, auto mode, pending links."""
     s = load_settings()
-    return {**zotero_push.transports(), "secrets_file": zotero_push.secrets_hint(),
-            "collections": zotero_push.collections(), "collection": s.get("zotero_collection", ""),
-            "auto": zotero_push.auto_status(), "pending": zotero_push.pending_links()}
+    try:
+        colls, links, error = zotero_push.collections(), zotero_push.pending_links(), None
+    except zotero_push.SnapshotError as e:
+        colls, links, error = [], [], str(e)
+    return {**zotero_push.transports(), "secrets_file": zotero_push.secrets_hint(), "collections": colls,
+            "collection": s.get("zotero_collection", ""), "auto": zotero_push.auto_status(), "pending": links,
+            "snapshot_error": error}
 
 
 @router.get("/paper/{key}")

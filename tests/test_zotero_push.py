@@ -15,7 +15,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
 import pytest
@@ -93,6 +93,8 @@ class MockZotero:
         self.calls: list[dict[str, Any]] = []
         self.prefs = {"downloadAssociatedFiles": True}
         self.remote: list[dict[str, Any]] = []  # what a Web API search returns
+        self.crossref: dict[str, dict[str, Any]] = {}  # DOI -> Crossref "message"
+        self.arxiv: dict[str, str] = {}  # arXiv id -> Atom <entry> body
         self.save_status = 201
         self.write_to_db = True  # the desktop app writes the saved item into zotero.sqlite
         self.n = 0
@@ -122,6 +124,16 @@ class MockZotero:
                     return self._send(200, {"userID": 4242})
                 if path == "/users/4242/items":
                     return self._send(200, mock.remote)
+                if path.startswith("/works/"):
+                    doi = unquote(path[len("/works/"):])
+                    return self._send(200, {"message": mock.crossref[doi]}) if doi in mock.crossref else self._send(404)
+                if path == "/arxiv":
+                    aid = parse_qs(urlparse(self.path).query)["id_list"][0]
+                    data = f"<feed><entry>{mock.arxiv[aid]}</entry></feed>".encode() if aid in mock.arxiv else b"<feed></feed>"
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    return self.wfile.write(data)
                 self._send(404)
 
             def do_POST(self) -> None:
@@ -191,6 +203,9 @@ def zot(sandbox, monkeypatch):
     monkeypatch.setattr("httpx.post", guard(_REAL_POST))
     monkeypatch.setattr(zotero_push, "CONNECTOR", mock.base)
     monkeypatch.setattr(zotero_push, "WEB_API", mock.base)
+    monkeypatch.setattr(zotero_push, "CROSSREF", mock.base)
+    monkeypatch.setattr(zotero_push, "ARXIV_API", mock.base + "/arxiv")
+    zotero_push._meta_failed.clear()
     monkeypatch.setattr(zotero_push, "_await_key", lambda ids, wait=0.0: _await(ids))
     for k in ("ZOTERO_API_KEY", "ZOTERO_USER_ID"):
         monkeypatch.delenv(k, raising=False)
@@ -291,23 +306,88 @@ def test_author_names_lose_affiliations_and_footnote_marks():
     assert zotero_push._creator("Subrat Panda (MindTwin)")["firstName"] == "Subrat"
 
 
-def test_item_types_for_doi_only_and_url_only_notes(zot, make_note):
-    make_note("Doi Paper", title="A KDD Paper", source="https://dl.acm.org/doi/10.1145/3637528.3671870")
+SIGIR = {"type": "proceedings-article", "title": ["A SIGIR Paper"],
+         "container-title": ["Proceedings of the 48th International ACM SIGIR Conference on Research and Development in Information Retrieval"],
+         "event": {"name": "SIGIR '25: The 48th International ACM SIGIR Conference"},
+         "author": [{"given": "Ada", "family": "Lovelace"}, {"given": "Alan M.", "family": "Turing"}],
+         "issued": {"date-parts": [[2025, 7, 13]]}, "page": "100-110", "publisher": "ACM"}
+
+
+def test_a_doi_conference_paper_becomes_a_conference_paper(zot, make_note):
+    make_note("Doi Paper", title="A SIGIR Paper", source="https://dl.acm.org/doi/10.1145/3726302.3730238",
+              body="- Venue / status: SIGIR 2025; ACM DOI verified\n")
+    zot.crossref["10.1145/3726302.3730238"] = SIGIR
     meta = zotero_push.paper_meta("Doi Paper")
+    assert meta["ids"] == {"doi:10.1145/3726302.3730238", "url:dl.acm.org/doi/10.1145/3726302.3730238"}
+    assert zotero_push.enrich(meta) == []
     item = zotero_push.build_item(meta)
-    assert item["itemType"] == "journalArticle" and item["DOI"] == "10.1145/3637528.3671870"
-    assert meta["ids"] == {"doi:10.1145/3637528.3671870", "url:dl.acm.org/doi/10.1145/3637528.3671870"}
+    assert item["itemType"] == "conferencePaper" and item["DOI"] == "10.1145/3726302.3730238"
+    assert item["proceedingsTitle"].startswith("Proceedings of the 48th International ACM SIGIR")
+    assert item["conferenceName"].startswith("SIGIR '25") and item["pages"] == "100-110" and item["date"] == "2025-07-13"
+    assert item["creators"][1] == {"creatorType": "author", "firstName": "Alan M.", "lastName": "Turing"}
+    assert "publicationTitle" not in item and "archiveID" not in item
+    # Cached: a second lookup needs no network.
+    zot.crossref.clear()
+    meta2 = zotero_push.paper_meta("Doi Paper")
+    assert zotero_push.enrich(meta2) == [] and meta2["crossref"]["type"] == "proceedings-article"
+
+
+def test_without_crossref_the_venue_text_is_cleaned_and_reported(zot, make_note):
+    make_note("Offline", title="Offline Paper", source="https://dl.acm.org/doi/10.1145/3626772.3657669",
+              body="- Venue / status: SIGIR 2024 demo; ACM DOI verified\n")
+    meta = zotero_push.paper_meta("Offline")
+    warnings = zotero_push.enrich(meta)  # the mock has no record: Crossref answers 404
+    assert len(warnings) == 1 and "DOI" in warnings[0]
+    item = zotero_push.build_item(meta)
+    assert (item["itemType"], item["proceedingsTitle"]) == ("conferencePaper", "SIGIR 2024")
+
+
+@pytest.mark.parametrize("venue, kind, name", [
+    ("SIGIR 2025; ACM DOI verified", "conferencePaper", "SIGIR 2025"),
+    ("WWW Companion 2025; ACM DOI verified", "conferencePaper", "WWW Companion 2025"),
+    ("AAAI 2026 Technical Track, Proceedings of AAAI 40(37), 31636-31644", "conferencePaper", "AAAI 2026"),
+    ("IAAI / AAAI 2026 proceedings, Proceedings of AAAI 40(47)", "conferencePaper", "IAAI / AAAI 2026"),
+    ("ACM TOIS 2025", "journalArticle", "ACM TOIS 2025"),
+    ("IEEE Transactions on Knowledge and Data Engineering", "journalArticle", "IEEE Transactions on Knowledge and Data Engineering"),
+])
+def test_venue_text_without_crossref(venue, kind, name):
+    assert zotero_push._guess_type(venue) == kind and zotero_push.venue_name(venue) == name
+
+
+def test_url_only_notes_are_documents(zot, make_note):
     make_note("Blog", title="A Blog Post", source="https://example.org/post")
     assert zotero_push.build_item(zotero_push.paper_meta("Blog"))["itemType"] == "document"
 
 
-def test_arxiv_only_item_uses_the_reading_list_title_and_arxiv_metadata(zot, monkeypatch):
+ATOM = ("<title>API title</title><summary>Abs.</summary><published>2026-10-01T00:00:00Z</published>"
+        "<author><name>Grace Hopper</name></author>")
+
+
+def test_arxiv_only_item_uses_the_reading_list_title_and_arxiv_metadata(zot):
     reading.push(arxiv="2610.11920", title="From the list", reason="r", source="self")
-    monkeypatch.setattr(zotero_push, "_arxiv_meta", lambda aid: {"title": "API title", "authors": ["Grace Hopper"],
-                                                                  "abstract": "Abs.", "date": "2026-10-01"})
+    zot.arxiv["2610.11920"] = ATOM
     meta = zotero_push.paper_meta("arxiv:2610.11920")
-    assert (meta["title"], meta["authors"], meta["date"], meta["note"]) == ("From the list", ["Grace Hopper"], "2026-10-01", None)
+    assert (meta["title"], meta["authors"], meta["note"]) == ("From the list", [], None)  # no network yet
+    assert zot.paths() == []
+    assert zotero_push.enrich(meta) == []
+    assert (meta["title"], meta["authors"], meta["date"]) == ("From the list", ["Grace Hopper"], "2026-10-01")
     assert zotero_push.build_item(meta)["abstractNote"] == "Abs."
+
+
+def test_status_never_fetches_metadata(zot):
+    reading.push(arxiv="2610.11920", title="T", reason="r", source="self")
+    zot.arxiv["2610.11920"] = ATOM
+    assert zotero_push.status("arxiv:2610.11920")["state"] == "absent"
+    assert [p for p in zot.paths() if p in ("/arxiv",) or p.startswith("/works/")] == []
+
+
+def test_arxiv_failures_are_reported_and_not_retried_at_once(zot):
+    reading.push(arxiv="2610.99999", title="Unknown", reason="r", source="self")
+    r = zotero_push.push("arxiv:2610.99999")  # the mock arXiv has no such id
+    assert r["state"] == "added" and any("arXiv" in w for w in r["warnings"])
+    zot.calls.clear()
+    meta = zotero_push.paper_meta("arxiv:2610.99999")
+    assert zotero_push.enrich(meta) and "/arxiv" not in zot.paths()  # remembered for 10 minutes
 
 
 # ---------- status and dedupe against the snapshot ----------
@@ -409,10 +489,64 @@ def test_local_pdf_is_attached_only_when_zotero_saves_files(zot, note):
     assert "/connector/saveItems" in zot.paths() and "/connector/saveAttachment" not in zot.paths()
 
 
-def test_saved_but_key_not_yet_visible(zot, note):
+def test_saved_but_key_not_yet_visible_is_not_added_twice(zot, note):
     zot.write_to_db = False
     r = zotero_push.push("Group Memory 2026")
     assert r["state"] == "added" and r["key"] is None and "link" not in r and r["warnings"]
+    s = zotero_push.status("Group Memory 2026")
+    assert (s["state"], s["key"], s["pending"]) == ("in_library", None, True)
+    again = zotero_push.push("Group Memory 2026")  # the second click the UI used to invite
+    assert again["state"] == "pending" and again["warnings"]
+    assert zot.paths().count("/connector/saveItems") == 1
+    zot.fake.add("LATEKEY2", archiveID="arXiv:2608.21939")  # Zotero finally wrote it
+    assert zotero_push.status("Group Memory 2026")["key"] == "LATEKEY2"
+    assert [p["key"] for p in zotero_push.pending_links()] == ["LATEKEY2"]
+    assert zotero_push.push("Group Memory 2026")["state"] == "exists"
+
+
+def test_a_pending_save_expires(zot, note):
+    zot.write_to_db = False
+    zotero_push.push("Group Memory 2026")
+    entries = json.loads(zotero_push.PUSHED_FILE.read_text())
+    entries[-1]["ts"] -= (zotero_push.PENDING_HOURS + 1) * 3600
+    zotero_push.PUSHED_FILE.write_text(json.dumps(entries))
+    assert zotero_push.push("Group Memory 2026")["state"] == "added"
+    assert zot.paths().count("/connector/saveItems") == 2
+    assert len(json.loads(zotero_push.PUSHED_FILE.read_text())) == 1  # the new pending record replaced the old
+
+
+def test_an_unreadable_snapshot_fails_closed(zot, note, client):
+    zot.fake.db.write_bytes(b"this is not a database at all" * 100)
+    zot.fake._touch()
+    s = zotero_push.status("Group Memory 2026")
+    assert s["state"] == "absent" and "快照" in s["error"]
+    with pytest.raises(zotero_push.SnapshotError):
+        zotero_push.push("Group Memory 2026")
+    assert "/connector/saveItems" not in zot.paths()
+    setup = client.get("/api/zotero/setup").json()
+    assert "快照" in setup["snapshot_error"] and setup["collections"] == [] and setup["pending"] == []
+    r = client.post("/api/zotero/paper/Group Memory 2026")
+    assert r.status_code == 502 and "快照" in r.json()["detail"]
+
+
+def test_a_missing_optional_table_is_fine_but_a_missing_core_table_is_not(zot, note):
+    import sqlite3
+    with sqlite3.connect(zot.fake.db) as con:
+        con.execute("DROP TABLE deletedCollections")
+    zot.fake._touch()
+    assert zotero_push.status("Group Memory 2026")["state"] == "absent"
+    with sqlite3.connect(zot.fake.db) as con:
+        con.execute("DROP TABLE deletedItems")
+    zot.fake._touch()
+    assert "error" in zotero_push.status("Group Memory 2026")
+
+
+def test_desktop_app_running_but_its_database_not_found(zot, note):
+    for f in config.ZOTERO_DIR.glob("zotero.sqlite*"):
+        f.unlink()
+    with pytest.raises(zotero_push.ZoteroError, match="找不到它的数据库"):
+        zotero_push.push("Group Memory 2026")
+    assert "/connector/saveItems" not in zot.paths()
 
 
 def test_connector_refusal_is_an_error(zot, note):
@@ -570,8 +704,7 @@ def test_auto_mode_first_pass_only_records(zot, note):
     assert zot.paths() == []
 
 
-def test_auto_triage_pushes_papers_given_a_tier_and_new_notes(zot, note, make_note, monkeypatch):
-    monkeypatch.setattr(zotero_push, "_arxiv_meta", lambda aid: {})
+def test_auto_triage_pushes_papers_given_a_tier_and_new_notes(zot, note, make_note):
     config.save_settings({"zotero_auto": "triage"})
     item, _ = reading.push(paper="Group Memory 2026", reason="r", source="tracker")
     zotero_push.auto_tick()  # seed
@@ -593,9 +726,9 @@ def test_auto_triage_pushes_papers_given_a_tier_and_new_notes(zot, note, make_no
     assert zotero_push.auto_status()["recent"][0]["paper"] == "Fresh Note"
 
 
-def test_auto_all_pushes_inbox_additions(zot, monkeypatch):
-    monkeypatch.setattr(zotero_push, "_arxiv_meta", lambda aid: {})
+def test_auto_all_pushes_inbox_additions(zot):
     config.save_settings({"zotero_auto": "all"})
+    reading.load()  # creates the (empty) list
     zotero_push.auto_tick()
     reading.push(arxiv="2610.11920", title="Inbox", reason="r", source="tracker")
     _touch_list()
@@ -603,6 +736,7 @@ def test_auto_all_pushes_inbox_additions(zot, monkeypatch):
 
 
 def test_auto_off_keeps_track_without_pushing(zot, note):
+    reading.load()
     zotero_push.auto_tick()
     reading.push(paper="Group Memory 2026", reason="r", source="self", tier="T1")
     _touch_list()
@@ -612,8 +746,41 @@ def test_auto_off_keeps_track_without_pushing(zot, note):
     assert zot.paths() == []
 
 
+def test_auto_mode_does_not_take_its_first_look_at_a_missing_list(zot, note):
+    config.save_settings({"zotero_auto": "all"})
+    assert not config.READING_LIST.exists()
+    assert zotero_push.auto_tick() == [] and not zotero_push.AUTO_FILE.exists()  # no empty first look recorded
+    reading.push(paper="Group Memory 2026", reason="r", source="tracker")
+    assert zotero_push.auto_tick() == []  # the first real look only records
+    assert zot.paths() == []
+
+
+@pytest.mark.parametrize("gap", ["list", "papers"])
+def test_auto_mode_treats_a_vanished_list_or_folder_as_a_gap(zot, note, make_note, gap):
+    config.save_settings({"zotero_auto": "all"})
+    make_note("Other 2026", arxiv="2601.00042", title="Other")
+    reading.push(paper="Group Memory 2026", reason="r", source="tracker")
+    zotero_push.auto_tick()  # seed: one item, two notes
+    if gap == "list":
+        saved = config.READING_LIST.read_bytes()
+        config.READING_LIST.unlink()
+    else:
+        moved = config.DATA_DIR / "papers-away"
+        config.PAPERS_DIR.rename(moved)
+    assert zotero_push.auto_tick(force=True) == []
+    if gap == "list":
+        config.READING_LIST.write_bytes(saved)
+        _touch_list()
+    else:
+        moved.rename(config.PAPERS_DIR)
+        os.utime(config.PAPERS_DIR, (time.time() + 9, time.time() + 9))
+    assert zotero_push.auto_tick() == []  # nothing came back as "new"
+    assert zot.paths() == []
+
+
 def test_auto_failures_are_retried_later(zot, note):
     config.save_settings({"zotero_auto": "triage"})
+    reading.load()
     zotero_push.auto_tick()
     zot.desktop(False)
     reading.push(paper="Group Memory 2026", reason="r", source="self", tier="T1")

@@ -4,7 +4,13 @@ This only ever adds items; it never edits or deletes anything in Zotero. Before 
 looked up by DOI, arXiv id and URL in the local snapshot of zotero.sqlite, in a per-device record of
 earlier pushes and, when a Web API key exists, in the online library (which also sees what the other
 Mac added). The resulting zotero://select link goes into the paper note's front matter only after
-the user has seen the exact line and confirmed it (link_preview, then write_link).
+the user has seen the exact line and confirmed it (link_preview, then write_link). When the local
+snapshot can't be read, nothing is added (fail closed): an unreadable index would let every paper
+through the dedupe.
+
+Item metadata comes from the note, then from Crossref (DOI) or the arXiv API, fetched only when an
+item is about to be created (never for a status check) and cached in the data dir. A DOI paper that
+Crossref calls a proceedings article becomes a conferencePaper, not a journalArticle.
 
 The Web API key is created by the user at zotero.org/settings/keys and kept in <secrets>/zotero.env
 (ZOTERO_API_KEY, ZOTERO_USER_ID). The app never asks for a Zotero password.
@@ -37,11 +43,15 @@ from .excerpt import _locked as _note_locked, _read as _read_note, _write as _wr
 
 CONNECTOR = os.environ.get("STUDIO_ZOTERO_CONNECTOR", "http://127.0.0.1:23119")
 WEB_API = os.environ.get("STUDIO_ZOTERO_API", "https://api.zotero.org")
+CROSSREF = os.environ.get("STUDIO_CROSSREF_API", "https://api.crossref.org")
+ARXIV_API = os.environ.get("STUDIO_ARXIV_API", "https://export.arxiv.org/api/query")
 PUSHED_FILE = DATA_DIR / "zotero-pushed.json"  # per device: what this Mac added, until the snapshot shows it
 AUTO_FILE = DATA_DIR / "zotero-auto.json"  # per device: what auto mode has already seen
+META_FILE = DATA_DIR / "zotero-meta.json"  # cached Crossref / arXiv metadata
 AUTO_MODES = ("off", "triage", "all")
 TAG = "phd-studio"
 TRUST_DAYS = 7  # an unsynced push still counts as "in Zotero" this long
+PENDING_HOURS = 6  # saved through the desktop app but not yet seen in its database: don't add again
 _UA = "PhD-Studio/0.1"
 _LOCK = threading.RLock()  # one push at a time, from clicks and from auto mode
 _AUTO_LOCK = threading.Lock()
@@ -49,6 +59,10 @@ _AUTO_LOCK = threading.Lock()
 
 class ZoteroError(RuntimeError):
     pass
+
+
+class SnapshotError(ZoteroError):
+    """The local zotero.sqlite snapshot can't be read: dedupe isn't possible, so nothing is added."""
 
 
 def select_link(key: str) -> str:
@@ -119,18 +133,27 @@ WHERE i.libraryID = ?
 """
 
 
-def _query(con: sqlite3.Connection, sql: str, *args: Any) -> list[tuple]:
+def _query(con: sqlite3.Connection, sql: str, *args: Any, optional: bool = False) -> list[tuple]:
     try:
         return con.execute(sql, args).fetchall()
-    except sqlite3.Error:  # a table this Zotero version doesn't have
-        return []
+    except sqlite3.OperationalError as e:
+        if optional and "no such table" in str(e):  # a table only some Zotero versions have
+            return []
+        raise
 
 
 @lru_cache(maxsize=1)
 def _index(_stamp: float) -> dict[str, Any]:
+    try:
+        return _build_index()
+    except (sqlite3.Error, OSError) as e:
+        raise SnapshotError(f"读不了本机 Zotero 数据库快照（{e.__class__.__name__}: {e}），为免重复，先不添加") from None
+
+
+def _build_index() -> dict[str, Any]:
     out: dict[str, Any] = {"by_ident": {}, "live": set(), "deleted": set(), "library": None, "collections": []}
     con = library._zotero_db()
-    if con is None:
+    if con is None:  # no local Zotero database at all (only the Web API is used then)
         return out
     try:
         lib = _query(con, "SELECT libraryID FROM libraries WHERE type = 'user'")
@@ -148,7 +171,7 @@ def _index(_stamp: float) -> dict[str, Any]:
                 out["by_ident"].setdefault(k, key)
         out["live"] = {k for (k,) in _query(con, "SELECT key FROM items WHERE libraryID = ?", lid)} - deleted
         out["deleted"] = deleted
-        gone = {cid for (cid,) in _query(con, "SELECT collectionID FROM deletedCollections")}
+        gone = {cid for (cid,) in _query(con, "SELECT collectionID FROM deletedCollections", optional=True)}
         rows = [r for r in _query(con, "SELECT collectionID, collectionName, parentCollectionID, key FROM collections "
                                        "WHERE libraryID = ?", lid) if r[0] not in gone]
         by_id = {r[0]: r for r in rows}
@@ -167,6 +190,7 @@ def _index(_stamp: float) -> dict[str, Any]:
 
 
 def snapshot() -> dict[str, Any]:
+    """The local index; raises SnapshotError when the database is there but unreadable."""
     return _index(library._zotero_stamp())
 
 
@@ -186,14 +210,22 @@ def find_local(ids: set[str]) -> str | None:
             return key
     cutoff = time.time() - TRUST_DAYS * 86400
     for e in reversed(_pushed()):
-        if ids & set(e.get("ids", [])) and e["key"] not in snap["deleted"]:
+        if e.get("key") and ids & set(e.get("ids", [])) and e["key"] not in snap["deleted"]:
             if e["key"] in snap["live"] or e.get("ts", 0) >= cutoff:
                 return e["key"]
     return None
 
 
-def _record(paper: str, key: str, ids: set[str], via: str) -> None:
-    entries = [e for e in _pushed() if e.get("key") != key]
+def pending(ids: set[str]) -> dict[str, Any] | None:
+    """A recent save through the desktop app whose item hasn't shown up in the snapshot yet."""
+    cutoff = time.time() - PENDING_HOURS * 3600
+    return next((e for e in reversed(_pushed()) if e.get("key") is None and ids & set(e.get("ids", []))
+                 and e.get("ts", 0) >= cutoff), None)
+
+
+def _record(paper: str, key: str | None, ids: set[str], via: str) -> None:
+    """Remember a push; key None = saved, key not known yet (a later record for the paper replaces it)."""
+    entries = [e for e in _pushed() if not (key and e.get("key") == key) and not (e.get("key") is None and e.get("paper") == paper)]
     entries.append({"paper": paper, "key": key, "ids": sorted(ids), "via": via, "at": _now(), "ts": time.time()})
     _save_json(PUSHED_FILE, entries[-500:])
 
@@ -203,15 +235,34 @@ def _record(paper: str, key: str, ids: set[str], via: str) -> None:
 _FIELD = re.compile(r"^- (Title|Authors|Year|URL|DOI|Venue / status):\s*(.+?)\s*$", re.M)
 
 
-def _arxiv_meta(aid: str) -> dict[str, Any]:
-    """Title, authors, abstract and date from the arXiv API; {} when it can't be reached."""
+_meta_failed: dict[str, tuple[float, str]] = {}  # recent lookup failures, not retried for 10 minutes
+
+
+def _cached(kind: str, ident: str, fetch: Any) -> tuple[dict[str, Any], str]:
+    """(metadata, error) for one lookup, from the cache in the data dir or by `fetch()`; successes are kept."""
+    key = f"{kind}:{ident}"
+    cache = _load_json(META_FILE, {})
+    if key in cache:
+        return cache[key]["data"], ""
+    if key in _meta_failed and time.time() - _meta_failed[key][0] < 600:
+        return {}, _meta_failed[key][1]
     try:
-        r = httpx.get("https://export.arxiv.org/api/query", params={"id_list": aid}, timeout=10)
-        entry = re.search(r"<entry>(.*?)</entry>", r.text, re.S)
-    except Exception:  # noqa: BLE001 - optional enrichment
-        return {}
-    if not entry:
-        return {}
+        data = fetch()
+    except Exception as e:  # noqa: BLE001 - reported to the caller as a warning
+        _meta_failed[key] = (time.time(), f"{e.__class__.__name__}: {e}"[:200])
+        return {}, _meta_failed[key][1]
+    cache = _load_json(META_FILE, {})
+    cache[key] = {"at": _now(), "data": data}
+    _save_json(META_FILE, cache)
+    return data, ""
+
+
+def _arxiv_fetch(aid: str) -> dict[str, Any]:
+    r = httpx.get(ARXIV_API, params={"id_list": aid}, timeout=10, headers={"User-Agent": _UA})
+    r.raise_for_status()
+    entry = re.search(r"<entry>(.*?)</entry>", r.text, re.S)
+    if not entry or "<title>Error</title>" in entry.group(1):
+        raise LookupError("arXiv 没有这个编号")
     e = entry.group(1)
 
     def tag(name: str) -> str:
@@ -221,8 +272,25 @@ def _arxiv_meta(aid: str) -> dict[str, Any]:
             "authors": [" ".join(a.split()) for a in re.findall(r"<name>(.*?)</name>", e, re.S)]}
 
 
+def _crossref_fetch(doi: str) -> dict[str, Any]:
+    r = httpx.get(f"{CROSSREF}/works/{doi}", timeout=10, headers={"User-Agent": _UA})
+    if r.status_code == 404:
+        raise LookupError("Crossref 没有这个 DOI")
+    r.raise_for_status()
+    m = r.json()["message"]
+    parts = ((m.get("issued") or {}).get("date-parts") or [[]])[0]
+    return {"type": m.get("type", ""), "title": " ".join((m.get("title") or [""])[0].split()),
+            "container": " ".join((m.get("container-title") or [""])[0].split()),
+            "event": (m.get("event") or {}).get("name", ""),
+            "creators": [{"creatorType": "author", "firstName": a.get("given", ""), "lastName": a["family"]}
+                         for a in m.get("author", []) if a.get("family")],
+            "date": "-".join(f"{x:02d}" if i else str(x) for i, x in enumerate(parts) if isinstance(x, int)),
+            "pages": m.get("page", ""), "volume": m.get("volume", ""), "issue": m.get("issue", ""),
+            "publisher": m.get("publisher", "")}
+
+
 def paper_meta(key: str) -> dict[str, Any]:
-    """What Zotero needs to know about a paper: a note stem, or arxiv:<id> before a note exists."""
+    """What the note (or the reading-list item) says about a paper. No network: see enrich()."""
     if aid := library.arxiv_key(key):
         item = reading.find(reading._load_raw(), key) or {}
         meta = {"key": key, "note": None, "title": item.get("title") or "", "authors": [], "date": "", "arxiv": aid,
@@ -246,16 +314,36 @@ def paper_meta(key: str) -> dict[str, Any]:
                 "url": url if url.startswith("http") else (f"https://arxiv.org/abs/{arxiv}" if arxiv else ""),
                 "venue": fields.get("Venue / status", ""), "zotero_key": info["zotero_key"], "abstract": ""}
     meta["authors"] = [a for a in meta["authors"] if a.lower().rstrip(".") not in ("et al", "others")]
-    if meta["arxiv"] and not (meta["title"] and meta["authors"]):
-        extra = _arxiv_meta(meta["arxiv"])
-        meta["title"] = meta["title"] or extra.get("title", "")
+    meta["ids"] = ident_keys(doi=meta["doi"], arxiv=meta["arxiv"], url=meta["url"])
+    meta["pdf_url"] = next((u for u in library.pdf_urls({"arxiv": meta["arxiv"], "source": meta["url"]})), "")
+    meta["crossref"] = {}
+    meta["title"] = meta["title"] or key
+    return meta
+
+
+def _published_doi(meta: dict[str, Any]) -> str:
+    return meta["doi"] if meta["doi"] and not meta["doi"].startswith("10.48550/") else ""
+
+
+def enrich(meta: dict[str, Any]) -> list[str]:
+    """Fill in metadata from Crossref (DOI) and arXiv, just before an item is created. Returns warnings."""
+    warnings = []
+    if doi := _published_doi(meta):
+        meta["crossref"], err = _cached("doi", doi, lambda: _crossref_fetch(doi))
+        if err:
+            warnings.append(f"没取到 DOI 元数据（{err}），按笔记里的会议名填写")
+    untitled = meta["title"] == meta["key"]
+    if meta["arxiv"] and (untitled or not meta["authors"]) and not meta["crossref"].get("creators"):
+        extra, err = _cached("arxiv", meta["arxiv"], lambda: _arxiv_fetch(meta["arxiv"]))
+        if err:
+            warnings.append(f"没取到 arXiv 元数据（{err}），条目可能只有标题")
+        meta["title"] = extra.get("title") or meta["title"] if untitled else meta["title"]
         meta["authors"] = meta["authors"] or extra.get("authors", [])
         meta["abstract"] = extra.get("abstract", "")
         meta["date"] = meta["date"] or extra.get("date", "")
-    meta["title"] = meta["title"] or key
-    meta["ids"] = ident_keys(doi=meta["doi"], arxiv=meta["arxiv"], url=meta["url"])
-    meta["pdf_url"] = next((u for u in library.pdf_urls({"arxiv": meta["arxiv"], "source": meta["url"]})), "")
-    return meta
+    if meta["title"] == meta["key"] and meta["crossref"].get("title"):
+        meta["title"] = meta["crossref"]["title"]
+    return warnings
 
 
 def _creator(name: str) -> dict[str, str]:
@@ -264,18 +352,50 @@ def _creator(name: str) -> dict[str, str]:
     return {"creatorType": "author", "firstName": " ".join(parts[:-1]), "lastName": parts[-1] if parts else name}
 
 
+_CROSSREF_TYPES = {"proceedings-article": "conferencePaper", "journal-article": "journalArticle",
+                   "posted-content": "preprint", "book-chapter": "bookSection"}
+_JOURNALISH = re.compile(r"\b(journal|transactions|letters|magazine)\b", re.I)
+
+
+def venue_name(venue: str) -> str:
+    """The venue from a note's free-text status: "SIGIR 2024 demo; ACM DOI verified" -> "SIGIR 2024"."""
+    head = re.split(r"[;,(]", venue or "", maxsplit=1)[0].strip()
+    m = re.match(r"(.*?\b(?:19|20)\d{2})\b", head)
+    return (m.group(1) if m else head).strip()
+
+
+def _guess_type(venue: str) -> str:
+    """Without Crossref: a journal-sounding venue (or an ACM/IEEE journal acronym like TOIS) is a journal, else a conference."""
+    if _JOURNALISH.search(venue) or re.search(r"\bT[A-Z]{2,4}\b", venue):
+        return "journalArticle"
+    return "conferencePaper"
+
+
 def build_item(meta: dict[str, Any]) -> dict[str, Any]:
     """A Zotero item in the shape both the connector and the Web API accept."""
+    cr = meta.get("crossref") or {}
     extra = [f"arXiv: {meta['arxiv']}"] if meta["arxiv"] else []
     if meta["note"]:
         extra.append(f"Obsidian note: {meta['note']}")
-    item: dict[str, Any] = {"title": meta["title"], "creators": [_creator(a) for a in meta["authors"]],
-                            "date": meta["date"], "url": meta["url"], "abstractNote": meta.get("abstract", ""),
-                            "tags": [{"tag": TAG}]}
-    if meta["arxiv"]:
+    creators = [_creator(a) for a in meta["authors"]] or cr.get("creators", [])
+    item: dict[str, Any] = {"title": meta["title"], "creators": creators, "date": cr.get("date") or meta["date"],
+                            "url": meta["url"], "abstractNote": meta.get("abstract", ""), "tags": [{"tag": TAG}]}
+    venue = cr.get("container") or venue_name(meta["venue"])
+    if doi := _published_doi(meta):  # the published version wins over the arXiv one
+        kind = _CROSSREF_TYPES.get(cr.get("type", "")) or _guess_type(meta["venue"])
+        item.update(itemType=kind, DOI=doi)
+        if kind == "conferencePaper":
+            item.update(proceedingsTitle=venue, conferenceName=cr.get("event", ""), pages=cr.get("pages", ""),
+                        publisher=cr.get("publisher", ""))
+        elif kind == "journalArticle":
+            item.update(publicationTitle=venue, volume=cr.get("volume", ""), issue=cr.get("issue", ""),
+                        pages=cr.get("pages", ""))
+        elif kind == "bookSection":
+            item.update(bookTitle=venue, pages=cr.get("pages", ""), publisher=cr.get("publisher", ""))
+        else:
+            item.update(repository=cr.get("publisher", ""))
+    elif meta["arxiv"]:
         item.update(itemType="preprint", repository="arXiv", archiveID=f"arXiv:{meta['arxiv']}", DOI=meta["doi"])
-    elif meta["doi"]:
-        item.update(itemType="journalArticle", DOI=meta["doi"], publicationTitle=meta["venue"])
     else:
         item["itemType"] = "document"
     item["extra"] = "\n".join(extra)
@@ -415,7 +535,10 @@ def _push_connector(meta: dict[str, Any], item: dict[str, Any]) -> tuple[str | N
                                       "url": meta["pdf_url"] or meta["url"]})})
         if r.status_code not in (200, 201):
             warnings.append("PDF 没能附上")
-    return _await_key(meta["ids"]), warnings
+    try:
+        return _await_key(meta["ids"]), warnings
+    except SnapshotError:  # saved all the same: recorded as pending, so it isn't added twice
+        return None, warnings
 
 
 def _push_web(meta: dict[str, Any], item: dict[str, Any]) -> tuple[str, list[str]]:
@@ -464,12 +587,18 @@ def transports() -> dict[str, bool]:
 
 
 def status(key: str) -> dict[str, Any]:
-    """Whether a paper is in Zotero: linked (note has the link), in_library (found), or absent."""
+    """Whether a paper is in Zotero: linked (note has the link), in_library (found, or saved and pending),
+    or absent. Local only: no network besides the desktop app's ping."""
     meta = paper_meta(key)
     base = {"title": meta["title"], "note": meta["note"], **transports()}
     if meta["zotero_key"]:
         return {**base, "state": "linked", "key": meta["zotero_key"], "link": select_link(meta["zotero_key"])}
-    found = find_local(meta["ids"])
+    try:
+        found = find_local(meta["ids"])
+    except SnapshotError as e:
+        return {**base, "state": "absent", "key": None, "error": str(e)}
+    if not found and pending(meta["ids"]):
+        return {**base, "state": "in_library", "key": None, "pending": True}
     return _with_links({**base, "state": "in_library" if found else "absent", "key": found}, meta)
 
 
@@ -481,24 +610,28 @@ def push(key: str) -> dict[str, Any]:
             return {"state": "linked", "key": meta["zotero_key"], "link": select_link(meta["zotero_key"]), "note": meta["note"]}
         if not meta["ids"]:
             raise ZoteroError("这篇没有 DOI、arXiv 号或链接，没法在 Zotero 里查重，先在笔记里补上来源")
-        found = find_local(meta["ids"]) or _remote_find(meta["ids"], meta)
+        local = find_local(meta["ids"])  # raises SnapshotError: no dedupe, no adding
+        found = local or _remote_find(meta["ids"], meta)
         if found:
-            if not find_local(meta["ids"]):
+            if not local:
                 _record(key, found, meta["ids"], "found")
             return _with_links({"state": "exists", "key": found, "note": meta["note"]}, meta)
-        item = build_item(meta)
-        if desktop()["up"]:
-            via = "desktop"
-            zkey, warnings = _push_connector(meta, item)
-        elif web_creds():
-            via = "web"
-            zkey, warnings = _push_web(meta, item)
-        else:
+        if wait := pending(meta["ids"]):
+            return {"state": "pending", "key": None, "via": wait.get("via"), "note": meta["note"],
+                    "warnings": ["不久前已经存进 Zotero，还在等它写进数据库，所以没有再加一次"]}
+        up = desktop()["up"]
+        if up and snapshot()["library"] is None:
+            raise ZoteroError("Zotero 桌面端在运行，但在 studio.toml 的 zotero 路径下找不到它的数据库，没法查重，先不添加")
+        if not up and not web_creds():
             raise ZoteroError("Zotero 桌面端没在运行，也没有配置网络密钥")
-        if zkey:
-            _record(key, zkey, meta["ids"], via)
-        else:
-            warnings.append("已存进 Zotero，但还没读到条目编号；稍后再点一次可以写回链接")
+        warnings = enrich(meta)
+        item = build_item(meta)
+        via = "desktop" if up else "web"
+        zkey, more = _push_connector(meta, item) if up else _push_web(meta, item)
+        warnings += more
+        _record(key, zkey, meta["ids"], via)  # zkey None: pending, so a second click doesn't add it again
+        if not zkey:
+            warnings.append("已存进 Zotero，还没读到条目编号；稍后会自动认出，不会重复添加")
         return _with_links({"state": "added", "key": zkey, "via": via, "warnings": warnings, "note": meta["note"]}, meta)
 
 
@@ -560,7 +693,11 @@ def pending_links() -> list[dict[str, Any]]:
     """Papers this Mac put into Zotero whose note doesn't carry the link yet."""
     out, seen = [], set()
     by_arxiv = library.arxiv_index()
+    snap = snapshot()
     for e in reversed(_pushed()):
+        key = e.get("key") or next((snap["by_ident"][k] for k in e.get("ids", []) if k in snap["by_ident"]), None)
+        if not key:
+            continue
         paper = e.get("paper", "")
         aid = library.arxiv_key(paper)
         stem = by_arxiv.get(aid) if aid else paper
@@ -571,8 +708,8 @@ def pending_links() -> list[dict[str, Any]]:
             info = library._parse_note(library.note_path(stem))
         except FileNotFoundError:
             continue
-        if not info["zotero_key"] and e["key"] not in snapshot()["deleted"]:
-            out.append({**link_preview(stem, e["key"]), "title": info["title"]})
+        if not info["zotero_key"] and key not in snap["deleted"]:
+            out.append({**link_preview(stem, key), "title": info["title"]})
     return out
 
 
@@ -602,7 +739,9 @@ def auto_tick(force: bool = False) -> list[dict[str, Any]]:
     """One pass of auto mode: push papers that newly qualify since the last pass.
 
     The first pass only records what is there, so turning auto mode on never back-fills the whole list.
-    State is kept even while auto mode is off, for the same reason.
+    State is kept even while auto mode is off, for the same reason. A missing reading list or Papers
+    folder (vault not mounted, mid-sync), or one that suddenly has nothing in it, is a gap, not news:
+    the round is skipped and what was seen stays.
     """
     stamp = [_mtime(READING_LIST), _mtime(PAPERS_DIR)]
     mode = load_settings().get("zotero_auto", "off")
@@ -611,8 +750,12 @@ def auto_tick(force: bool = False) -> list[dict[str, Any]]:
         due_retry = mode != "off" and state.get("retry") and time.time() - state.get("retried", 0) > 300
         if not force and state.get("stamp") == stamp and not due_retry:
             return []
+        if not READING_LIST.exists() or not PAPERS_DIR.is_dir():  # not even a first look (vault not mounted yet?)
+            return []
         items = {i["id"]: [reading.key_of(i), i["status"]] for i in reading._load_raw()}
         notes = sorted(p.stem for p in PAPERS_DIR.glob("*.md"))
+        if (not items and state.get("items")) or (not notes and state.get("notes")):
+            return []
         todo: list[str] = []
         if "items" in state and mode in ("triage", "all"):
             prev = state["items"]

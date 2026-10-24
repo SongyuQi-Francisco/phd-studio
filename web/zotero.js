@@ -35,7 +35,8 @@ export function ZoteroButton({ stem, toast, onNoteChanged }) {
   const [at, setAt] = useState(null);
   const [fresh, setFresh] = useState(false); // just added by this click
   const wrap = useRef();
-  const load = () => api(`/api/zotero/paper/${enc(stem)}`).then((s) => { setSt(s); return s; }).catch(() => null);
+  // A status error (unreadable Zotero snapshot) shows in the popover instead of a push.
+  const load = () => api(`/api/zotero/paper/${enc(stem)}`).then((s) => { setSt(s); if (s.error) setErr(s.error); return s; }).catch(() => null);
 
   useEffect(() => { setSt(null); setOpen(false); setErr(""); setFresh(false); load(); }, [stem]);
   useEffect(() => {
@@ -56,6 +57,7 @@ export function ZoteroButton({ stem, toast, onNoteChanged }) {
       const warn = r.warnings?.length ? `（${r.warnings[0]}）` : "";
       setFresh(r.state === "added");
       if (s?.linkback) { setOpen(true); if (warn) toast(warn.slice(1, -1)); }
+      else if (r.state === "pending") toast(r.warnings[0]);
       else toast((r.state === "exists" ? "Zotero 里已经有这篇" : "已加入 Zotero") + warn);
     } catch (e) { setErr(e.message); setOpen(true); }
     setBusy("");
@@ -108,7 +110,7 @@ export function ZoteroSettings({ settings, save, toast }) {
   useEffect(() => { load(); }, []);
   if (!z) return null;
 
-  const ways = z.desktop ? "桌面端在运行" + (z.web ? "，网络密钥已配置" : "")
+  const ways = z.snapshot_error ? z.snapshot_error : z.desktop ? "桌面端在运行" + (z.web ? "，网络密钥已配置" : "")
     : z.web ? "桌面端没开，用网络密钥" : "桌面端没开，也没有网络密钥";
   const colls = [["", "库的根目录"], ...z.collections.map((c) => [c.key, c.name])];
   if (settings.zotero_collection && !z.collections.some((c) => c.key === settings.zotero_collection)) colls.push([settings.zotero_collection, "（已不存在的分类）"]);
@@ -128,7 +130,7 @@ export function ZoteroSettings({ settings, save, toast }) {
   return html`<div class="zset">
     <div class="field"><div><label>Zotero</label><small>${ways}</small></div>
       <span class="zset-r"><button class="tb-btn" title="怎么建网络密钥" onClick=${() => setHelp(!help)}>密钥说明</button>
-        <span class=${"dot " + (z.desktop || z.web ? "ok" : "bad")} /></span></div>
+        <span class=${"dot " + ((z.desktop || z.web) && !z.snapshot_error ? "ok" : "bad")} /></span></div>
     ${help && html`<div class="zhelp">
       <p>桌面端开着时直接存进本机 Zotero；没开时用 Zotero 网络服务，需要你自己建一个密钥：</p>
       <ol>
