@@ -1,4 +1,5 @@
-// Read-only side sheet for any vault note; [[wikilinks]] navigate, paper notes open in the reader.
+// Read-only side sheet for any vault note; [[wikilinks]] navigate, paper notes open in the reader
+// (page / section references in a paper note open it at that place).
 import { useEffect, useState } from "preact/hooks";
 import { html, Icon, api, renderMarkdown } from "/lib.js";
 
@@ -13,6 +14,9 @@ export function NoteSheet({ path, onClose, onOpenPaper, actions = [] }) {
     api(`/api/note?path=${encodeURIComponent(cur)}`).then(setN).catch((e) => setErr(e.message));
   }, [cur]);
   const click = async (e) => {
+    // Page / section references in a paper note open that paper at that place.
+    const pl = e.target.closest(".pagelink");
+    if (pl && n?.paper && onOpenPaper) return onOpenPaper(n.paper, pl.dataset.sec ? { sec: pl.dataset.sec } : { page: Number(pl.dataset.page) });
     const w = e.target.closest(".wikilink");
     if (!w) return;
     try {
@@ -35,6 +39,6 @@ export function NoteSheet({ path, onClose, onOpenPaper, actions = [] }) {
     </div>
     ${tags.length > 0 && html`<div class="row-wrap">${tags.map((t) => html`<span class="tag">${t}</span>`)}</div>`}
     ${err && html`<div class="err">${err}</div>`}
-    ${n && html`<div class="md note-body" onClick=${click} dangerouslySetInnerHTML=${{ __html: renderMarkdown(n.body) }} />`}
+    ${n && html`<div class="md note-body" onClick=${click} dangerouslySetInnerHTML=${{ __html: renderMarkdown(n.body, { loose: !!n.paper }) }} />`}
   </div></div>`;
 }
