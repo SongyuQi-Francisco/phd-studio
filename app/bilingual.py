@@ -67,6 +67,7 @@ def start(stem: str) -> dict[str, Any]:
         with log.open("w", encoding="utf-8") as f:
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                     bufsize=1)
+            job["proc"] = proc
             assert proc.stdout is not None
             for line in proc.stdout:
                 f.write(line)
@@ -81,3 +82,11 @@ def start(stem: str) -> dict[str, Any]:
 
     threading.Thread(target=run, daemon=True).start()
     return status(stem)
+
+
+def stop_all() -> None:
+    """Called on shutdown so no translation keeps running in the background."""
+    for job in _jobs.values():
+        proc = job.get("proc")
+        if proc and proc.poll() is None:
+            proc.terminate()

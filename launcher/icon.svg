@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1b1350"/>
+      <stop offset="0.55" stop-color="#3b1aa3"/>
+      <stop offset="1" stop-color="#0d3f8f"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.72" r="0.55">
+      <stop offset="0" stop-color="#46d9ff" stop-opacity="0.55"/>
+      <stop offset="0.45" stop-color="#7c4dff" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#000" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="page" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#bfd0ff"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#5ee7ff"/>
+      <stop offset="1" stop-color="#ff6ad5"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.22"/>
+      <stop offset="0.5" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="9" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="big" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="22" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="drop" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
+    <clipPath id="tile"><rect x="100" y="100" width="824" height="824" rx="186"/></clipPath>
+  </defs>
+
+  <!-- tile -->
+  <g filter="url(#drop)">
+    <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#bg)"/>
+  </g>
+  <g clip-path="url(#tile)">
+    <rect x="100" y="100" width="824" height="824" fill="url(#glow)"/>
+    <!-- orbit rings -->
+    <ellipse cx="512" cy="470" rx="330" ry="120" fill="none" stroke="#9fb6ff" stroke-opacity="0.16" stroke-width="3" transform="rotate(-14 512 470)"/>
+    <ellipse cx="512" cy="470" rx="250" ry="78" fill="none" stroke="#9fb6ff" stroke-opacity="0.10" stroke-width="2" transform="rotate(10 512 470)"/>
+    <!-- faint stars -->
+    <g fill="#fff">
+      <circle cx="230" cy="250" r="4" opacity="0.6"/><circle cx="300" cy="360" r="2.5" opacity="0.5"/>
+      <circle cx="790" cy="560" r="3" opacity="0.5"/><circle cx="820" cy="300" r="2.5" opacity="0.6"/>
+      <circle cx="200" cy="520" r="2.5" opacity="0.4"/><circle cx="440" cy="230" r="2" opacity="0.5"/>
+    </g>
+    <rect x="100" y="100" width="824" height="420" fill="url(#sheen)"/>
+  </g>
+
+  <!-- constellation rising from the book -->
+  <g stroke="url(#edge)" stroke-width="7" stroke-linecap="round" fill="none" opacity="0.9" filter="url(#soft)">
+    <path d="M512 640 L400 520 L470 410 L600 450 L512 640"/>
+    <path d="M600 450 L690 360"/>
+    <path d="M400 520 L310 450"/>
+    <path d="M600 450 L700 540"/>
+    <path d="M470 410 L560 330 L690 360"/>
+  </g>
+  <g filter="url(#soft)">
+    <circle cx="400" cy="520" r="17" fill="#5ee7ff"/>
+    <circle cx="470" cy="410" r="15" fill="#8fd3ff"/>
+    <circle cx="600" cy="450" r="19" fill="#c38bff"/>
+    <circle cx="310" cy="450" r="11" fill="#5ee7ff"/>
+    <circle cx="700" cy="540" r="12" fill="#ff6ad5"/>
+    <circle cx="560" cy="330" r="12" fill="#a9c4ff"/>
+    <circle cx="690" cy="360" r="15" fill="#ff8ae2"/>
+  </g>
+
+  <!-- spark -->
+  <g filter="url(#big)" transform="translate(690 300)">
+    <path d="M0 -92 C10 -30 30 -10 92 0 C30 10 10 30 0 92 C-10 30 -30 10 -92 0 C-30 -10 -10 -30 0 -92 Z" fill="#ffffff"/>
+  </g>
+
+  <!-- open book -->
+  <g filter="url(#drop)">
+    <path d="M512 668 C440 622 330 610 232 632 L232 760 C330 740 440 750 512 800 Z" fill="url(#page)"/>
+    <path d="M512 668 C584 622 694 610 792 632 L792 760 C694 740 584 750 512 800 Z" fill="url(#page)"/>
+  </g>
+  <path d="M512 668 L512 800" stroke="#7a8cff" stroke-width="5" stroke-linecap="round"/>
+  <g stroke="#8ea2e8" stroke-width="5" stroke-linecap="round" opacity="0.55" fill="none">
+    <path d="M285 672 C350 660 420 668 470 690"/>
+    <path d="M285 708 C350 696 420 704 470 726"/>
+    <path d="M554 690 C604 668 674 660 739 672"/>
+    <path d="M554 726 C604 704 674 696 739 708"/>
+  </g>
+  <path d="M232 760 C330 740 440 750 512 800 C584 750 694 740 792 760" stroke="url(#edge)" stroke-width="8" fill="none" stroke-linecap="round" filter="url(#soft)"/>
+</svg>

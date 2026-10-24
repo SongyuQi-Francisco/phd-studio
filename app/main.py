@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import os
+import signal
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -27,10 +29,21 @@ async def lifespan(_app: FastAPI):
     reaper = asyncio.create_task(registry.reap_idle())
     yield
     reaper.cancel()
+    bilingual.stop_all()
     await registry.close_all()
 
 
 app = FastAPI(title="PhD Studio", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def revalidate_app_files(request, call_next):
+    """App JS/CSS changes between versions; make browsers revalidate instead of using a stale copy."""
+    response = await call_next(request)
+    path = request.url.path
+    if not path.startswith(("/api/", "/vendor/")):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
 
 
 def _stem_or_404(stem: str) -> str:
@@ -173,6 +186,13 @@ async def reading_draft(stem: str) -> dict[str, str]:
         return {"takeaway": await draft_takeaway(stem)}
     except Exception as e:  # noqa: BLE001 - shown in the dialog
         raise HTTPException(502, str(e))
+
+
+@app.post("/api/shutdown")
+async def shutdown() -> dict[str, bool]:
+    """Quit button in the UI: stop the server shortly after answering."""
+    asyncio.get_running_loop().call_later(0.3, os.kill, os.getpid(), signal.SIGTERM)
+    return {"ok": True}
 
 
 @app.get("/api/status")

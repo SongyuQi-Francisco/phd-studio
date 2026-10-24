@@ -283,6 +283,14 @@ svg.i.sm { width: 15px; height: 15px; }
 .note-empty p { margin: 0 0 12px; }
 @container (max-width: 640px) { .stats { grid-template-columns: repeat(3, 1fr); } .rl-actions { opacity: 1; } }
 
+.btn.danger { background: var(--red); color: #fff; }
+.muted-p { color: var(--text-2); font-size: 13.5px; margin: -6px 0 16px; }
+.quit-screen { position: fixed; inset: 0; z-index: 80; background: var(--bg); display: grid; place-items: center; text-align: center; }
+.quit-screen h2 { margin: 18px 0 6px; font-size: 22px; }
+.quit-screen p { color: var(--text-2); margin: 0; }
+.logo.big { width: 64px; height: 64px; border-radius: 18px; margin: 0 auto; }
+.logo.big::after { width: 28px; height: 24px; border-radius: 0 13px 0 13px; }
+
 /* settings */
 .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.25); z-index: 50; display: grid; place-items: center; }
 .modal { width: min(440px, 92vw); background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); padding: 20px; }

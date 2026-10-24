@@ -54,6 +54,10 @@ claude setup-token
 read -s "T?token: " && printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$T" > ~/.config/secrets/claude.env && chmod 600 ~/.config/secrets/claude.env && unset T
 ```
 
+Desktop launcher (macOS): `launcher/make_app.sh` builds `PhD Studio.app` on your Desktop with its icon.
+Double-click it to start the server if needed and open the workbench in its own Chrome app window (or your default browser).
+The power button in the sidebar shuts the server down. Server logs go to `~/Library/Logs/PhD Studio.log`.
+
 Optional: `DEEPSEEK_API_KEY=...` in `~/.config/secrets/deepseek.env` for fast selection translation and bilingual PDFs; without it Google Translate is used.
 
 ### Vault conventions

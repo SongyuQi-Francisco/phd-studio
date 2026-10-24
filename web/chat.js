@@ -94,7 +94,7 @@ export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, r
         return m;
       });
       else if (d.type === "tool") update((m) => { m.segments.push({ type: "tool", name: d.name, summary: d.summary }); return m; });
-      else if (d.type === "permission") update((m) => { m.segments.push({ type: "perm", ...d }); return m; });
+      else if (d.type === "permission") update((m) => { m.segments.push({ ...d, type: "perm" }); return m; });
       else if (d.type === "permission_resolved") {
         setMsgs((prev) => prev.map((m) => m.segments ? { ...m, segments: m.segments.map((s) => s.type === "perm" && s.id === d.id ? { ...s, resolved: d.allowed } : s) } : m));
         if (d.allowed) onNoteChanged?.();

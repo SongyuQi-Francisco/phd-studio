@@ -11,7 +11,7 @@ function Library({ papers, current, open, onPick, onClose }) {
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState(prefs.get("libFilter", "queue"));
   const inputRef = useRef();
-  useEffect(() => { if (open) setTimeout(() => inputRef.current?.focus(), 60); }, [open]);
+  useEffect(() => { if (open) inputRef.current?.focus(); }, [open]);
   useEffect(() => prefs.set("libFilter", filter), [filter]);
 
   const shown = useMemo(() => {
@@ -310,6 +310,7 @@ function App() {
   const [view, setView] = useState("list");
   const [doneOpen, setDoneOpen] = useState(false);
   const [listVersion, setListVersion] = useState(0);
+  const [quitState, setQuitState] = useState(""); // "" | "confirm" | "done"
   const [paper, setPaper] = useState(null);
   const [drawer, setDrawer] = useState(false);
   const [tab, setTab] = useState("claude");
@@ -392,6 +393,7 @@ function App() {
         <button class=${"rail-btn" + (tab === "claude" ? " on" : "")} title="Claude 伴读" onClick=${() => setTab("claude")}><${Icon} name="chat" /></button>
         <button class=${"rail-btn" + (tab === "note" ? " on" : "")} title="笔记" onClick=${() => setTab("note")}><${Icon} name="note" /></button>`}
       <div class="spacer" />
+      <button class="rail-btn" title="关闭工作台" onClick=${() => setQuitState("confirm")}><${Icon} name="power" /></button>
       <button class="rail-btn" title="设置" onClick=${() => { refreshStatus(); setSettingsOpen(true); }}>
         <${Icon} name="settings" />${status && html`<span class=${"dot " + (claudeOk ? "ok" : "bad")} />`}
       </button>
@@ -422,6 +424,14 @@ function App() {
       onClose=${() => setDoneOpen(false)} onSaved=${() => { setDoneOpen(false); toast("已记为读完"); loadPaper(stem); }} />`}
     ${settingsOpen && status && html`<${Settings} status=${status} onClose=${() => setSettingsOpen(false)} onSaved=${refreshStatus} />`}
     ${toastMsg && html`<div class="toast">${toastMsg}</div>`}
+    ${quitState === "confirm" && html`<div class="modal-bg" onClick=${(e) => e.target === e.currentTarget && setQuitState("")}>
+      <div class="modal">
+        <h2>关闭工作台？</h2>
+        <p class="muted-p">正在进行的 Claude 回答和双语生成会停止。对话、阅读清单都已保存，下次从桌面图标打开即可。</p>
+        <div class="row-end"><button class="btn ghost" onClick=${() => setQuitState("")}>取消</button>
+          <button class="btn danger" onClick=${async () => { try { await api("/api/shutdown", { method: "POST" }); } catch {} setQuitState("done"); setTimeout(() => window.close(), 600); }}>关闭</button></div>
+      </div></div>`}
+    ${quitState === "done" && html`<div class="quit-screen"><div><div class="logo big" /><h2>工作台已关闭</h2><p>可以关掉这个窗口了。下次双击桌面上的 PhD Studio 图标启动。</p></div></div>`}
   </div>`;
 }
 
