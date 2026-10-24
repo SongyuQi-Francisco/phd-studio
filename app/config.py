@@ -118,6 +118,8 @@ def secret(key: str, *files: str) -> str:
 
 
 DEFAULT_SETTINGS: dict[str, Any] = {
+    # Make bilingual PDFs ahead of time when a reading item becomes "T1" or "T1T2"; "off" = only on click.
+    "bilingual_prefetch": "T1T2",
     # "" = whatever the Claude CLI defaults to for this account.
     "claude_model": "",
     # Engine for selection translation and full-PDF translation: "deepseek" | "google".
