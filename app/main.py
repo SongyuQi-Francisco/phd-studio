@@ -571,4 +571,6 @@ async def chat_ws(ws: WebSocket, stem: str) -> None:
                 chat.answer_permission(pid, False)
 
 
+from .track_api import router as track_router  # noqa: E402  (追踪 page: scholars, matrix, 立即巡检)
+app.include_router(track_router)
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")

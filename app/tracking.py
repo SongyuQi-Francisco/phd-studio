@@ -13,6 +13,7 @@ import re
 import threading
 import time
 import xml.etree.ElementTree as ET
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -111,6 +112,31 @@ def labs() -> list[dict[str, Any]]:
     return out
 
 
+def lab_matrix() -> dict[str, Any]:
+    """Papers kept per lab per weekly run (for the cross-lab heatmap), oldest run first."""
+    d = _runs_dir()
+    runs_, counts, tiers = [], {}, {}
+    for f in sorted(d.glob("*/candidates.json")) if d else []:
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        r = data.get("run", f.parent.name)
+        runs_.append({"run": r, "since": data.get("since"), "by_tier": data.get("stats", {}).get("by_tier", {}),
+                      "kept": data.get("stats", {}).get("kept", len(data.get("papers", [])))})
+        for p in data.get("papers", []):
+            for lab in p.get("labs", []):
+                counts.setdefault(lab, {}).setdefault(r, 0)
+                counts[lab][r] += 1
+                tiers.setdefault(lab, Counter())[p.get("tier")] += 1
+    roster = TRACKER_DIR / "config" / "roster.json" if TRACKER_DIR else None
+    try:
+        names = {k: v.get("name", k) for k, v in json.loads(roster.read_text(encoding="utf-8"))["tracks"].items()} if roster else {}
+    except (OSError, KeyError, json.JSONDecodeError):
+        names = {}
+    return {"runs": runs_, "counts": counts, "tiers": {k: dict(v) for k, v in tiers.items()}, "track_names": names}
+
+
 # ---------- follows: live arXiv feed ----------
 
 def follows() -> list[dict[str, Any]]:
@@ -158,6 +184,7 @@ def _fetch(q: str, max_results: int) -> list[dict[str, Any]]:
         aid = (e.findtext("a:id", "", ns) or "").rsplit("/", 1)[-1]
         out.append({"arxiv": re.sub(r"v\d+$", "", aid), "title": " ".join((e.findtext("a:title", "", ns) or "").split()),
                     "authors": [a.findtext("a:name", "", ns) for a in e.findall("a:author", ns)][:6],
+                    "categories": [c.get("term") for c in e.findall("a:category", ns)],
                     "published": (e.findtext("a:published", "", ns) or "")[:10],
                     "summary": " ".join((e.findtext("a:summary", "", ns) or "").split())[:500]})
     return out
