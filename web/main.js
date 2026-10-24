@@ -8,7 +8,7 @@ import { ReadingPage, DoneDialog } from "/reading.js";
 import { OverviewPage, TimelinePage, VenueSheet, IdeaCapture } from "/plan.js";
 import { IdeasPage } from "/ideas.js";
 import { TrackPage } from "/track.js";
-import { DirectionPage } from "/direction.js";
+import { DirectionPage, LinePanel } from "/direction.js";
 import { NoteSheet } from "/note.js";
 
 // ---------------- library ----------------
@@ -400,6 +400,11 @@ function App() {
   const toastTimer = useRef(null);
   const chatRef = useRef(null);
   const studioRef = useRef(null);
+  // Research-line chats: the ones mounted this session (kept so a running answer survives switching) and the one shown.
+  const [lineChats, setLineChats] = useState([]);
+  const [sideLine, setSideLine] = useState(null); // chat key; null = 工作台助手
+  const lineRefs = useRef({});
+  const kicked = useRef(new Set());
 
   const toast = useCallback((text, { action } = {}) => {
     clearTimeout(toastTimer.current);
@@ -493,9 +498,29 @@ function App() {
   // Hand a task to the workbench assistant (opens its panel if needed).
   const ask = (prompt, label) => {
     setAssistant(true);
+    setSideLine(null);
     const trySend = (n) => studioRef.current ? studioRef.current.send(prompt, { selection: null, images: [], label })
       : n > 0 && setTimeout(() => trySend(n - 1), 120);
     setTimeout(() => trySend(20), 60);
+  };
+  // Show a research line's own chat in the side panel; "discuss" starts it if it is new, "packet" drafts an advisor packet.
+  const openLine = (l, action) => {
+    const line = { key: l.chat_key, name: l.name };
+    setLineChats((ls) => {
+      if (ls.some((x) => x.key === line.key)) return ls;
+      ls.slice(0, -3).forEach((x) => delete lineRefs.current[x.key]); // unmounted: never hand it work
+      return [...ls.slice(-3), line];
+    });
+    setSideLine(line.key);
+    setAssistant(true);
+    const run = (n) => {
+      const r = lineRefs.current[line.key];
+      if (!r) return n > 0 && setTimeout(() => run(n - 1), 120);
+      if (action === "packet") r.packet();
+      else if (action === "discuss" && !l.chat?.turns && !kicked.current.has(line.key)) { kicked.current.add(line.key); r.kickoff(); }
+      else r.focus();
+    };
+    setTimeout(() => run(20), 60);
   };
   // target: {page} or {sec} from a page / section link in a note
   const openPaper = (s, target) => {
@@ -532,7 +557,8 @@ function App() {
       onAsk=${ask} onOpenNote=${setNotePath} onOpenPaper=${openPaper} toast=${toast} />`;
   else if (view === "track") page = html`<${TrackPage} version=${dataVersion} onAsk=${ask} toast=${toast} onOpenPaper=${openPaper}
       onOpenNote=${setNotePath} onChanged=${bump} />`;
-  else if (view === "direction") page = html`<${DirectionPage} version=${dataVersion} onOpenNote=${setNotePath} onAsk=${ask} onOpenVenue=${setVenueKey} />`;
+  else if (view === "direction") page = html`<${DirectionPage} version=${dataVersion} onOpenNote=${setNotePath} onOpenVenue=${setVenueKey}
+      onLine=${openLine} activeLine=${studioSide ? sideLine : null} />`;
   else page = html`<${OverviewPage} version=${dataVersion} onOpenVenue=${setVenueKey} go=${go} />`;
 
   return html`<div class=${"shell" + (reading || studioSide ? "" : " no-side")}>
@@ -575,10 +601,16 @@ function App() {
     </aside>`}
     ${studioSide && html`<div class="resizer" onMouseDown=${startResize} />
     <aside class="side">
-      <${ChatPanel} stem="studio" paper=${null} attachments=${studioAtt} setAttachments=${setStudioAtt}
-        registerSend=${(api_) => (studioRef.current = api_)} claudeOk=${claudeOk} title="工作台助手"
-        chips=${STUDIO_CHIPS} emptyHint="跟我说要做的事：加里程碑、设投稿目标、记想法、把论文推进清单、查会议截稿……"
-        onStudioChanged=${() => { bump(); }} />
+      <div style=${{ display: sideLine ? "none" : "contents" }}>
+        <${ChatPanel} stem="studio" paper=${null} attachments=${studioAtt} setAttachments=${setStudioAtt}
+          registerSend=${(api_) => (studioRef.current = api_)} claudeOk=${claudeOk} title="工作台助手"
+          chips=${STUDIO_CHIPS} emptyHint="跟我说要做的事：加里程碑、设投稿目标、记想法、把论文推进清单、查会议截稿……"
+          onStudioChanged=${() => { bump(); }} />
+      </div>
+      ${lineChats.map((l) => html`<div key=${l.key} style=${{ display: sideLine === l.key ? "contents" : "none" }}>
+        <${LinePanel} line=${l} claudeOk=${claudeOk} registerSend=${(api_) => (lineRefs.current[l.key] = api_)} toast=${toast}
+          onBack=${() => setSideLine(null)} onStudioChanged=${bump} onOpenNote=${setNotePath} />
+      </div>`)}
     </aside>`}
 
     ${notePath && html`<${NoteSheet} path=${notePath} onClose=${() => setNotePath(null)} onOpenPaper=${openPaper}

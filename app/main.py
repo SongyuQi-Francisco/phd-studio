@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import bilingual, direction, excerpt, idea_ops, library, notes, plan, reading, tracking, venues
+from . import bilingual, direction, excerpt, idea_ops, library, line_chat, notes, plan, reading, tracking, venues
 from .claude_chat import claude_status, draft_takeaway, history, registry
 from .config import CROPS_DIR, IDEA_RADAR, PROFILE, STUDIO_DIR, load_settings, save_settings
 from .translate import translate
@@ -53,6 +53,12 @@ async def revalidate_app_files(request, call_next):
 
 def _stem_or_404(stem: str) -> str:
     if stem == "studio":  # the workbench-wide assistant
+        return stem
+    if line_chat.is_line_key(stem):  # a research line's own chat
+        try:
+            line_chat.resolve(stem)
+        except FileNotFoundError:
+            raise HTTPException(404, "没有这条研究线")
         return stem
     try:
         library.validate(stem)
@@ -579,4 +585,6 @@ from .track_api import router as track_router  # noqa: E402  (追踪 page: schol
 app.include_router(track_router)
 from .idea_api import router as idea_router  # noqa: E402  (想法: tags, merge, restore)
 app.include_router(idea_router)
+from .line_api import router as line_router  # noqa: E402  (方向 page: research-line chats, advisor packets)
+app.include_router(line_router)
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")

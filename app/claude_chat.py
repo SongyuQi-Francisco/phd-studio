@@ -35,7 +35,7 @@ from claude_agent_sdk import (
 )
 from fastapi import WebSocket
 
-from . import library
+from . import library, line_chat
 from .config import (
     AGENTS_MD,
     CHATS_DIR,
@@ -459,6 +459,21 @@ class StudioChat(PaperChat):
         return opts
 
 
+class LineChat(StudioChat):
+    """A research line's own long-running conversation: the studio tools plus the line's context."""
+
+    def __init__(self, stem: str, line: dict[str, Any]):
+        super().__init__(stem)
+        self.line = line
+
+    def _prompt(self) -> str:
+        try:  # fresh paths, kill states and deadlines each time the session (re)connects
+            self.line = line_chat.resolve(self.stem)
+        except FileNotFoundError:
+            pass
+        return line_chat.system_prompt(self.line)
+
+
 class ChatRegistry:
     def __init__(self) -> None:
         self.chats: dict[str, PaperChat] = {}
@@ -467,6 +482,10 @@ class ChatRegistry:
         if stem == STUDIO_KEY:
             if stem not in self.chats:
                 self.chats[stem] = StudioChat(stem)
+            return self.chats[stem]
+        if line_chat.is_line_key(stem):
+            if stem not in self.chats:
+                self.chats[stem] = LineChat(stem, line_chat.resolve(stem))
             return self.chats[stem]
         library.validate(stem)
         if stem not in self.chats:
