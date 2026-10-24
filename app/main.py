@@ -16,9 +16,9 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import bilingual, library, plan, reading, venues
+from . import bilingual, direction, library, notes, plan, reading, tracking, venues
 from .claude_chat import claude_status, draft_takeaway, history, registry
-from .config import CROPS_DIR, PROFILE, STUDIO_DIR, load_settings, save_settings
+from .config import CROPS_DIR, IDEA_RADAR, PROFILE, STUDIO_DIR, load_settings, save_settings
 from .translate import translate
 
 WEB_DIR = STUDIO_DIR / "web"
@@ -328,6 +328,84 @@ def idea_patch(rid: str, body: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(404, str(e))
 
 
+@app.get("/api/note")
+def vault_note(path: str) -> dict[str, Any]:
+    try:
+        n = notes.read(notes.resolve(path))
+    except FileNotFoundError:
+        raise HTTPException(404, "没有这篇笔记")
+    return {k: n[k] for k in ("path", "name", "frontmatter", "body", "obsidian_url")}
+
+
+@app.get("/api/note/find")
+def vault_note_find(name: str) -> dict[str, Any]:
+    p = notes.find_by_name(name)
+    if not p:
+        raise HTTPException(404, "vault 里没有这篇笔记")
+    rel = notes.rel(p)
+    paper = p.parent.resolve() == library.PAPERS_DIR.resolve()
+    return {"path": rel, "paper": p.stem if paper else None}
+
+
+@app.get("/api/direction")
+def direction_page() -> dict[str, Any]:
+    return {"lines": direction.lines(), "radar": direction.radar(), "roadmap": direction.roadmap(),
+            "courses": direction.courses()}
+
+
+@app.get("/api/track/runs")
+def track_runs() -> dict[str, Any]:
+    return {"runs": tracking.runs()}
+
+
+@app.get("/api/track/runs/{run_id}")
+def track_run(run_id: str) -> dict[str, Any]:
+    try:
+        return tracking.run(run_id)
+    except FileNotFoundError:
+        raise HTTPException(404, "没有这次运行")
+
+
+@app.get("/api/track/labs")
+def track_labs() -> dict[str, Any]:
+    return {"labs": tracking.labs()}
+
+
+@app.get("/api/track/follows")
+def track_follows() -> dict[str, Any]:
+    return {"follows": tracking.follows()}
+
+
+@app.post("/api/track/follows")
+def track_follow_add(body: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return tracking.add_follow(body.get("kind", "keyword"), body.get("value", ""), body.get("note"))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/track/follows/{fid}")
+def track_follow_remove(fid: str) -> dict[str, bool]:
+    try:
+        tracking.remove_follow(fid)
+    except KeyError:
+        raise HTTPException(404)
+    return {"ok": True}
+
+
+@app.get("/api/track/feed")
+async def track_feed(refresh: bool = False, days: int = 30) -> dict[str, Any]:
+    return {"feed": await run_in_threadpool(tracking.feed, days, 8, refresh)}
+
+
+@app.post("/api/track/capture")
+def track_capture(body: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return tracking.capture(body.get("text", ""), body.get("reason", ""), body.get("tier"), body.get("lines"))
+    except reading.ReadingError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.get("/api/overview")
 def overview() -> dict[str, Any]:
     tl = plan.timeline(days_back=0, days_ahead=120)
@@ -349,7 +427,8 @@ def overview() -> dict[str, Any]:
 @app.get("/api/status")
 async def status() -> dict[str, Any]:
     return {"claude": await run_in_threadpool(claude_status), "settings": load_settings(),
-            "focus": PROFILE.get("current_focus", ""), "lines": PROFILE.get("lines", [])}
+            "focus": PROFILE.get("current_focus", ""), "lines": PROFILE.get("lines", []),
+            "idea_radar": notes.rel(IDEA_RADAR) if IDEA_RADAR.exists() else None}
 
 
 @app.post("/api/settings")

@@ -35,6 +35,8 @@ const PATHS = {
   calendar: "M4 5h16v16H4zM4 9h16M8 3v4M16 3v4",
   bulb: "M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.8.8 1 1.6 1 2.5h6c0-.9.2-1.7 1-2.5A6 6 0 0 0 12 3z",
   star: "M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z",
+  compass: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM15.5 8.5l-2 5-5 2 2-5z",
+  radar: "M12 12l6-6M19.1 7.5A9 9 0 1 1 16.5 4.2M15.5 9.5a5 5 0 1 1-2-1.3M12 12h.01",
   power: "M12 3v9M6.4 6.4a8 8 0 1 0 11.2 0",
   clock: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2",
   right: "M9 6l6 6-6 6",
@@ -68,7 +70,8 @@ export function renderMarkdown(src) {
     catch { return esc(m.tex); }
   });
   out = out.replace(/\[(?:p\.|P\.|第)\s?(\d+)(?:\s?页)?\]/g, '<a class="pagelink" data-page="$1">p.$1</a>');
-  out = out.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, t, a) => `<span class="wikilink">${a || t}</span>`);
+  out = out.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, t, a) =>
+    `<span class="wikilink" data-target="${esc(t.split("#")[0].trim())}">${a || t}</span>`);
   return out;
 }
 

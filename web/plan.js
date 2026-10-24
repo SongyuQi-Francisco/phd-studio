@@ -291,20 +291,7 @@ function PlanEditor({ plan, reload, toast, onOpenVenue }) {
   </div>`;
 }
 
-// ---------------- ideas (page stub + quick capture) ----------------
-
-export function IdeasPage({ version }) {
-  const [ideas, setIdeas] = useState([]);
-  useEffect(() => { api("/api/ideas").then((r) => setIdeas(r.ideas)); }, [version]);
-  return html`<div class="page"><div class="page-inner">
-    <div class="page-head"><h1>想法</h1><span class="muted">⌘I 随时记 · 整理成 idea 笔记的功能在下一步</span></div>
-    <div class="card list-card">
-      ${ideas.length === 0 && html`<div class="muted pad">还没有想法。任何页面按 ⌘I，或对助手说“记一个想法：…”</div>`}
-      ${ideas.map((i) => html`<div class="prow"><div class="p-main"><div>${i.text}</div>
-        <div class="muted small">${(i.created_at || "").replace("T", " ").slice(0, 16)} ${i.line ? "· " + i.line : ""} ${i.paper ? "· " + i.paper + (i.page ? " p." + i.page : "") : ""} ${i.source === "assistant" ? "· 助手记录" : ""}</div></div></div>`)}
-    </div>
-  </div></div>`;
-}
+// ---------------- quick idea capture ----------------
 
 export function IdeaCapture({ context, lines, onClose, onSaved }) {
   const [text, setText] = useState("");

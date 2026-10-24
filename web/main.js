@@ -4,7 +4,11 @@ import { html, Icon, api, prefs } from "/lib.js";
 import { PdfView } from "/pdfview.js";
 import { ChatPanel, NotePanel, PROMPTS } from "/chat.js";
 import { ReadingPage, DoneDialog } from "/reading.js";
-import { OverviewPage, TimelinePage, IdeasPage, VenueSheet, IdeaCapture } from "/plan.js";
+import { OverviewPage, TimelinePage, VenueSheet, IdeaCapture } from "/plan.js";
+import { IdeasPage } from "/ideas.js";
+import { TrackPage } from "/track.js";
+import { DirectionPage } from "/direction.js";
+import { NoteSheet } from "/note.js";
 
 // ---------------- library ----------------
 
@@ -325,6 +329,7 @@ function App() {
   const [tab, setTab] = useState("claude");
   const [assistant, setAssistant] = useState(prefs.get("assistant", true));
   const [venueKey, setVenueKey] = useState(null);
+  const [notePath, setNotePath] = useState(null);
   const [ideaOpen, setIdeaOpen] = useState(false);
   const [status, setStatus] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -396,6 +401,14 @@ function App() {
     else { setAttachments((a) => ({ ...a, images: [...a.images, crop] })); toChat(); }
   };
   const goPage = (n) => viewRef.current?.goTo(n);
+  // Hand a task to the workbench assistant (opens its panel if needed).
+  const ask = (prompt, label) => {
+    setAssistant(true);
+    const trySend = (n) => studioRef.current ? studioRef.current.send(prompt, { selection: null, images: [], label })
+      : n > 0 && setTimeout(() => trySend(n - 1), 120);
+    setTimeout(() => trySend(20), 60);
+  };
+  const openPaper = (s) => { setNotePath(null); pick(s); };
 
   const startResize = (e) => {
     e.preventDefault();
@@ -416,7 +429,11 @@ function App() {
       onSelectionAction=${onSelectionAction} onCropAction=${onCropAction} onDone=${() => setDoneOpen(true)} onAddToList=${addToList} />`;
   else if (view === "list") page = html`<${ReadingPage} version=${dataVersion} toast=${toast} onOpen=${(i) => pick(i.key)} />`;
   else if (view === "timeline") page = html`<${TimelinePage} version=${dataVersion} tab=${tlTab} onOpenVenue=${setVenueKey} toast=${toast} onChanged=${bump} />`;
-  else if (view === "ideas") page = html`<${IdeasPage} version=${dataVersion} />`;
+  else if (view === "ideas") page = html`<${IdeasPage} version=${dataVersion} lines=${status?.lines || []} radarPath=${status?.idea_radar}
+      onAsk=${ask} onOpenNote=${setNotePath} onOpenPaper=${openPaper} toast=${toast} />`;
+  else if (view === "track") page = html`<${TrackPage} version=${dataVersion} onAsk=${ask} toast=${toast} onOpenPaper=${openPaper}
+      onOpenNote=${setNotePath} onChanged=${bump} />`;
+  else if (view === "direction") page = html`<${DirectionPage} version=${dataVersion} onOpenNote=${setNotePath} onAsk=${ask} onOpenVenue=${setVenueKey} />`;
   else page = html`<${OverviewPage} version=${dataVersion} onOpenVenue=${setVenueKey} go=${go} />`;
 
   return html`<div class=${"shell" + (reading || studioSide ? "" : " no-side")}>
@@ -426,6 +443,8 @@ function App() {
       ${nav("list", "inbox", "阅读清单")}
       ${nav("timeline", "calendar", "时间线 · 会议与规划")}
       ${nav("ideas", "bulb", "想法 (⌘I 随手记)")}
+      ${nav("direction", "compass", "方向 · 研究线与路线图")}
+      ${nav("track", "radar", "追踪 · 同行动态与捕捉")}
       <button class=${"rail-btn" + (drawer ? " on" : "")} title="论文库 (⌘K)" onClick=${() => setDrawer(!drawer)}><${Icon} name="library" /></button>
       ${stem && !reading && html`<button class="rail-btn" title="回到正在读的论文" onClick=${() => setView("reader")}><${Icon} name="book" /></button>`}
       ${reading && html`<div class="rail-sep" />
@@ -463,6 +482,8 @@ function App() {
         onStudioChanged=${() => { bump(); }} />
     </aside>`}
 
+    ${notePath && html`<${NoteSheet} path=${notePath} onClose=${() => setNotePath(null)} onOpenPaper=${openPaper}
+      actions=${[{ label: "和助手讨论", run: (n) => { setNotePath(null); ask(`我们来讨论这篇笔记：${n.path}。先读它，然后告诉我要点、和我当前课题的关系、以及值得跟进的下一步。`, `讨论 ${n.name}`); } }]} />`}
     ${venueKey && html`<${VenueSheet} vkey=${venueKey} onClose=${() => setVenueKey(null)} toast=${toast} onChanged=${bump} />`}
     ${ideaOpen && html`<${IdeaCapture} lines=${status?.lines || []} context=${reading ? { paper: stem, page: pageRef.current } : null}
       onClose=${() => setIdeaOpen(false)} onSaved=${() => { setIdeaOpen(false); toast("想法已记下"); bump(); }} />`}

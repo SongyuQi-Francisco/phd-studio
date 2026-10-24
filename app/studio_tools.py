@@ -14,7 +14,7 @@ from typing import Any
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
-from . import plan, reading, venues
+from . import plan, reading, tracking, venues
 
 SERVER = "studio"
 
@@ -149,6 +149,44 @@ def build(emit: Callable[[dict[str, Any]], Awaitable[None]]):
         await changed("ideas", f"想法：{rec['text'][:40]}", rec)
         return _ok(rec)
 
+    @tool("idea_update", "修改想法：status(new/kept/promoted/dropped)、line、text、note（整理成的 idea 笔记的 vault 路径）。",
+          _obj({"id": S, "status": S, "line": S, "text": S, "note": S}, ["id"]))
+    async def idea_update(a):
+        if a.get("status") and a["status"] not in plan.I_STATUS:
+            return _err(f"status must be one of {plan.I_STATUS}")
+        try:
+            rec = plan.idea_store.update("ideas", a["id"], {k: v for k, v in a.items() if k != "id"})
+        except KeyError:
+            return _err(f"no idea {a['id']}")
+        await changed("ideas", f"想法：已更新（{rec.get('status')}）", rec)
+        return _ok(rec)
+
+    @tool("follow", "关注一个关键词或学者（追踪页会实时查 arXiv 新论文）；remove=true 取消关注。kind: keyword|person。",
+          _obj({"kind": S, "value": S, "note": S, "remove": {"type": "boolean"}}, ["kind", "value"]))
+    async def follow(a):
+        try:
+            if a.get("remove"):
+                hit = next((f for f in tracking.follows() if f["kind"] == a["kind"] and f["value"].lower() == a["value"].lower()), None)
+                if not hit:
+                    return _err("没有这个关注")
+                tracking.remove_follow(hit["id"])
+                await changed("track", f"取消关注：{a['value']}", hit)
+                return _ok({"removed": hit["id"]})
+            rec = tracking.add_follow(a["kind"], a["value"], a.get("note"))
+        except ValueError as e:
+            return _err(str(e))
+        await changed("track", f"关注{'学者' if a['kind'] == 'person' else '关键词'}：{a['value']}", rec)
+        return _ok(rec)
+
+    @tool("tracker_latest", "最近一次每周实验室追踪的结果：Tier 统计、Claude 周报分析、论文列表。", _obj({}, []))
+    async def tracker_latest(a):
+        rs = tracking.runs()
+        if not rs:
+            return _err("没有追踪记录")
+        r = tracking.run(rs[0]["run"])
+        r["papers"] = [{k: p[k] for k in ("arxiv", "title", "tier", "labs", "published", "note", "listed")} for p in r["papers"]]
+        return _ok(r)
+
     @tool("idea_list", "查看想法收件箱。", _obj({}, []))
     async def idea_list(a):
         return _ok(plan.ideas()[:50])
@@ -162,6 +200,7 @@ def build(emit: Callable[[dict[str, Any]], Awaitable[None]]):
         return _ok({"today": now, "events": tl["events"], "targets": tl["targets"]})
 
     tools = [reading_push, reading_list, reading_update, milestone_add, milestone_update, target_add,
-             target_update, venue_search, venue_watch, idea_add, idea_list, timeline]
+             target_update, venue_search, venue_watch, idea_add, idea_update, idea_list, follow,
+             tracker_latest, timeline]
     names = [f"mcp__{SERVER}__{t.name}" for t in tools]
     return create_sdk_mcp_server(SERVER, tools=tools), names

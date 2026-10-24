@@ -178,7 +178,8 @@ STUDIO_TOOL_LABELS = {
     "reading_push": "加入阅读清单", "reading_list": "查看阅读清单", "reading_update": "更新阅读清单",
     "milestone_add": "添加里程碑", "milestone_update": "更新里程碑", "target_add": "设定投稿目标",
     "target_update": "更新投稿目标", "venue_search": "查会议", "venue_watch": "关注会议",
-    "idea_add": "记想法", "idea_list": "查看想法", "timeline": "查看时间线",
+    "idea_add": "记想法", "idea_list": "查看想法", "timeline": "查看时间线", "idea_update": "更新想法",
+    "follow": "关注", "tracker_latest": "查看本周追踪",
 }
 
 
@@ -421,7 +422,8 @@ def _studio_prompt() -> str:
 - 阅读清单：reading_push / reading_list / reading_update
 - 规划：milestone_add / milestone_update（里程碑、Gate、Kill criteria 检查点），target_add / target_update（投稿目标与备选）
 - 会议：venue_search（CORE ICORE2026 + CCF 全量库、截稿、录用率、核实过的赛道和页数）、venue_watch
-- 想法：idea_add / idea_list
+- 想法：idea_add / idea_update / idea_list。把想法整理成正式 idea 笔记时：按 AGENTS.md 的 Idea Maintenance 和 Idea Note Template 写进 idea 笔记文件夹（Write 会让用户确认），写完用 idea_update 标为 promoted 并填 note 路径
+- 追踪：tracker_latest（每周实验室追踪）、follow（关注关键词 / 学者，追踪页实时查 arXiv）
 - 时间线：timeline
 意图明确就直接做；有歧义（比如不确定是哪篇论文、哪条研究线）先问一句。不要编造会议日期，以 venue_search 返回的为准，并说明数据来源（ccfddl / CORE / 官网）。
 

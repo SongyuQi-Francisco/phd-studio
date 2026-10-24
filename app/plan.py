@@ -3,6 +3,7 @@
 plan.yaml (vault):  watched   {id, venue}
                     targets   {id, title, line, venue, alternatives[], status, notes}
                     milestones{id, title, date, line, kind, status, notes}
+                    follows   {id, kind: keyword|person, value, note}
 ideas.yaml (vault): ideas     {id, text, line, paper, page, tags[], status}
 """
 from __future__ import annotations
@@ -19,7 +20,7 @@ M_STATUS = ("todo", "doing", "done", "warn")
 T_STATUS = ("planning", "writing", "submitted", "accepted", "rejected", "dropped")
 I_STATUS = ("new", "kept", "promoted", "dropped")
 
-plan_store = Store(PLAN_FILE, ("watched", "targets", "milestones"),
+plan_store = Store(PLAN_FILE, ("watched", "targets", "milestones", "follows"),
                    "# Planning data, managed by PhD Studio (studio milestone / studio target / the app).\n")
 idea_store = Store(IDEAS_FILE, ("ideas",),
                    "# Idea inbox, managed by PhD Studio (studio idea \"...\" / ⌘I in the app).\n")

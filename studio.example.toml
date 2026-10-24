@@ -13,6 +13,12 @@ zotero = "~/Zotero"                            # Zotero data dir (read-only)
 secrets = "~/.config/secrets"                  # claude.env / deepseek.env live here
 # claude_cli = "~/.local/bin/claude"           # default: `claude` on PATH
 # data = "~/Library/Application Support/PhD Studio"  # downloaded and translated PDFs
+ideas_dir = "Ideas"                            # idea and research-line notes
+idea_template = "Templates/Idea Note Template.md"
+roadmap = "Atlas/PhD Roadmap.md"
+idea_radar = "Ideas/Idea Radar.md"
+lab_tracker = "Lab Tracker"                    # optional: weekly lab tracker notes (Labs/, Runs/)
+# tracker = "~/code/research_tracker"          # optional: tracker code dir with runs/<date>/candidates.json
 extra_read_dirs = []                           # other folders Claude may read, e.g. ["../code"]
 
 [profile]
