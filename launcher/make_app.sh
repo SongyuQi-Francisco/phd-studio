@@ -23,6 +23,7 @@ for s in 16 32 128 256 512; do
   sips -z $((s * 2)) $((s * 2)) "$WORK/icon.png" --out "$WORK/AppIcon.iconset/icon_${s}x${s}@2x.png" >/dev/null
 done
 iconutil -c icns "$WORK/AppIcon.iconset" -o "$WORK/AppIcon.icns"
+cp "$WORK/icon.png" "$HERE/icon.png"  # Dock icon for the native window (git-ignored)
 
 # ---- bundle: a standard AppleScript applet (a real executable) that runs Resources/launch.sh
 rm -rf "$APP"
@@ -40,26 +41,13 @@ cp "$WORK/AppIcon.icns" "$APP/Contents/Resources/applet.icns"
 
 sed "s|@STUDIO@|$STUDIO|" > "$APP/Contents/Resources/launch.sh" <<'SCRIPT'
 #!/bin/bash
-# Start the PhD Studio server if it is not running, then open the workbench window.
+# Open the PhD Studio window (starts the local server inside it); if it is already
+# running, the existing window comes to the front.
 STUDIO="@STUDIO@"
-URL="http://127.0.0.1:8770"
 LOG="$HOME/Library/Logs/PhD Studio.log"
-up() { curl -s -m 1 -o /dev/null "$URL/api/status"; }
-
-if ! up; then
-  nohup "$STUDIO/start.sh" >>"$LOG" 2>&1 </dev/null &
-  for _ in $(seq 1 80); do sleep 0.25; up && break; done
-  if ! up; then
-    osascript -e 'display dialog "PhD Studio 没能启动。详细原因在 ~/Library/Logs/PhD Studio.log" buttons {"好"} default button 1 with icon caution with title "PhD Studio"' >/dev/null
-    exit 1
-  fi
-fi
-
-if [ -d "/Applications/Google Chrome.app" ]; then
-  open -na "Google Chrome" --args --app="$URL" --window-size=1440,900
-else
-  open "$URL"
-fi
+UV="$(command -v uv || echo "$HOME/.local/bin/uv")"
+cd "$STUDIO" || exit 1
+nohup "$UV" run --quiet python -m app.desktop >>"$LOG" 2>&1 </dev/null &
 SCRIPT
 chmod +x "$APP/Contents/Resources/launch.sh"
 codesign --force --deep -s - "$APP" >/dev/null 2>&1 || true

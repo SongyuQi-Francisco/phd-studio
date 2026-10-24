@@ -429,7 +429,7 @@ function App() {
         <h2>关闭工作台？</h2>
         <p class="muted-p">正在进行的 Claude 回答和双语生成会停止。对话、阅读清单都已保存，下次从桌面图标打开即可。</p>
         <div class="row-end"><button class="btn ghost" onClick=${() => setQuitState("")}>取消</button>
-          <button class="btn danger" onClick=${async () => { try { await api("/api/shutdown", { method: "POST" }); } catch {} setQuitState("done"); setTimeout(() => window.close(), 600); }}>关闭</button></div>
+          <button class="btn danger" onClick=${async () => { let r = {}; try { r = await api("/api/shutdown", { method: "POST" }); } catch {} if (!r.window) { setQuitState("done"); setTimeout(() => window.close(), 600); } }}>关闭</button></div>
       </div></div>`}
     ${quitState === "done" && html`<div class="quit-screen"><div><img class="logo-img big" src="/icon.svg" alt="" /><h2>工作台已关闭</h2><p>可以关掉这个窗口了。下次双击桌面上的 PhD Studio 图标启动。</p></div></div>`}
   </div>`;

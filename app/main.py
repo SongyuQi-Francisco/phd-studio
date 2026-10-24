@@ -201,8 +201,24 @@ async def reading_draft(stem: str) -> dict[str, str]:
 
 @app.post("/api/shutdown")
 async def shutdown() -> dict[str, bool]:
-    """Quit button in the UI: stop the server shortly after answering."""
-    asyncio.get_running_loop().call_later(0.3, os.kill, os.getpid(), signal.SIGTERM)
+    """Quit button in the UI. In the desktop window this closes the window (which stops the
+    server); when the server runs on its own, it stops the server."""
+    quit_ = getattr(app.state, "quit", None)
+    loop = asyncio.get_running_loop()
+    if quit_:
+        loop.call_later(0.3, quit_)
+    else:
+        loop.call_later(0.3, os.kill, os.getpid(), signal.SIGTERM)
+    return {"ok": True, "window": bool(quit_)}
+
+
+@app.post("/api/focus")
+async def focus() -> dict[str, bool]:
+    """Launcher double-clicked while running: bring the desktop window forward."""
+    show = getattr(app.state, "focus", None)
+    if show is None:
+        raise HTTPException(404, "no desktop window")
+    show()
     return {"ok": True}
 
 

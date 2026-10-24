@@ -7,9 +7,11 @@ or the note's arXiv / source link into the cache (never into the vault).
 """
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import sqlite3
+import threading
 from urllib.parse import quote
 from functools import lru_cache
 from pathlib import Path
@@ -154,21 +156,29 @@ def note_path(stem: str) -> Path:
 _ZOTERO_SNAPSHOT = DATA_DIR / "zotero_snapshot.sqlite"
 
 
+_ZOTERO_LOCK = threading.Lock()
+
+
 def _zotero_db() -> sqlite3.Connection | None:
     src = ZOTERO_DIR / "zotero.sqlite"
     if not src.exists():
         return None
     # Zotero keeps the DB locked while running; read a copy refreshed on change.
-    newest = max(f.stat().st_mtime for f in ZOTERO_DIR.glob("zotero.sqlite*") if f.is_file())
-    if not _ZOTERO_SNAPSHOT.exists() or _ZOTERO_SNAPSHOT.stat().st_mtime < newest:
-        for suffix in ("", "-wal", "-shm"):
-            s = ZOTERO_DIR / f"zotero.sqlite{suffix}"
-            d = Path(f"{_ZOTERO_SNAPSHOT}{suffix}")
-            if s.exists():
-                shutil.copy2(s, d)
-            elif d.exists():
-                d.unlink()
-    return sqlite3.connect(_ZOTERO_SNAPSHOT)
+    # Copy under a lock into temp names, then swap in, so concurrent requests never
+    # open a half-copied snapshot.
+    with _ZOTERO_LOCK:
+        newest = max(f.stat().st_mtime for f in ZOTERO_DIR.glob("zotero.sqlite*") if f.is_file())
+        if not _ZOTERO_SNAPSHOT.exists() or _ZOTERO_SNAPSHOT.stat().st_mtime < newest:
+            for suffix in ("", "-wal", "-shm"):
+                s = ZOTERO_DIR / f"zotero.sqlite{suffix}"
+                d = Path(f"{_ZOTERO_SNAPSHOT}{suffix}")
+                if s.exists():
+                    tmp = Path(f"{d}.tmp")
+                    shutil.copy2(s, tmp)
+                    os.replace(tmp, d)
+                elif d.exists():
+                    d.unlink()
+        return sqlite3.connect(_ZOTERO_SNAPSHOT)
 
 
 @lru_cache(maxsize=1)
