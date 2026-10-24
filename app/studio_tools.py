@@ -39,12 +39,14 @@ def build(emit: Callable[[dict[str, Any]], Awaitable[None]]):
     async def changed(area: str, summary: str, record: Any) -> None:
         await emit({"type": "studio_changed", "area": area, "summary": summary, "record": record})
 
-    @tool("reading_push", "把论文加入阅读清单收件箱。paper=论文笔记名，或 arxiv=arXiv 号（没有笔记时）。reason 必填。",
-          _obj({"paper": S, "arxiv": S, "title": S, "reason": S, "tier": {"type": "string", "enum": ["T1", "T2", "T3"]},
+    @tool("reading_push", "把论文加入阅读清单收件箱。paper=论文笔记名，或 arxiv=arXiv 号（没有笔记时），"
+                          "或 ext=doi:<DOI> / openreview:<forum id> / acl:<Anthology id>（没有 arXiv 版本时）。reason 必填。",
+          _obj({"paper": S, "arxiv": S, "ext": S, "url": S, "title": S, "reason": S, "tier": {"type": "string", "enum": ["T1", "T2", "T3"]},
                 "lines": SA, "due": S}, ["reason"]))
     async def reading_push(a):
         try:
-            item, what = reading.push(paper=a.get("paper"), arxiv=a.get("arxiv"), title=a.get("title"),
+            item, what = reading.push(paper=a.get("paper"), arxiv=a.get("arxiv"), ext=a.get("ext"), url=a.get("url"),
+                                      title=a.get("title"),
                                       reason=a["reason"], source="claude", pushed_by="工作台助手",
                                       tier=a.get("tier"), lines=a.get("lines"), due=a.get("due"))
         except reading.ReadingError as e:

@@ -269,7 +269,8 @@ class PaperChat:
     async def _ensure_client(self) -> ClaudeSDKClient:
         if self.client is not None:
             return self.client
-        opts = self._options()
+        # Building the options reads the paper's text, which may download its PDF (up to 60 s per link): off the event loop.
+        opts = await asyncio.to_thread(self._options)
         client = ClaudeSDKClient(options=opts)
         try:
             await client.connect()
@@ -389,8 +390,9 @@ async def draft_takeaway(stem: str) -> str:
     """One-line takeaway for the reading list, drafted from a fork of the paper's conversation."""
     session = _load_sessions().get(stem)
     lang = PROFILE.get("answer_language", "中文")
+    text = "" if session else await asyncio.to_thread(library.text_file, stem)  # may download the PDF: off the event loop
     prompt = (f"用{lang}写一句话（不超过 60 字）总结这篇论文对我的价值：它解决了什么、我能拿走什么。"
-              "只输出这句话。" + ("" if session else f"先读全文：{library.text_file(stem)}"))
+              "只输出这句话。" + ("" if session else f"先读全文：{text}"))
     opts = ClaudeAgentOptions(
         cwd=str(VAULT_DIR), add_dirs=[str(TEXT_DIR)], tools=["Read"], allowed_tools=["Read"],
         setting_sources=[], resume=session, fork_session=bool(session), max_turns=4,

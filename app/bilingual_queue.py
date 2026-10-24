@@ -10,8 +10,8 @@ off by quitting goes back to the front of the queue) and can be paused. Like Zot
 first pass only records the list, so turning this on never back-fills; Settings offers that as a button.
 Off by default: each Mac makes (and pays for) its own copy. Settings shows the disk use and can clean up.
 
-Entries follow a paper's re-key from arxiv:<id> to its note stem (bilingual.aliases), so a paper that
-gets a note while it waits is neither dropped nor translated twice.
+Entries follow a paper's re-key from arxiv:<id> (or a doi:/openreview:/acl: key) to its note stem
+(bilingual.aliases), so a paper that gets a note while it waits is neither dropped nor translated twice.
 """
 from __future__ import annotations
 
@@ -99,12 +99,13 @@ def _enqueue(st: dict[str, Any], item: dict[str, Any], why: str) -> bool:
 
 
 def _follow(st: dict[str, Any]) -> bool:
-    """Entries of arXiv-only items take the note stem once the note exists (the job keeps its own key)."""
+    """Entries of items without a note (arXiv, DOI, OpenReview, ACL keys) take the note stem once the
+    note exists (the job keeps its own key)."""
     changed = False
     for j in st["jobs"]:
-        if j["state"] in ("queued", "running") and library.arxiv_key(j["key"]):
-            if (keys := bilingual.aliases(j["key"]))[1:]:
-                j.update(key=keys[1], title=keys[1] if j.get("title") in (None, j["key"]) else j["title"])
+        if j["state"] in ("queued", "running") and library.is_external(j["key"]):
+            if note := bilingual.note_of(j["key"]):
+                j.update(key=note, title=note if j.get("title") in (None, j["key"]) else j["title"])
                 changed = True
     return changed
 

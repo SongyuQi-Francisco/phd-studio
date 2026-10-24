@@ -240,7 +240,7 @@ function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef
 
   return html`<div class="reader" ref=${wrapRef} onMouseDownCapture=${startDrag}>
     <div class="toolbar">
-      <span class="tb-title" title=${paper?.title}>${paper?.arxiv && !paper?.note_rel ? paper.title : stem}</span>
+      <span class="tb-title" title=${paper?.title}>${paper?.external ? paper.title : stem}</span>
       ${paper && (paper.reading
         ? html`<span class="rchip">
             <span class=${"tier " + (paper.reading.status === "queued" ? paper.reading.tier : paper.reading.status === "reading" ? "R" : "D")}>
@@ -456,7 +456,7 @@ function App() {
   };
   const addToList = async () => {
     try {
-      await api("/api/reading", { json: paper.arxiv && !paper.note_rel ? { arxiv: paper.arxiv, tier: "T2" } : { paper: stem, tier: "T2" } });
+      await api("/api/reading", { json: paper.external ? (paper.arxiv ? { arxiv: paper.arxiv, tier: "T2" } : { ext: stem, tier: "T2" }) : { paper: stem, tier: "T2" } });
       toast("已加入阅读清单 · T2");
       loadPaper(stem);
     } catch (e) { toast(e.message); }

@@ -1,0 +1,112 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<feed xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/" xmlns:arxiv="http://arxiv.org/schemas/atom" xmlns="http://www.w3.org/2005/Atom">
+  <id>https://arxiv.org/api/Ln+iWnSEJrgiCXPOyPm4B1r3tmM</id>
+  <title>arXiv Query: search_query=all:agentic AND all:recommender AND all:memory&amp;id_list=&amp;start=0&amp;max_results=3</title>
+  <updated>2026-10-24T17:15:25Z</updated>
+  <link href="https://arxiv.org/api/query?search_query=all:agentic+AND+(all:recommender+AND+all:memory)&amp;start=0&amp;max_results=3&amp;id_list=" type="application/atom+xml"/>
+  <opensearch:itemsPerPage>3</opensearch:itemsPerPage>
+  <opensearch:totalResults>132</opensearch:totalResults>
+  <opensearch:startIndex>0</opensearch:startIndex>
+  <entry>
+    <id>http://arxiv.org/abs/2609.04882v1</id>
+    <title>AtomRec: Evolving Atomic Memory for Agentic Recommendation</title>
+    <updated>2026-09-04T08:38:48Z</updated>
+    <link href="https://arxiv.org/abs/2609.04882v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2609.04882v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>Agentic recommender systems use large language models to maintain semantic memory and support evidence-aware recommendation. However, existing memory mechanisms often compress user and item information into coarse summaries and connect them with scalar collaborative links, making it difficult to preserve fine-grained preference stages or retrieve interpretable evidence as user interests evolve. We propose \textsc{AtomRec}, an agentic recommender with evolving atomic collaborative memory. \textsc{AtomRec} represents user and item memories as structured atomic units, builds semantic links across related memories, and evolves related historical fields when new interactions arrive. During recommendation, it retrieves linked memories as multi-hop evidence paths rather than isolated neighbor summaries, allowing collaborative signals to support grounded ranking. Experiments on four public benchmarks show that \textsc{AtomRec} consistently outperforms state-of-the-art agentic and memory-augmented baselines, with around 8.5\% average relative improvement across metrics.</summary>
+    <category term="cs.IR" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2026-09-04T08:38:48Z</published>
+    <arxiv:primary_category term="cs.IR"/>
+    <author>
+      <name>Ada Example</name>
+    </author>
+    <author>
+      <name>Ben Sample</name>
+    </author>
+    <author>
+      <name>Cleo Fixture</name>
+    </author>
+    <author>
+      <name>Dan Testwell</name>
+    </author>
+    <author>
+      <name>Eve Mockwood</name>
+    </author>
+    <author>
+      <name>Fay Stubbs</name>
+    </author>
+    <author>
+      <name>Ada Example</name>
+    </author>
+    <author>
+      <name>Ben Sample</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2602.08837v1</id>
+    <title>AMEM4Rec: Leveraging Cross-User Similarity for Memory Evolution in Agentic LLM Recommenders</title>
+    <updated>2026-02-09T16:06:55Z</updated>
+    <link href="https://arxiv.org/abs/2602.08837v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2602.08837v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>Agentic systems powered by Large Language Models (LLMs) have shown strong potential in recommender systems but remain hindered by several challenges. Fine-tuning LLMs is parameter-inefficient, and prompt-based agentic reasoning is limited by context length and hallucination risk. Moreover, existing agentic recommendation systems predominantly leverages semantic knowledge while neglecting the collaborative filtering (CF) signals essential for implicit preference modeling. To address these limitations, we propose AMEM4Rec, an agentic LLM-based recommender that learns collaborative signals in an end-to-end manner through cross-user memory evolution. AMEM4Rec stores abstract user behavior patterns from user histories in a global memory pool. Within this pool, memories are linked to similar existing ones and iteratively evolved to reinforce shared cross-user patterns, enabling the system to become aware of CF signals without relying on a pre-trained CF model. Extensive experiments on Amazon and MIND datasets show that AMEM4Rec consistently outperforms state-of-the-art LLM-based recommenders, demonstrating the effectiveness of evolving memory-guided collaborative filtering.</summary>
+    <category term="cs.IR" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.LG" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2026-02-09T16:06:55Z</published>
+    <arxiv:primary_category term="cs.IR"/>
+    <author>
+      <name>Cleo Fixture</name>
+    </author>
+    <author>
+      <name>Dan Testwell</name>
+    </author>
+    <author>
+      <name>Eve Mockwood</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2605.14401v2</id>
+    <title>Agentic Recommender System with Hierarchical Belief-State Memory</title>
+    <updated>2026-05-15T02:07:22Z</updated>
+    <link href="https://arxiv.org/abs/2605.14401v2" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2605.14401v2" rel="related" type="application/pdf" title="pdf"/>
+    <summary>Memory-augmented LLM agents have advanced personalized recommendation, yet existing approaches universally adopt flat memory representations that conflate ephemeral signals with stable preferences, and none provides a complete lifecycle governing how memory should evolve. We propose MARS (Memory-Augmented Agentic Recommender System), a framework that treats recommendation as a partially observable problem and maintains a structured belief state that progressively abstracts noisy behavioral observations into a compact estimate of user preferences. MARS organizes this belief state into three tiers: event memory buffers raw signals, preference memory maintains fine-grained mutable chunks with explicit strength and evidence tracking, and profile memory distills all preferences into a coherent natural language narrative. A complete lifecycle of six operations -- extraction, reinforcement, weakening, consolidation, forgetting, and resynthesis -- is adaptively scheduled by an LLM-based planner rather than fixed-interval heuristics. Experiments on four InstructRec benchmark domains show that MARS achieves state-of-the-art performance with average improvements of 26.4% in HR@1 and 10.3% in NDCG@10 over the strongest baselines with further gains from agentic scheduling in evolving settings.</summary>
+    <category term="cs.CL" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.AI" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2026-05-14T05:38:24Z</published>
+    <arxiv:comment>4 figures, 8 tables</arxiv:comment>
+    <arxiv:primary_category term="cs.CL"/>
+    <author>
+      <name>Fay Stubbs</name>
+    </author>
+    <author>
+      <name>Ada Example</name>
+    </author>
+    <author>
+      <name>Ben Sample</name>
+    </author>
+    <author>
+      <name>Cleo Fixture</name>
+    </author>
+    <author>
+      <name>Dan Testwell</name>
+    </author>
+    <author>
+      <name>Eve Mockwood</name>
+    </author>
+    <author>
+      <name>Fay Stubbs</name>
+    </author>
+    <author>
+      <name>Ada Example</name>
+    </author>
+    <author>
+      <name>Ben Sample</name>
+    </author>
+    <author>
+      <name>Cleo Fixture</name>
+    </author>
+    <author>
+      <name>Dan Testwell</name>
+    </author>
+  </entry>
+</feed>

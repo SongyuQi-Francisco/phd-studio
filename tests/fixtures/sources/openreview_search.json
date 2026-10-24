@@ -1,0 +1,146 @@
+{
+ "notes": [
+  {
+   "id": "AhFsKmuaCb",
+   "forum": "AhFsKmuaCb",
+   "cdate": 1758099870138,
+   "pdate": 1759960946673,
+   "number": 333,
+   "domain": "Agents4Science/2025/Conference",
+   "content": {
+    "title": {
+     "value": "Multi-target Parallel Drug Discovery with Multi-agent Orchestration"
+    },
+    "abstract": {
+     "value": "The immense cost and high failure rates of traditional drug discovery necessitate a shift towards more systematic, automated approaches. While specialized AI tools have excelled at individual tasks, their integration into a cohesive, end-to-end discovery workflow remains a significant challenge. We introduce a modular, multi-agent framework that autonomously navigates the early-stage drug discovery pipeline, from target identification to the generation of optimized hit candidates. Our system orchestrates specialized agents that synergize AI Agents for literature mining and generative chemistry with robust machine learning classifiers for bioactivity and ADME/Tox prediction. We demonstrate the system's capabilities by applying it to Alzheimer's Disease, identifying and generating novel inhibitors for five protein targets—SGLT2, CGAS, SEH, HDAC, and DYRK1A, and successfully generated novel molecular scaffolds with high predicted potency and favorable drug-like properties for four of the targets. The framework's failure to build a reliable model for the data-scarce target, CGAS, highlights a key limitation: the performance of autonomous systems is fundamentally tethered to the quality and availability of the underlying data. Our work presents a transparent blueprint for an integrated discovery engine and provides a realistic perspective on the current capabilities of AI agents in science, suggesting they operate most effectively within a human-in-the-loop paradigm where expert oversight guides data curation and model validation. The code is publicly available at"
+    },
+    "venue": {
+     "value": "Agents4Science"
+    },
+    "keywords": {
+     "value": [
+      "Agent",
+      "Multi-Agent Systems",
+      "AI4Science",
+      "Drug Discovery",
+      "Alzheimer's Disease"
+     ]
+    },
+    "pdf": {
+     "value": "/pdf/d8d063e05fb61bf113a7ef1f9b12e37fd7c5bc88.pdf"
+    },
+    "venueid": {
+     "value": "Agents4Science/2025/Conference"
+    },
+    "authors": {
+     "value": [
+      "Ada Example",
+      "Ben Sample",
+      "Cleo Fixture"
+     ]
+    }
+   }
+  },
+  {
+   "id": "ljXCQmOXqj",
+   "forum": "ljXCQmOXqj",
+   "cdate": 1788614074905,
+   "number": 9674,
+   "domain": "ICLR.cc/2027/Conference",
+   "content": {
+    "title": {
+     "value": "Belief Memory: Agent Memory Under Partial Observability"
+    },
+    "abstract": {
+     "value": "LLM agents that operate over long context depend on external memory to accumulate knowledge over time.\nHowever, existing methods typically store each observation as a single deterministic conclusion (e.g., inferring \"API~X failed'' from temporary errors), even though such observations are inherently partial and potentially ambiguous. \nBy committing to one conclusion and discarding uncertainty, these methods results in *self-reinforcing error*: the agent acts on the stored conclusion, never revisits alternatives, and reinforces the conclusion over time.\nTo address this issue, we propose *BeliefMem*, which shifts the memory paradigm from committing to a single conclusion per observation to retaining multiple candidate conclusions with their probabilities.\nConcretely, BeliefMem stores the candidate conclusions as separate memory entries, each carrying a probability that is updated via Noisy-OR rules as new observations arrive.\nAt retrieval, all candidates surface together with their probabilities, keeping alternatives visible to the agent.\nSince each conclusion in memory retains its probability, BeliefMem preserves the uncertainty that the deterministic paradigm discards, enabling the agent to act with high confidence on well-evidenced knowledge while retaining the capacity to update its confidence when new evidence arrives. \nEmpirical evaluations on LoCoMo and ALFWorld benchmarks show that, even with limited data, BeliefMem achieves the best average performance, remarkably outperforming well-known baselines.\nMore broadly, such probabilistic memory produces substantial gains and explores a new direction for agent memory in partially observable environments."
+    },
+    "venue": {
+     "value": "ICLR 2027 Conference Submission"
+    },
+    "keywords": {
+     "value": [
+      "Agent memory"
+     ]
+    },
+    "pdf": {
+     "value": "/pdf/4e3e6f6c4f07fca4cfd7eeac0c762171db26176f.pdf"
+    },
+    "venueid": {
+     "value": "ICLR.cc/2027/Conference/Submission"
+    }
+   }
+  },
+  {
+   "id": "mmIAp3cVS0",
+   "forum": "mmIAp3cVS0",
+   "cdate": 1744271713192,
+   "pdate": 1758216528398,
+   "number": 1659,
+   "domain": "NeurIPS.cc/2025/Conference",
+   "content": {
+    "title": {
+     "value": "G-Memory: Tracing Hierarchical Memory for Multi-Agent Systems"
+    },
+    "abstract": {
+     "value": "Large language model (LLM)-powered multi-agent systems (MAS) have demonstrated cognitive and execution capabilities that far exceed those of single LLM agents, yet their capacity for self-evolution remains hampered by underdeveloped memory architectures. Upon close inspection, we are alarmed to discover that prevailing MAS memory mechanisms (1) are overly simplistic, completely disregarding the nuanced inter-agent collaboration trajectories, and (2) lack cross-trial and agent-specific customization, in stark contrast to the expressive memory developed for single agents. To bridge this gap, we introduce G-Memory, a hierarchical, agentic memory system for MAS inspired by organizational memory theory, which manages the lengthy MAS interaction via a three-tier graph hierarchy: insight, query, and interaction graphs. Upon receiving a new user query, G-Memory performs bi-directional memory traversal to retrieve both \\textit{high-level, generalizable insights} that enable the system to leverage cross-trial knowledge, and \\textit{fine-grained, condensed interaction trajectories} that compactly encode prior collaboration experiences. Upon task execution, the entire hierarchy evolves by assimilating new collaborative trajectories, nurturing the progressive evolution of agent teams. Extensive experiments across five benchmarks, three LLM backbones, and three popular MAS frameworks demonstrate that G-Memory improves success rates in embodied action and accuracy in knowledge QA by up to $20.89\\\\%$ and $10.12\\\\%$, respectively, without any modifications to the original frameworks."
+    },
+    "venue": {
+     "value": "NeurIPS 2025 spotlight"
+    },
+    "keywords": {
+     "value": [
+      "Multi-agent systems",
+      "agent memory",
+      "LLM agent"
+     ]
+    },
+    "pdf": {
+     "value": "/pdf/52f961783a3212459f228b4ec297f523ba2d0c95.pdf"
+    },
+    "venueid": {
+     "value": "NeurIPS.cc/2025/Conference"
+    },
+    "authors": {
+     "value": [
+      "Ada Example",
+      "Ben Sample",
+      "Cleo Fixture"
+     ]
+    }
+   }
+  },
+  {
+   "id": "A5opaPyKt8",
+   "forum": "A5opaPyKt8",
+   "cdate": 1791979224507,
+   "pdate": 1564977600000,
+   "number": 56003,
+   "domain": "OpenReview.net/Archive",
+   "content": {
+    "title": {
+     "value": "Sensor fusion and structured prediction for cyberattack event networks"
+    },
+    "abstract": {
+     "value": "Early detection of cyberattacks–such as data breaches or ransomware–is critical to mitigate their effects. Despite advances in automated cyberattack sensors, many attacks are still detected days or months after they occur. We propose a new approach using statistical relational learning to fuse cyberattack sensor outputs and generate attack predictions. Leveraging the graphical structures of both sensor outputs and cyberattack events themselves, we achieve higher accuracy than individual sensors by reasoning collectively over both sensors and attacks. In addition to improved accuracy, our predictions also are more useful to analysts because they are structured objects containing details of the predicted attacks. We measure accuracy and scalability in an extensive empirical evaluation of our approach using a database of real cyberattacks against a large corporation. We show that, relative to a sensors-only baseline, our approach increases accuracy by up to seven percent and doubles the lift of high-confidence predictions."
+    },
+    "venue": {
+     "value": "MLG@KDD"
+    },
+    "pdf": {
+     "value": "/pdf/df2327d9e816e254527fc7ee28923957da60232e.pdf"
+    },
+    "venueid": {
+     "value": "OpenReview.net/Archive"
+    },
+    "authors": {
+     "value": [
+      "Ada Example",
+      "Ben Sample",
+      "Cleo Fixture"
+     ]
+    }
+   }
+  }
+ ],
+ "count": 4
+}

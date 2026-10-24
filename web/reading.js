@@ -83,7 +83,7 @@ function Row({ i, selected, onSelect, onOpen, act, ready }) {
   return html`<div class=${"rl-row" + (selected ? " sel" : "")} onMouseMove=${(e) => pointerMoved(e) && !selected && onSelect()} onClick=${() => onOpen(i)}>
     <${Thumb} k=${i.key} title=${i.title} size="sm" ready=${ready} badge=${badge && html`<span class="badge">${badge}</span>`} />
     <div class="rl-main">
-      <div class="rl-title">${i.title}${i.paper ? "" : html` <span class="muted">arXiv</span>`}</div>
+      <div class="rl-title">${i.title}${i.paper ? "" : html` <span class="muted">${{ doi: "DOI", openreview: "OpenReview", acl: "ACL" }[(i.key || "").split(":")[0]] || "arXiv"}</span>`}</div>
       <div class="rl-reason">${i.status === "done" && i.takeaway ? i.takeaway : i.reason}</div>
       <div class="rl-meta">
         ${i.lines.map((l) => html`<span class="tag">${l}</span>`)}

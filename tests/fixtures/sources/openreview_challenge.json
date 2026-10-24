@@ -1,0 +1,9 @@
+{
+ "name": "ChallengeRequiredError",
+ "message": "Challenge verification required (2026-10-24-0000)",
+ "status": 403,
+ "details": {
+  "challengeUrl": "https://openreview.net/challenge",
+  "reqId": "2026-10-24-0000"
+ }
+}

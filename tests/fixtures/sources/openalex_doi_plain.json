@@ -1,0 +1,13 @@
+{
+ "id": "https://openalex.org/W1",
+ "doi": "https://doi.org/10.1145/3626772.3657833",
+ "title": "Example paper",
+ "publication_year": 2024,
+ "locations": [
+  {
+   "landing_page_url": "https://doi.org/10.1145/3626772.3657833",
+   "pdf_url": null
+  }
+ ],
+ "best_oa_location": null
+}

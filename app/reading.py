@@ -35,7 +35,7 @@ DEPTHS = ("skim", "deep")
 VERDICTS = ("key", "useful", "irrelevant")
 CAPS = {"T1": 5, "queued": 12}
 STALE_DAYS = 21
-FIELDS = ("id", "paper", "arxiv", "title", "url", "status", "tier", "lines", "source", "pushed_by",
+FIELDS = ("id", "paper", "arxiv", "ext", "title", "url", "status", "tier", "lines", "source", "pushed_by",
           "pushed_at", "reason", "due", "snooze_until", "opened_at", "read_at", "depth", "verdict",
           "takeaway", "updated_at")
 
@@ -156,14 +156,14 @@ def _wake_snoozed(items: list[dict[str, Any]]) -> bool:
 
 
 def _link_notes(items: list[dict[str, Any]]) -> bool:
-    """Attach arXiv-only items to a paper note once one exists for that arXiv id."""
-    loose = [i for i in items if not i.get("paper") and i.get("arxiv")]
+    """Attach items without a note (arXiv id or DOI/OpenReview/ACL key) to a paper note once one exists."""
+    loose = [i for i in items if not i.get("paper") and (i.get("arxiv") or i.get("ext"))]
     if not loose:
         return False
-    by_arxiv = library.arxiv_index()
+    by_arxiv, by_ext = library.arxiv_index(), library.ext_index()
     changed = False
     for i in loose:
-        if stem := by_arxiv.get(i["arxiv"]):
+        if stem := (by_arxiv.get(i.get("arxiv")) or by_ext.get(i.get("ext"))):
             i["paper"] = stem
             changed = True
     return changed
@@ -199,13 +199,31 @@ def editing() -> Iterator[list[dict[str, Any]]]:
 
 
 def key_of(item: dict[str, Any]) -> str:
-    """The reader's paper key: the note stem, or arxiv:<id> before a note exists."""
-    return item.get("paper") or f"arxiv:{item['arxiv']}"
+    """The reader's paper key: the note stem, or before a note exists arxiv:<id>, or the ext key
+    (doi:<doi>, openreview:<id>, acl:<id>) of a paper that came in by DOI or an OpenReview/ACL link."""
+    return item.get("paper") or (f"arxiv:{item['arxiv']}" if item.get("arxiv") else item.get("ext") or item["id"])
 
 
 def find(items: list[dict[str, Any]], key: str) -> dict[str, Any] | None:
     for i in items:
-        if i["id"] == key or i.get("paper") == key or (i.get("arxiv") and f"arxiv:{i['arxiv']}" == key):
+        if i["id"] == key or i.get("paper") == key or (i.get("arxiv") and f"arxiv:{i['arxiv']}" == key) \
+                or (i.get("ext") and i["ext"] == key):
+            return i
+    return None
+
+
+def norm_title(title: str | None) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (title or "").lower())
+
+
+def _same_title(items: list[dict[str, Any]], title: str | None) -> dict[str, Any] | None:
+    """An item that already carries this exact title: the same paper captured through another door
+    (an arXiv link, then its OpenReview or DOI link, or the other way round)."""
+    want = norm_title(title)
+    if len(want) < 12:
+        return None
+    for i in items:
+        if norm_title(i.get("title")) == want:
             return i
     return None
 
@@ -217,8 +235,8 @@ class ReadingError(ValueError):
     pass
 
 
-def push(*, paper: str | None = None, arxiv: str | None = None, title: str | None = None,
-         reason: str, source: str = "self", pushed_by: str | None = None, tier: str | None = None,
+def push(*, paper: str | None = None, arxiv: str | None = None, ext: str | None = None, title: str | None = None,
+         url: str | None = None, reason: str, source: str = "self", pushed_by: str | None = None, tier: str | None = None,
          lines: list[str] | None = None, due: str | None = None, status: str | None = None,
          force: bool = False) -> tuple[dict[str, Any], str]:
     """Add a paper, or update the existing entry. Returns (item, what happened)."""
@@ -230,24 +248,33 @@ def push(*, paper: str | None = None, arxiv: str | None = None, title: str | Non
         raise ReadingError(f"tier must be one of {TIERS}")
     if arxiv:
         arxiv = re.sub(r"v\d+$", "", arxiv.strip().removeprefix("arXiv:").removeprefix("arxiv:"))
+    if ext and not library.ext_key(ext):
+        raise ReadingError("ext must look like doi:<doi>, openreview:<id> or acl:<id>")
     if paper:
         try:
             library.note_path(paper)
         except FileNotFoundError:
             raise ReadingError(f"no paper note named '{paper}'; use --arxiv for papers without a note")
-    elif arxiv:
-        paper = library.arxiv_index().get(arxiv)
+    elif arxiv or ext:  # an arXiv paper may also be known by its DOI: a note can carry either
+        paper = (library.arxiv_index().get(arxiv) if arxiv else None) or (library.ext_index().get(ext) if ext else None)
     else:
-        raise ReadingError("give --paper (note name) or --arxiv")
+        raise ReadingError("give --paper (note name), --arxiv or an ext key (doi:/openreview:/acl:)")
+    if not title and arxiv and not paper and not find(_load_raw(), f"arxiv:{arxiv}"):
+        # The title is what a second door (an OpenReview or DOI item of the same paper) is recognised by,
+        # so it is known before the duplicate check; asked here, not under the list's lock.
+        title = fetch_arxiv_title(arxiv)
 
     with editing() as items:
         existing = find(items, paper) if paper else None
-        existing = existing or (find(items, f"arxiv:{arxiv}") if arxiv else None)
+        existing = existing or (find(items, f"arxiv:{arxiv}") if arxiv else None) or (find(items, ext) if ext else None)
+        existing = existing or (_same_title(items, title) if not paper else None)
         if existing:
             if existing["status"] == "dismissed" and not force:
                 return existing, "dismissed earlier; not re-added (use --force to bring it back)"
             if existing["status"] == "done" and not force:
                 return existing, f"already read on {existing.get('read_at', '?')}"
+            if ext and not existing.get("ext"):
+                existing["ext"] = ext
             existing["lines"] = sorted(set(existing.get("lines", [])) | set(lines or []))
             if tier and (not existing.get("tier") or tier < existing["tier"]):
                 existing["tier"] = tier
@@ -263,7 +290,9 @@ def push(*, paper: str | None = None, arxiv: str | None = None, title: str | Non
             "id": "r" + secrets.token_hex(3),
             "paper": paper,
             "arxiv": arxiv,
-            "title": title or (None if paper else fetch_arxiv_title(arxiv)),
+            "ext": ext,
+            "url": url,
+            "title": title,
             "status": status or ("queued" if tier and source == "self" else "inbox"),
             "tier": tier,
             "lines": sorted(set(lines or [])),
@@ -325,7 +354,7 @@ def summary(items: list[dict[str, Any]]) -> dict[str, Any]:
         i["stale"] = i["status"] == "inbox" and i["age_days"] > STALE_DAYS
         i["key"] = key_of(i)
         if not i.get("title"):
-            i["title"] = i.get("paper") or i.get("arxiv")
+            i["title"] = i.get("paper") or i.get("arxiv") or i.get("ext")
     active_inbox = [i for i in items if i["status"] == "inbox" and not i["stale"]]
     queued = [i for i in items if i["status"] == "queued"]
     return {
@@ -342,7 +371,10 @@ def summary(items: list[dict[str, Any]]) -> dict[str, Any]:
 def _link(i: dict[str, Any]) -> str:
     if i.get("paper"):
         return f"[[{i['paper']}]]"
-    return f"[{i.get('title') or i['arxiv']}](https://arxiv.org/abs/{i['arxiv']})"
+    if i.get("arxiv"):
+        return f"[{i.get('title') or i['arxiv']}](https://arxiv.org/abs/{i['arxiv']})"
+    label = i.get("title") or i.get("ext") or i["id"]
+    return f"[{label}]({i['url']})" if i.get("url") else label
 
 
 def _write_view(items: list[dict[str, Any]]) -> None:

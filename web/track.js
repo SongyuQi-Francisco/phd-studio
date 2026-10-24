@@ -8,6 +8,12 @@ const LISTED = { inbox: "已在收件箱", queued: "待读", reading: "在读", 
 const WINDOWS = [[30, "30 天"], [90, "90 天"], [365, "1 年"]];
 const dayISO = (n) => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
 const monthLabel = (m) => `${+m.slice(5)}月`;
+// Links that come from outside (OpenAlex, Crossref, OpenReview) only open as http(s): a javascript: URL in an href would run in the app.
+const safeUrl = (u) => (/^https?:\/\//i.test(u || "") ? u : "");
+const SRC = { arxiv: "arXiv", openreview: "OpenReview", acl: "ACL Anthology" };
+// "ICLR 2027 Conference Submission" / "NeurIPS 2025 spotlight" -> the short name for the card's corner
+const venueShort = (v) => { const s = String(v || "").replace(/\s+(?:Conference\s+|Workshop\s+)?Submission$/i, "").replace(/\s+(?:spotlight|oral|poster|regular|notable.*)$/i, ""); return s.length > 24 ? s.slice(0, 23) + "…" : s; };
+const dateLabel = (p, d) => (p.month_only ? `${d.slice(0, 4)} 年 ${+d.slice(5, 7)} 月` : p.date_approx ? `${d.slice(0, 4)} 年` : ago(d));
 const ago = (d) => { const n = Math.round((Date.now() - new Date(d)) / 864e5); return n <= 0 ? "今天" : n < 31 ? `${n} 天前` : d; };
 
 // ---------------- paper card (shared by every tab) ----------------
@@ -20,6 +26,14 @@ function PaperCard({ p, reason, lines, faces, labels, toast, onOpenPaper, onAsk,
   const rel = (p.lines || []).length > 0;
   const add = async (e) => {
     e.stopPropagation();
+    const doi = /^https?:\/\/(?:dx\.)?doi\.org\/(10\..+)$/i.exec(p.doi || "")?.[1];
+    if (!p.arxiv && (p.ext || doi)) {  // OpenReview / ACL Anthology / DOI paper: listed by its own key
+      try {
+        const r = await api("/api/track/capture/pick", { json: { candidate: { ...(p.ext ? { key: p.ext } : { doi }), title: p.title, url: p.url || p.doi, venue: p.venue_full || p.venue }, reason, lines: lines ?? p.lines ?? [] } });
+        setState(r.item.status); toast(r.result === "added" ? "已加入收件箱" : r.result); onAdded?.();
+      } catch (x) { toast(x.message); }
+      return;
+    }
     if (!p.arxiv) {
       onAsk(`帮我把这篇论文加入阅读清单：「${p.title}」${p.doi ? `（${p.doi}）` : ""}，理由：${reason}。先找到它的 arXiv 版本（找不到就告诉我，不要猜），然后用 reading_push 推进收件箱${rel ? `，lines 设为 ${p.lines.join("、")}` : ""}。`, "加入清单");
       return;
@@ -29,10 +43,10 @@ function PaperCard({ p, reason, lines, faces, labels, toast, onOpenPaper, onAsk,
       setState(r.item.status); toast(r.result === "added" ? "已加入收件箱" : r.result); onAdded?.();
     } catch (x) { toast(x.message); }
   };
-  const url = p.arxiv ? `https://arxiv.org/abs/${p.arxiv}` : p.doi;
+  const url = p.arxiv ? `https://arxiv.org/abs/${p.arxiv}` : safeUrl(p.url) || safeUrl(p.doi);
   return html`<article class=${"tk-paper" + (open ? " open" : "") + (rel ? " rel" : "")}>
     <div class="tk-thumb" onClick=${() => setOpen(!open)}>
-      <div class="ph"><b>${p.venue && p.venue !== "arXiv" ? p.venue : (date || "").slice(0, 4)}</b><span>${p.venue === "arXiv" || !p.venue ? "arXiv 预印本" : p.venue_full || ""}</span></div>
+      <div class="ph"><b>${p.venue && p.venue !== "arXiv" ? p.venue : (date || "").slice(0, 4)}</b><span>${p.venue === "arXiv" || !p.venue ? "arXiv 预印本" : p.venue_full && p.venue_full !== p.venue ? p.venue_full : SRC[p.source] || ""}</span></div>
       ${p.arxiv && thumbReady && thumb && html`<img src=${`/api/track/thumb/${p.arxiv}`} alt="" loading="lazy" onError=${() => setThumb(false)} />`}
       ${p.tier && html`<span class="tier-pin"><span class=${"tk-tier " + p.tier} title=${`Tier ${p.tier}（与巡检同一套打分）`}>${p.tier}</span></span>`}
     </div>
@@ -40,13 +54,15 @@ function PaperCard({ p, reason, lines, faces, labels, toast, onOpenPaper, onAsk,
       <div class="tk-ptitle" onClick=${() => setOpen(!open)} title=${p.title}>${p.title}</div>
       <div class="tk-pmeta">
         ${p.venue && p.venue !== "arXiv" && html`<span class="venue">${p.venue}</span>`}
-        <span>${date ? (p.date_approx ? `${date.slice(0, 4)} 年` : ago(date)) : ""}</span>
+        <span>${date ? dateLabel(p, date) : ""}</span>
+        ${p.source && html`<span class=${"tk-src " + p.source} title=${`来源：${SRC[p.source]}`}>${SRC[p.source]}</span>`}
         ${p.cites > 0 && html`<span>· 被引 ${p.cites}</span>`}
         ${faces?.length > 0 && html`<span class="tk-faces">${faces}</span>`}
       </div>
       <div class="tk-chips">
         ${(p.lines || []).map((l) => html`<span class="tk-badge rel" title=${`命中：${(p.line_hits?.[l] || []).join("、")}`}>${l}</span>`)}
         ${(p.topics || []).slice(0, open ? 9 : 3).map((t) => html`<span class="tk-chip">${labels?.[t] || t}</span>`)}
+        ${(p.also || []).map((a) => html`<span class="tk-chip" title=${a.venue || ""}>也在 ${SRC[a.source] || a.source}</span>`)}
         ${extra}
       </div>
       ${open && html`
@@ -57,7 +73,7 @@ function PaperCard({ p, reason, lines, faces, labels, toast, onOpenPaper, onAsk,
         ${p.note && html`<button class="abtn txt" onClick=${() => onOpenPaper(p.note)}>读</button>`}
         <span class="spacer" />
         ${state ? html`<span class="tag">${LISTED[state] || state}</span>`
-          : html`<button class="tk-add" onClick=${add} title=${p.arxiv ? "加入阅读清单收件箱" : "没有 arXiv 编号：交给助手找"}><${Icon} name="plus" sm />清单</button>`}
+          : html`<button class="tk-add" onClick=${add} title=${p.arxiv || p.ext || /doi\.org\/10\./i.test(p.doi || "") ? "加入阅读清单收件箱" : "没有 arXiv 编号：交给助手找"}><${Icon} name="plus" sm />清单</button>`}
       </div>
     </div>
   </article>`;
@@ -393,7 +409,7 @@ function ScholarDetail({ s, onOpenNote, onOnly, filtered }) {
     <div><h4>近一年常合作</h4>
       <div class="tk-chips">${(s.coauthors || []).map(([n, c]) => html`<span class="tk-chip">${n}<b>${c}</b></span>`)}</div>
       <h4 style=${{ marginTop: "12px" }}>链接</h4>
-      <div class="tk-chips">${links.map(([l, u]) => html`<a class="tk-chip" href=${u} target="_blank" rel="noreferrer">${l}</a>`)}
+      <div class="tk-chips">${links.filter(([, u]) => safeUrl(u)).map(([l, u]) => html`<a class="tk-chip" href=${u} target="_blank" rel="noreferrer">${l}</a>`)}
         ${s.tracked_lab && html`<button class="tk-chip" onClick=${() => onOpenNote(s.tracked_lab.path)}>Lab 笔记</button>`}</div></div>
     <div class="full">
       <button class=${"btn" + (filtered ? " primary" : "")} onClick=${onOnly}>${filtered ? "已只看 TA 的论文" : "只看 TA 的论文"}</button>
@@ -572,16 +588,38 @@ function Follows({ toast, onOpenPaper, onAsk, version, onChanged }) {
   const [pick, setPick] = useState(null);
   const load = async (refresh = false) => { setLoading(true); try { const r = await api(`/api/track/follows/feed?refresh=${refresh}`); setFeed(r.feed); setLink(r.linkage); } finally { setLoading(false); } };
   useEffect(() => { load(); }, [version]);
-  const add = async () => { await api("/api/track/follows", { json: { kind, value } }); setValue(""); toast("已关注，正在查 arXiv…"); load(); onChanged?.(); };
+  // The Anthology volumes download in the background: look again while some are still coming. The next
+  // look is scheduled only after the last one answered, so a slow source cannot pile requests up.
+  const downloading = !!feed?.some((f) => f.sources?.some((s) => s.loading));
+  useEffect(() => {
+    if (!downloading) return;
+    let alive = true, tries = 0, timer;
+    const look = async () => {
+      if (!alive || ++tries > 30) return;
+      try { const r = await api("/api/track/follows/feed"); if (alive) setFeed(r.feed); } catch {}
+      if (alive) timer = setTimeout(look, 6000);
+    };
+    timer = setTimeout(look, 6000);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [downloading]);
+  const add = async () => { await api("/api/track/follows", { json: { kind, value } }); setValue(""); toast("已关注，正在查 arXiv / OpenReview / ACL…"); load(); onChanged?.(); };
   const remove = async (f, e) => { e.stopPropagation(); await api(`/api/track/follows/${f.id}`, { method: "DELETE" }); if (pick === f.id) setPick(null); load(); onChanged?.(); };
   const weeks = [...Array(5)].map((_, i) => dayISO(35 - i * 7));
   const papers = (feed || []).filter((f) => !pick || f.id === pick).flatMap((f) => f.papers.map((p) => ({ ...p, _f: f })))
-    .filter((p, i, a) => a.findIndex((q) => q.arxiv === p.arxiv) === i).sort((a, b) => b.published.localeCompare(a.published));
+    .filter((p, i, a) => a.findIndex((q) => (q.arxiv || q.ext) === (p.arxiv || p.ext)) === i).sort((a, b) => b.published.localeCompare(a.published));
+  // One line per source across all follows: what each answered, or why not.
+  const states = Object.keys(SRC).map((id) => {
+    const all = (feed || []).flatMap((f) => f.sources || []).filter((s) => s.id === id);
+    const bad = all.find((s) => !s.ok), wait = all.find((s) => s.loading);
+    return { id, n: all.reduce((a, s) => a + s.n, 0), bad, wait, show: all.length > 0 };
+  }).filter((x) => x.show);
   return html`
     ${link && html`<div class=${"tk-banner " + (link.reads_follows ? "ok" : "bad")}>
       ${link.reads_follows ? html`<${Icon} name="check" sm /><span>每周巡检会一起抓取这些关注（tracker 里有 ${link.count} 条${link.in_sync ? "" : "，和这里不一致：下次增删关注或巡检时同步"}）</span>`
         : html`<span>每周巡检还读不到这里的关注（tracker.py 未接入 follows.json）</span>`}
-      <span class="spacer" /><button class="linkbtn" disabled=${loading} onClick=${() => load(true)}>${loading ? "查询中…" : "刷新 arXiv"}</button></div>`}
+      <span class="spacer" /><button class="linkbtn" disabled=${loading} onClick=${() => load(true)}>${loading ? "查询中…" : "刷新"}</button></div>`}
+    ${states.length > 0 && html`<div class="tk-srcs">${states.map((x) => html`<span class=${"tk-srcst" + (x.bad ? " bad" : x.wait ? " wait" : "")} title=${x.bad ? x.bad.error + (x.bad.stale ? "（显示的是上次缓存）" : "") : x.wait ? "ACL Anthology 论文集在后台下载，首次约几十秒" : `${SRC[x.id]} 正常`}>
+      <i />${SRC[x.id]}<b>${x.n}</b><small>${x.bad ? (x.bad.stale ? "失败 · 旧缓存" : "失败") : x.wait ? `下载中 ${x.wait.progress.done}/${x.wait.progress.total} 卷` : "篇"}</small></span>`)}</div>`}
     <div class="tk-addfollow">
       <div class="seg"><button class=${kind === "keyword" ? "on" : ""} onClick=${() => setKind("keyword")}>关键词</button>
         <button class=${kind === "person" ? "on" : ""} onClick=${() => setKind("person")}>学者</button></div>
@@ -590,17 +628,18 @@ function Follows({ toast, onOpenPaper, onAsk, version, onChanged }) {
       <button class="btn primary" disabled=${!value.trim()} onClick=${add}>关注</button>
     </div>
     ${feed === null && html`<div class="muted pad">查询中…</div>`}
-    ${feed && feed.length === 0 && html`<div class="tk-empty">还没有关注。加几个关键词或学者：这里列出它们最近 30 天的 arXiv 新论文，每周巡检也会一起抓。</div>`}
+    ${feed && feed.length === 0 && html`<div class="tk-empty">还没有关注。加几个关键词或学者：这里列出它们最近 30 天在 arXiv、OpenReview 的新论文和近一年 ACL 系列会议的论文（按来源标注），每周巡检也会一起抓 arXiv。</div>`}
     ${feed?.length > 0 && html`<div class="tk-follows">${feed.map((f) => {
-      const counts = weeks.map((w, i) => f.papers.filter((p) => p.published >= w && (i === 4 || p.published < weeks[i + 1])).length);
+      const counts = weeks.map((w, i) => f.papers.filter((p) => !p.month_only && p.published >= w && (i === 4 || p.published < weeks[i + 1])).length);
       return html`<button class=${"tk-follow" + (pick === f.id ? " on" : "")} onClick=${() => setPick(pick === f.id ? null : f.id)}>
         <span class="abtn x" title="取消关注" onClick=${(e) => remove(f, e)}><${Icon} name="x" sm /></span>
         <span class="tk-badge">${f.kind === "person" ? "学者" : "关键词"}</span><b class="v" title=${f.value}>${f.value}</b>
-        <span class="n">${f.papers.length}<small>篇 · 30 天</small></span>
+        <span class="n">${f.papers.length}<small>篇 · 近期</small></span>
         <${Sparkline} values=${counts} labels=${weeks.map((w) => `${w.slice(5)} 起`)} w=${100} h=${24} unit=" 篇" />
-        ${f.error && html`<span class="err">${f.error}</span>`}
+        ${f.papers.length > 0 && html`<span class="tk-bysrc">${Object.keys(SRC).map((id) => [id, f.papers.filter((p) => p.source === id).length]).filter(([, n]) => n > 0).map(([id, n]) => `${SRC[id]} ${n}`).join(" · ")}</span>`}
+        ${(f.sources || []).filter((s) => !s.ok).map((s) => html`<span class="err" title=${s.stale ? "显示的是上次缓存" : ""}>${s.error}</span>`)}
       </button>`; })}</div>
-    <${PaperGrid} papers=${papers} render=${(p, ready) => html`<${PaperCard} thumbReady=${ready} key=${p.arxiv} p=${{ ...p, date: p.published, venue: "arXiv", abstract: p.summary }}
+    <${PaperGrid} papers=${papers} render=${(p, ready) => html`<${PaperCard} thumbReady=${ready} key=${p.arxiv || p.ext} p=${{ ...p, date: p.published, venue: p.source === "arxiv" ? "arXiv" : venueShort(p.venue), venue_full: p.venue, abstract: p.summary, topics: p.keywords }}
       reason=${`关注${p._f.kind === "person" ? "学者" : "关键词"}：${p._f.value}`} lines=${[]}
       extra=${html`<span class="tk-chip on">${p._f.value}</span>`} toast=${toast} onOpenPaper=${onOpenPaper} onAsk=${onAsk} onAdded=${onChanged} />`} />`}`;
 }
@@ -695,19 +734,45 @@ function LabPaperRow({ p, lab, toast, onChanged }) {
 function Capture({ onAsk, toast, onChanged }) {
   const [text, setText] = useState("");
   const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [found, setFound] = useState(null);  // title search: { text, candidates, sources }
+  const done = () => { setText(""); setReason(""); setFound(null); onChanged?.(); };
+  const ask = (t) => onAsk(`帮我把这篇论文加入阅读清单：${t}${reason ? `，理由：${reason}` : ""}。先找到它的 arXiv 版本（找不到就告诉我，不要猜），然后用 reading_push 推进收件箱。`, "捕捉论文");
   const go = async () => {
-    const r = await api("/api/track/capture", { json: { text, reason } }).catch((e) => ({ error: e.message }));
-    if (r.error) return toast(r.error);
-    if (r.unresolved) onAsk(`帮我把这篇论文加入阅读清单：${text}${reason ? `，理由：${reason}` : ""}。先找到它的 arXiv 版本（找不到就告诉我，不要猜），然后用 reading_push 推进收件箱。`, "捕捉论文");
-    else toast(r.result === "added" ? "已加入收件箱" : r.result);
-    setText(""); setReason(""); onChanged?.();
+    setBusy(true); setFound(null);
+    try {
+      const r = await api("/api/track/capture", { json: { text, reason } }).catch((e) => ({ error: e.message }));
+      if (r.error) return toast(r.error);
+      if (r.candidates) return setFound({ text, candidates: r.candidates, sources: r.sources });
+      if (r.unresolved) { ask(text); done(); return; }
+      toast(r.warning ? r.warning : r.result === "added" ? `已加入收件箱${r.resolved?.title ? "：" + r.resolved.title.slice(0, 40) : ""}` : r.result);
+      done();
+    } finally { setBusy(false); }
   };
-  return html`<div class="tk-capture" title="arXiv 链接或编号直接进收件箱；OpenReview / DOI / 标题交给助手找">
+  const pick = async (c) => {
+    try {
+      const r = await api("/api/track/capture/pick", { json: { candidate: c, reason } });
+      toast(r.result === "added" ? "已加入收件箱" : r.result); done();
+    } catch (e) { toast(e.message); }
+  };
+  return html`<div class="tk-capture-wrap"><div class="tk-capture" title="arXiv / OpenReview / DOI / ACL Anthology 的链接或编号直接进收件箱；输入标题则检索 arXiv、Crossref、OpenAlex，选一篇进收件箱">
     <${Icon} name="inbox" sm />
-    <input placeholder="捕捉：粘贴论文链接、arXiv 编号或标题" value=${text} onInput=${(e) => setText(e.target.value)} onKeyDown=${(e) => e.key === "Enter" && text.trim() && go()} />
-    <input placeholder="为什么要读（一句话）" value=${reason} onInput=${(e) => setReason(e.target.value)} onKeyDown=${(e) => e.key === "Enter" && text.trim() && go()} />
-    <button class="btn primary" disabled=${!text.trim()} onClick=${go}>进收件箱</button>
-  </div>`;
+    <input placeholder="捕捉：粘贴 arXiv / OpenReview / DOI / ACL 链接，或输入论文标题" value=${text} onInput=${(e) => { setText(e.target.value); setFound(null); }} onKeyDown=${(e) => e.key === "Enter" && text.trim() && !busy && go()} />
+    <input placeholder="为什么要读（一句话）" value=${reason} onInput=${(e) => setReason(e.target.value)} onKeyDown=${(e) => e.key === "Enter" && text.trim() && !busy && go()} />
+    <button class="btn primary" disabled=${!text.trim() || busy} onClick=${go}>${busy ? "查询中…" : "进收件箱"}</button>
+  </div>
+  ${found && html`<div class="tk-pick">
+    <div class="tk-pick-head"><b>${found.candidates.length} 个匹配</b><span class="muted small">选一篇进收件箱${reason ? "" : "（理由可先在右边填一句）"}</span>
+      <span class="tk-srcs">${found.sources.map((s) => html`<span class=${"tk-srcst" + (s.ok ? "" : " bad")} title=${s.error || ""}><i />${s.label}<b>${s.n}</b>${!s.ok && html`<small>失败</small>`}</span>`)}</span>
+      <span class="spacer" /><button class="abtn" title="关闭" onClick=${() => setFound(null)}><${Icon} name="x" sm /></button></div>
+    ${found.candidates.map((c) => html`<div class="tk-pick-row" key=${c.key}>
+      <div class="tk-pick-main"><div class="t" title=${c.title}>${c.title}</div>
+        <div class="muted small">${[c.authors.slice(0, 3).join(", ") + (c.authors.length > 3 ? " 等" : ""), c.year, c.venue].filter(Boolean).join(" · ")}</div>
+        <div class="tk-chips">${c.sources.map((x) => html`<span class="tk-chip">${x}</span>`)}${c.arxiv && html`<span class="tk-chip on">有 arXiv 版</span>`}</div></div>
+      ${safeUrl(c.url) && html`<a class="abtn" title="打开原文页" href=${safeUrl(c.url)} target="_blank" rel="noreferrer"><${Icon} name="external" sm /></a>`}
+      <button class="tk-add" onClick=${() => pick(c)}><${Icon} name="plus" sm />清单</button></div>`)}
+    <div class="tk-pick-foot"><button class="linkbtn" onClick=${() => { ask(found.text); done(); }}>都不是，交给助手找</button></div>
+  </div>`}</div>`;
 }
 
 const TABS = [["scholars", "学者动态"], ["radar", "本周雷达"], ["follows", "关注"], ["labs", "实验室"]];
