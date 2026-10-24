@@ -1,0 +1,26 @@
+# Example of <vault>/<lab_tracker>/scholars.yaml: the scholars followed on the 追踪 page and
+# keywords per research line. The real file is personal and lives in the vault (git-ignored by
+# location); the app creates and edits it (追踪 → 学者动态 → 管理名单). Every field except
+# name/openalex is optional; `sources` records where each fact came from.
+scholars:
+- id: s000001
+  name: Ada Example
+  rank: 1
+  openalex: A0000000001            # OpenAlex author id: metrics, counts_by_year and papers come from here
+  affiliation: Example University
+  lab: Example RecSys Lab
+  lab_id: example-lab              # lab_id of a note in <lab_tracker>/Labs when the lab is already tracked
+  homepage: https://example.org/~ada
+  photo: https://example.org/~ada/photo.jpg      # tried first for the card avatar
+  photo_alt: https://example.org/~ada/alt.jpg    # fallback picture; initials when both fail
+  scholar_id: XXXXXXXXXXXX         # Google Scholar user id, if known
+  scholar_citations: {value: 12000, as_of: '2026-01-01', source: Google Scholar label ranking}
+  rank_by: Google Scholar 引用（领域标签榜）   # shown above the cards
+  recent_llm_rec: 5                # why the scholar passed the field filter, kept for reference
+  sources:
+    rank: Google Scholar label ranking, 2026-01-01
+    affiliation: https://example.org/~ada
+lines:
+- id: l000001
+  line: Project A                  # a name from [profile].lines in studio.toml
+  keywords: ["graph neural network", "contrastive + recommend"]   # "a + b" needs both; parts match as word prefixes
