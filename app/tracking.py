@@ -4,7 +4,8 @@
   (its Claude-written ANALYSIS block).
 - Labs come from the vault's Lab Tracker/Labs notes; activity is counted across runs.
 - Follows (keywords, people) live in plan.yaml and are queried live against the
-  arXiv API (cached 6 h, one request every 3 s as arXiv asks).
+  arXiv API (cached 6 h, one request every 3 s as arXiv asks). They are also exported to
+  the tracker's config/follows.json so the weekly run fetches and keeps them too.
 """
 from __future__ import annotations
 
@@ -73,7 +74,8 @@ def run(run_id: str) -> dict[str, Any]:
         papers.append({
             "arxiv": aid, "title": p.get("title"), "authors": p.get("authors", [])[:8],
             "published": p.get("published"), "tier": p.get("tier"), "score": p.get("score"),
-            "labs": p.get("labs", []), "topics": p.get("topics", []), "abstract": p.get("abstract", ""),
+            "labs": p.get("labs", []), "follows": p.get("follows", []), "topics": p.get("topics", []),
+            "abstract": p.get("abstract", ""),
             "note": note if isinstance(note, str) else None,
             "listed": listed.get(aid) or (by_paper.get(note) if isinstance(note, str) else None),
         })
@@ -152,11 +154,45 @@ def add_follow(kind: str, value: str, note: str | None = None) -> dict[str, Any]
     for f in follows():
         if f["kind"] == kind and f["value"].lower() == value.lower():
             return f
-    return plan.plan_store.add("follows", {"kind": kind, "value": value, "note": note}, "f")
+    rec = plan.plan_store.add("follows", {"kind": kind, "value": value, "note": note}, "f")
+    export_follows()
+    return rec
 
 
 def remove_follow(fid: str) -> None:
     plan.plan_store.delete("follows", fid)
+    export_follows()
+
+
+def follows_file() -> Path | None:
+    return TRACKER_DIR / "config" / "follows.json" if TRACKER_DIR and (TRACKER_DIR / "config").exists() else None
+
+
+def export_follows() -> Path | None:
+    """Write the follows where the stdlib-only tracker can read them (it has no YAML parser)."""
+    f = follows_file()
+    if not f:
+        return None
+    data = {"_doc": "Written by PhD Studio from plan.yaml follows; read by tracker.py (fetch + ingest). Do not edit.",
+            "exported": datetime.now().isoformat(timespec="seconds"),
+            "follows": [{"kind": x["kind"], "value": x["value"]} for x in follows()]}
+    old = f.read_text(encoding="utf-8") if f.exists() else ""
+    if json.loads(old or "{}").get("follows") != data["follows"]:
+        tmp = f.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+        tmp.replace(f)
+    return f
+
+
+def linkage() -> dict[str, Any]:
+    """Whether the weekly tracker reads the workbench follows, and what it last saw (synced first:
+    follows edited on the other machine arrive through plan.yaml)."""
+    f = export_follows()
+    code = (TRACKER_DIR / "tracker.py") if TRACKER_DIR else None
+    reads = bool(code and code.exists() and "follows.json" in code.read_text(encoding="utf-8", errors="replace"))
+    exported = json.loads(f.read_text(encoding="utf-8")) if f and f.exists() else {}
+    return {"tracker": bool(code and code.exists()), "reads_follows": reads,
+            "exported": exported.get("exported"), "count": len(exported.get("follows", []))}
 
 
 def _query(f: dict[str, Any]) -> str:

@@ -1,5 +1,5 @@
 // Tracking: top scholars of the field (cards, heatmap, monthly output, paper cards), the weekly lab radar,
-// live follows, the tracked labs and a capture box.
+// live follows, the 48 tracked labs, a capture box, and 「立即巡检」 (runs research_tracker in the background).
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { html, Icon, api, renderMarkdown, prefs } from "/lib.js";
 import { Avatar, Columns, fmtN, HBars, Heatmap, Sparkline, TierStrip } from "/track-charts.js";
@@ -92,6 +92,48 @@ function PaperGrid({ papers, step = 18, render }) {
   if (!papers.length) return html`<div class="tk-empty">没有符合筛选的论文</div>`;
   return html`<div class="tk-papers">${shown.map((p) => render(p, ready.has(p.arxiv)))}</div>
     ${papers.length > n && html`<button class="btn tk-more" onClick=${() => setN(n + step * 2)}>再显示 ${Math.min(step * 2, papers.length - n)} 篇（共 ${papers.length}）</button>`}`;
+}
+
+// ---------------- 立即巡检 ----------------
+
+const STAGES = { prepare: "准备", fetch: "抓取 arXiv", ingest: "打分归类", render: "写入 vault", audit: "检查链接", done: "完成", failed: "失败" };
+
+function Patrol({ toast, onAsk, onDone }) {
+  const [st, setSt] = useState(null);
+  const [showLog, setShowLog] = useState(false);
+  const timer = useRef();
+  const load = async () => { try { const s = await api("/api/track/tracker"); setSt(s); return s; } catch { return null; } };
+  useEffect(() => { load(); return () => clearTimeout(timer.current); }, []);
+  useEffect(() => {
+    clearTimeout(timer.current);
+    if (st?.running) timer.current = setTimeout(async () => {
+      const s = await load();
+      if (s && !s.running) { toast(s.ok ? `巡检完成：${s.run}（保留 ${s.stats?.kept ?? "?"} 篇）` : `巡检失败：${s.error}`); onDone?.(s); }
+    }, 1500);
+  }, [st]);
+  const start = async () => {
+    try { setSt(await api("/api/track/tracker/run", { method: "POST" })); toast("开始巡检：抓取 → 打分 → 写入 vault"); }
+    catch (e) { toast(e.message); }
+  };
+  if (!st) return null;
+  if (!st.available) return html`<span class="muted small" title="studio.toml 里没有配置 tracker 目录">未配置巡检</span>`;
+  const pct = !st.running ? 100 : st.stage === "fetch" ? 5 + 75 * (st.queries ? st.queries_done / st.queries : 0)
+    : { prepare: 2, ingest: 84, render: 92, audit: 97 }[st.stage] || 50;
+  const finishedRecently = !st.running && st.finished && Date.now() - new Date(st.finished) < 6 * 3600e3;
+  return html`<span class="tk-patrol">
+    ${st.running && html`<span class="tk-prog" onClick=${() => setShowLog(!showLog)} title="点击看日志">
+      <span>${STAGES[st.stage] || st.stage}${st.stage === "fetch" && st.queries ? ` ${st.queries_done}/${st.queries}` : ""} · ${st.run}</span>
+      <span class="tk-prog-bar"><i style=${{ width: pct + "%" }} /></span></span>`}
+    ${finishedRecently && st.ok && html`<button class="chip" onClick=${() => onAsk(`按 research_tracker/WEEKLY_RUNBOOK.md 第 3 步审阅刚跑完的巡检 ${st.run}（since ${st.since}）：检查 tier-A 的同名误匹配，写 run note 的 ANALYSIS 区块，只给真正的必读建 paper note。先读 vault 的 AGENTS.md。`, "审阅本周巡检")}>
+      <${Icon} name="sparkle" sm />交给助手写分析</button>`}
+    ${finishedRecently && st.ok === false && html`<button class="chip" onClick=${() => setShowLog(!showLog)} title=${st.error}><span class="tag warn">上次失败</span></button>`}
+    <button class="btn primary" disabled=${st.running} onClick=${start} title=${`抓取 ${st.linkage?.count ? `48 个 lab + ${st.linkage.count} 条关注` : "48 个 lab"} 的新论文，写入 vault 的 Lab Tracker`}>
+      <${Icon} name="refresh" sm />${st.running ? "巡检中…" : "立即巡检"}</button>
+    ${showLog && st.log?.length > 0 && html`<div class="tk-sheet-bg" onClick=${(e) => e.target === e.currentTarget && setShowLog(false)}><div class="tk-sheet">
+      <div class="head"><h2>巡检日志 · ${st.run}</h2><span class="spacer" /><button class="abtn" onClick=${() => setShowLog(false)}><${Icon} name="x" sm /></button></div>
+      <div class="muted small">${STAGES[st.stage] || ""}${st.error ? ` · ${st.error}` : ""}${st.audit ? ` · audit ${st.audit}` : ""}</div>
+      <pre class="tk-log">${st.log.join("\n")}</pre></div></div>`}
+  </span>`;
 }
 
 // ---------------- scholars ----------------
@@ -308,7 +350,7 @@ function ScholarsTab({ toast, onOpenPaper, onOpenNote, onAsk, onChanged, version
 
 // ---------------- weekly radar ----------------
 
-function Radar({ toast, onOpenPaper, onOpenNote, onAsk, onChanged }) {
+function Radar({ toast, onOpenPaper, onOpenNote, onAsk, onChanged, runsVersion }) {
   const [runs, setRuns] = useState([]);
   const [cur, setCur] = useState(null);
   const [run, setRun] = useState(null);
@@ -316,10 +358,10 @@ function Radar({ toast, onOpenPaper, onOpenNote, onAsk, onChanged }) {
   const [topic, setTopic] = useState(null);
   const [full, setFull] = useState(false);
   const [labels, setLabels] = useState({});
-  useEffect(() => { api("/api/track/runs").then((r) => { setRuns(r.runs); if (r.runs[0]) setCur(r.runs[0].run); }); }, []);
+  useEffect(() => { api("/api/track/runs").then((r) => { setRuns(r.runs); if (r.runs[0]) setCur(r.runs[0].run); }); }, [runsVersion]);
   useEffect(() => { if (cur) { setRun(null); setTopic(null); setTier(null); api(`/api/track/runs/${cur}`).then(setRun); } }, [cur]);
   useEffect(() => { api("/api/track/scholars/activity").then((d) => setLabels(d.topic_labels || {})).catch(() => {}); }, []);
-  if (!runs.length) return html`<div class="tk-empty">还没有巡检记录（每周的实验室追踪任务运行后会出现在这里）</div>`;
+  if (!runs.length) return html`<div class="tk-empty">还没有巡检记录。点右上角「立即巡检」跑第一次。</div>`;
   const ordered = [...runs].reverse();
   const t = run?.stats?.by_tier || {};
   const papers = run ? run.papers.filter((p) => (!tier || p.tier === tier) && (!topic || p.topics.includes(topic))) : [];
@@ -352,7 +394,7 @@ function Radar({ toast, onOpenPaper, onOpenNote, onAsk, onChanged }) {
       ${(tier || topic) && html`<button class="linkbtn" onClick=${() => { setTier(null); setTopic(null); }}>清除筛选</button>`}<span class="count">${papers.length} 篇</span></div>`}
     ${run && html`<${PaperGrid} papers=${papers} render=${(p, ready) => html`<${PaperCard} thumbReady=${ready} key=${p.arxiv} p=${{ ...p, lines: [] }} labels=${labels}
       reason=${`Lab Tracker ${run.run} · Tier ${p.tier}${p.labs?.length ? " · " + p.labs.join(", ") : ""}`} lines=${[]}
-      extra=${(p.labs || []).map((l) => html`<span class="tk-chip">${l}</span>`)}
+      extra=${[...(p.labs || []).map((l) => html`<span class="tk-chip">${l}</span>`), ...(p.follows || []).map((f) => html`<span class="tk-chip on">${f.replace(/^person:/, "学者 ").replace(/^keyword:/, "关键词 ")}</span>`)]}
       toast=${toast} onOpenPaper=${onOpenPaper} onAsk=${onAsk} onAdded=${onChanged} />`} />`}`;
 }
 
@@ -360,11 +402,12 @@ function Radar({ toast, onOpenPaper, onOpenNote, onAsk, onChanged }) {
 
 function Follows({ toast, onOpenPaper, onAsk, version, onChanged }) {
   const [feed, setFeed] = useState(null);
+  const [link, setLink] = useState(null);
   const [kind, setKind] = useState("keyword");
   const [value, setValue] = useState("");
   const [loading, setLoading] = useState(false);
   const [pick, setPick] = useState(null);
-  const load = async (refresh = false) => { setLoading(true); try { setFeed((await api(`/api/track/follows/feed?refresh=${refresh}`)).feed); } finally { setLoading(false); } };
+  const load = async (refresh = false) => { setLoading(true); try { const r = await api(`/api/track/follows/feed?refresh=${refresh}`); setFeed(r.feed); setLink(r.linkage); } finally { setLoading(false); } };
   useEffect(() => { load(); }, [version]);
   const add = async () => { await api("/api/track/follows", { json: { kind, value } }); setValue(""); toast("已关注，正在查 arXiv…"); load(); onChanged?.(); };
   const remove = async (f, e) => { e.stopPropagation(); await api(`/api/track/follows/${f.id}`, { method: "DELETE" }); if (pick === f.id) setPick(null); load(); onChanged?.(); };
@@ -372,8 +415,10 @@ function Follows({ toast, onOpenPaper, onAsk, version, onChanged }) {
   const papers = (feed || []).filter((f) => !pick || f.id === pick).flatMap((f) => f.papers.map((p) => ({ ...p, _f: f })))
     .filter((p, i, a) => a.findIndex((q) => q.arxiv === p.arxiv) === i).sort((a, b) => b.published.localeCompare(a.published));
   return html`
-    <div class="tk-banner"><span>实时查 arXiv 最近 30 天（缓存 6 小时）</span>
-      <span class="spacer" /><button class="linkbtn" disabled=${loading} onClick=${() => load(true)}>${loading ? "查询中…" : "刷新 arXiv"}</button></div>
+    ${link && html`<div class=${"tk-banner " + (link.reads_follows ? "ok" : "bad")}>
+      ${link.reads_follows ? html`<${Icon} name="check" sm /><span>每周巡检会一起抓取这些关注（已同步 ${link.count} 条到 research_tracker）</span>`
+        : html`<span>每周巡检还读不到这里的关注（tracker.py 未接入 follows.json）</span>`}
+      <span class="spacer" /><button class="linkbtn" disabled=${loading} onClick=${() => load(true)}>${loading ? "查询中…" : "刷新 arXiv"}</button></div>`}
     <div class="tk-addfollow">
       <div class="seg"><button class=${kind === "keyword" ? "on" : ""} onClick=${() => setKind("keyword")}>关键词</button>
         <button class=${kind === "person" ? "on" : ""} onClick=${() => setKind("person")}>学者</button></div>
@@ -382,7 +427,7 @@ function Follows({ toast, onOpenPaper, onAsk, version, onChanged }) {
       <button class="btn primary" disabled=${!value.trim()} onClick=${add}>关注</button>
     </div>
     ${feed === null && html`<div class="muted pad">查询中…</div>`}
-    ${feed && feed.length === 0 && html`<div class="tk-empty">还没有关注。加几个关键词或学者：这里列出它们最近 30 天的 arXiv 新论文。</div>`}
+    ${feed && feed.length === 0 && html`<div class="tk-empty">还没有关注。加几个关键词或学者：这里列出它们最近 30 天的 arXiv 新论文，每周巡检也会一起抓。</div>`}
     ${feed?.length > 0 && html`<div class="tk-follows">${feed.map((f) => {
       const counts = weeks.map((w, i) => f.papers.filter((p) => p.published >= w && (i === 4 || p.published < weeks[i + 1])).length);
       return html`<button class=${"tk-follow" + (pick === f.id ? " on" : "")} onClick=${() => setPick(pick === f.id ? null : f.id)}>
@@ -506,15 +551,18 @@ const TABS = [["scholars", "学者动态"], ["radar", "本周雷达"], ["follows
 
 export function TrackPage({ version, onAsk, toast, onOpenPaper, onOpenNote, onChanged }) {
   const [tab, setTab] = useState(prefs.get("track.tab", "scholars"));
+  const [runsVersion, setRunsVersion] = useState(0);
   useEffect(() => prefs.set("track.tab", tab), [tab]);
   const common = { toast, onOpenPaper, onOpenNote, onAsk, onChanged, version };
   return html`<div class="page tk"><div class="page-inner wide">
     <div class="tk-head"><h1>追踪</h1>
       <div class="seg">${TABS.map(([k, l]) => html`<button class=${tab === k ? "on" : ""} onClick=${() => setTab(k)}>${l}</button>`)}</div>
+      <span class="spacer" />
+      <${Patrol} toast=${toast} onAsk=${onAsk} onDone=${() => { setRunsVersion((v) => v + 1); onChanged?.(); }} />
     </div>
     <${Capture} onAsk=${onAsk} toast=${toast} onChanged=${onChanged} />
     ${tab === "scholars" && html`<${ScholarsTab} ...${common} />`}
-    ${tab === "radar" && html`<${Radar} ...${common} />`}
+    ${tab === "radar" && html`<${Radar} ...${common} runsVersion=${runsVersion} />`}
     ${tab === "follows" && html`<${Follows} ...${common} />`}
     ${tab === "labs" && html`<${Labs} ...${common} />`}
   </div></div>`;

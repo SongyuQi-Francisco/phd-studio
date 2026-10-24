@@ -1,5 +1,5 @@
 """Routes for the 追踪 page beyond the original radar/follows/labs: top scholars, their activity,
-the cross-lab matrix and images (avatars, logos, first-page thumbnails)."""
+the cross-lab matrix, images (avatars, logos, first-page thumbnails) and the 「立即巡检」 run."""
 from __future__ import annotations
 
 from typing import Any
@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 
-from . import scholars, tracking
+from . import scholars, tracker_run, tracking
 
 router = APIRouter(prefix="/api/track")
 IMG_HEADERS = {"Cache-Control": "max-age=604800"}
@@ -73,7 +73,7 @@ def line_keywords(line: str, body: dict[str, Any]) -> dict[str, Any]:
 @router.get("/follows/feed")
 async def follow_feed(refresh: bool = False, days: int = 30) -> dict[str, Any]:
     """Like /api/track/feed but without the 8-per-follow cap, so the cards can count."""
-    return {"feed": await run_in_threadpool(tracking.feed, days, 25, refresh)}
+    return {"feed": await run_in_threadpool(tracking.feed, days, 25, refresh), "linkage": tracking.linkage()}
 
 
 @router.get("/labs/matrix")
@@ -109,3 +109,18 @@ def thumb(arxiv: str) -> FileResponse:
     if not p:
         raise HTTPException(404)
     return FileResponse(p, media_type="image/jpeg", headers=IMG_HEADERS)
+
+
+@router.get("/tracker")
+def tracker_status() -> dict[str, Any]:
+    return tracker_run.status()
+
+
+@router.post("/tracker/run")
+def tracker_start() -> dict[str, Any]:
+    try:
+        return tracker_run.start()
+    except tracker_run.Busy as e:
+        raise HTTPException(409, str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(400, str(e))
