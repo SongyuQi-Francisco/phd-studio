@@ -89,13 +89,13 @@ class Store:
                 fcntl.flock(f, fcntl.LOCK_UN)
 
     # ---- api ----
-    def load(self) -> dict[str, list[dict[str, Any]]]:
-        """Live (non-deleted) records per collection."""
+    def load(self, include_deleted: bool = False) -> dict[str, list[dict[str, Any]]]:
+        """Live (non-deleted) records per collection; tombstones too when asked."""
         with self._locked():
             data = self._read(self.path)
             if self._merge_conflicts(data):
                 self._write(data)
-        return {c: [r for r in data[c] if not r.get("deleted")] for c in self.collections}
+        return {c: [r for r in data[c] if include_deleted or not r.get("deleted")] for c in self.collections}
 
     @contextmanager
     def editing(self) -> Iterator[dict[str, list[dict[str, Any]]]]:
