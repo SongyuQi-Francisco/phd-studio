@@ -590,4 +590,6 @@ from .venue_api import router as venue_check_router  # noqa: E402  (venue detail
 app.include_router(venue_check_router)
 from .zotero_api import router as zotero_router  # noqa: E402  (push papers into Zotero)
 app.include_router(zotero_router)
+from .reminders_api import router as reminders_router  # noqa: E402  (Settings → 截稿提醒)
+app.include_router(reminders_router)
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")

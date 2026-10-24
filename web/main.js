@@ -11,6 +11,7 @@ import { TrackPage } from "/track.js";
 import { DirectionPage, LinePanel, keepLines } from "/direction.js";
 import { NoteSheet } from "/note.js";
 import { ZoteroButton, ZoteroSettings } from "/zotero.js";
+import { ReminderRow } from "/reminders.js";
 
 // ---------------- library ----------------
 
@@ -361,6 +362,7 @@ function Settings({ status, onClose, onSaved }) {
           <option value="deepseek">DeepSeek</option><option value="google">Google 翻译（免费）</option>
         </select></div>
       <${BilingualSettings} settings=${s} save=${save} />
+      <${ReminderRow} />
       <div class="row-end" style="margin-top:12px"><button class="btn" onClick=${onClose}>完成</button></div>
     </div>
   </div>`;
@@ -431,6 +433,12 @@ function App() {
     return () => window.removeEventListener("keydown", k);
   }, []);
   useEffect(() => prefs.set("assistant", assistant), [assistant]);
+  // A clicked reminder notification (app/desktop.py → app/notify.py) opens its event.
+  useEffect(() => {
+    window.studioOpen = (d) => { setNotePath(null); setSettingsOpen(false); go(d.view === "plan" ? "plan" : "timeline"); if (d.venue) setVenueKey(d.venue); };
+    if (window.studioOpenPending) { window.studioOpen(window.studioOpenPending); window.studioOpenPending = null; }
+    return () => { delete window.studioOpen; };
+  }, []);
 
   const stemRef = useRef(stem);
   stemRef.current = stem;
