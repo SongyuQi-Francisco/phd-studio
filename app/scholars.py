@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -166,7 +167,7 @@ def add(body: dict[str, Any]) -> dict[str, Any]:
 
 
 def update(sid: str, patch: dict[str, Any]) -> dict[str, Any]:
-    allowed = {"name", "rank", "affiliation", "lab", "lab_id", "lab_url", "homepage", "photo", "scholar_id", "note"}
+    allowed = {"name", "rank", "affiliation", "lab", "lab_id", "lab_url", "homepage", "photo", "photo_alt", "scholar_id", "note"}
     return store.update("scholars", sid, {k: v for k, v in patch.items() if k in allowed})
 
 
@@ -722,10 +723,14 @@ def _download_image(url: str, dest_stem: Path) -> Path | None:
 
 
 def avatar(sid: str) -> Path | None:
-    s = next((x for x in scholars() if x["id"] == sid), None)
-    if not s or not s.get("photo"):
-        return None
-    return _download_image(s["photo"], CACHE / "img" / f"p-{sid}")
+    """`photo` first (e.g. the Scholar profile picture), then `photo_alt` (e.g. the homepage portrait)."""
+    s = next((x for x in scholars() if x["id"] == sid), None) or {}
+    for url in (s.get("photo"), s.get("photo_alt")):
+        stem = f"p-{sid}-{hashlib.sha1(url.encode()).hexdigest()[:10]}" if url else ""  # a new URL gets a new file
+        got = _download_image(url, CACHE / "img" / stem) if url else None
+        if got:
+            return got
+    return None
 
 
 def logo(inst_id: str) -> Path | None:

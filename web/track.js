@@ -138,29 +138,35 @@ function ScholarEditor({ list, onClose, toast, onChanged }) {
       <span class="n">${s.rank ?? ""}</span><${Avatar} name=${s.name} srcs=${avatarSrcs(s)} size=${30} />
       <div><b>${s.name}</b> ${s.tracked_lab && html`<span class="tk-badge ok">48 lab 内</span>`}
         <div class="m" title=${Object.entries(s.sources || {}).map(([k, v]) => `${k}: ${v}`).join("\n")}>${[s.lab, s.affiliation].filter(Boolean).join(" · ")}</div></div>
-      <span class="muted small">${s.topic_citations ? `主题引用 ${fmtN(s.topic_citations)}` : s.added === "user" ? "手动加入" : ""}</span>
+      <span class="muted small">${s.scholar_citations ? `Scholar ${fmtN(s.scholar_citations.value)}` : s.topic_citations ? `主题引用 ${fmtN(s.topic_citations)}` : s.added === "user" ? "手动加入" : ""}</span>
       <button class="abtn" title="移除" onClick=${() => remove(s)}><${Icon} name="x" sm /></button>
     </div>`)}
     <${LineKeywords} toast=${toast} onChanged=${onChanged} />
   </div></div>`;
 }
 
-function ScholarCard({ s, on, onClick }) {
+// Scholars sharing a lab (lab_id, else lab name): shown as a group, the list keeps both for now.
+const labKey = (s) => s.lab_id || (s.lab || "").toLowerCase();
+
+function ScholarCard({ s, on, onClick, mates }) {
   const m = s.metrics || {};
   const years = (s.by_year || []).slice(-8);
+  const gs = s.scholar_citations?.value;
   return html`<button class=${"tk-person" + (on ? " on" : "")} onClick=${onClick}>
     <span class="tk-rank">#${s.rank ?? "—"}</span>
     <div class="tk-person-top"><${Avatar} name=${s.name} srcs=${avatarSrcs(s)} size=${46} />
       <div class="tk-person-id"><b>${s.name}</b><span>${s.lab || s.inst?.name || s.affiliation || ""}</span>
         <span>${s.affiliation || s.inst?.name || ""}</span></div></div>
     <div class="tk-nums">
-      <div class="tk-num"><b>${fmtN(m.citations)}</b><span>总引用</span></div>
+      <div class="tk-num" title=${gs ? `${s.scholar_citations.source}${m.citations ? `；OpenAlex ${fmtN(m.citations)}` : ""}` : "OpenAlex"}>
+        <b>${fmtN(gs || m.citations)}</b><span>${gs ? "Scholar 引用" : "总引用"}</span></div>
       <div class="tk-num"><b>${m.h_index ?? "—"}</b><span>h 指数</span></div>
       <div class="tk-num"><b>${years.length ? years[years.length - 1].works : m.this_year ?? "—"}</b><span>今年论文</span></div>
     </div>
     <${Sparkline} values=${years.map((y) => y.works)} labels=${years.map((y) => `${y.year} 年`)} w=${118} unit=" 篇" />
     <div class="tk-person-foot">
       ${s.tracked_lab ? html`<span class="tk-badge ok" title=${s.tracked_lab.name}><${Icon} name="check" sm />48 lab 内</span>` : html`<span class="tk-badge">新机构</span>`}
+      ${mates?.length > 0 && html`<span class="tk-badge" title=${`同一实验室：${mates.join("、")}`}>同 lab ×${mates.length + 1}</span>`}
       ${m.relevant > 0 && html`<span class="tk-badge rel">相关 ${m.relevant}</span>`}
       ${m.d30 > 0 && html`<span class="tk-badge">30 天 ${m.d30} 篇</span>`}
       ${(s.error || s.age_h > 48) && html`<span class="tk-badge warn" title=${s.error || ""}>旧数据</span>`}
@@ -179,6 +185,9 @@ function ScholarDetail({ s, onOpenNote, onOnly, filtered }) {
       <h4 style=${{ marginTop: "12px" }} title="OpenAlex counts_by_year：各年发表的论文至今累计被引；新论文还在积累，所以近年偏低">各年论文的被引（按发表年）</h4><${Columns} data=${years.map((y) => ({ label: `'${String(y.year).slice(2)}`, title: `${y.year} 年发表`, parts: { v: y.cites } }))}
         series=${[{ key: "v", label: "被引", cls: "s3" }]} height=${120} unit="次" /></div>
     <div><h4>近一年常投</h4><${HBars} items=${s.venues} />
+      ${s.recent_llm_rec != null && html`<h4 style=${{ marginTop: "12px" }}>入选依据</h4>
+        <div class="tk-chips"><span class="tk-chip">2024–26 LLM/agent 推荐论文<b>${s.recent_llm_rec}</b></span>
+          ${s.scholar_citations && html`<span class="tk-chip">Scholar 引用<b>${fmtN(s.scholar_citations.value)}</b></span>`}</div>`}
       <h4 style=${{ marginTop: "12px" }}>近一年主题</h4>
       <div class="tk-chips">${(s.topics || []).map(([t, n]) => html`<span class="tk-chip">${t}<b>${n}</b></span>`)}</div></div>
     <div><h4>近一年常合作</h4>
@@ -255,10 +264,11 @@ function ScholarsTab({ toast, onOpenPaper, onOpenNote, onAsk, onChanged, version
     ${job.error && !job.running && html`<div class="tk-banner bad"><span>上次抓取出错：${job.error}（显示的是缓存）</span></div>`}
 
     <div class="tk-section-title"><h2>领域 Top ${d.scholars.length} 学者</h2>
-      <span class="muted">OpenAlex 主题内引用排名 · 点卡片看详情</span><span class="spacer" />
+      <span class="muted">${d.scholars[0]?.rank_by ? `按 ${d.scholars[0].rank_by}` : "领域排名"} · 点卡片看详情</span><span class="spacer" />
       <button class="linkbtn" disabled=${busy || job.running} onClick=${() => load(true)}>${job.running ? "抓取中…" : "刷新数据"}</button>
       <button class="linkbtn" onClick=${() => setEdit(true)}>管理名单</button></div>
-    <div class="tk-people">${d.scholars.map((s) => html`<${ScholarCard} key=${s.id} s=${s} on=${open === s.id} onClick=${() => pickScholar(s.id)} />`)}</div>
+    <div class="tk-people">${d.scholars.map((s) => html`<${ScholarCard} key=${s.id} s=${s} on=${open === s.id} onClick=${() => pickScholar(s.id)}
+      mates=${d.scholars.filter((x) => x.id !== s.id && labKey(x) && labKey(x) === labKey(s)).map((x) => x.name)} />`)}</div>
     ${openS && html`<div style=${{ marginTop: "12px" }}><${ScholarDetail} s=${openS} onOpenNote=${onOpenNote} filtered=${sid === openS.id} onOnly=${() => only(openS.id)} /></div>`}
 
     <div class="tk-section-title" ref=${listRef}><h2>动态</h2><span class="muted">筛选同时作用于下面所有图和卡片</span></div>

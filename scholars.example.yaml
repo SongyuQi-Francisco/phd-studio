@@ -11,11 +11,14 @@ scholars:
   lab: Example RecSys Lab
   lab_id: example-lab              # lab_id of a note in <lab_tracker>/Labs when the lab is already tracked
   homepage: https://example.org/~ada
-  photo: https://example.org/~ada/photo.jpg
+  photo: https://example.org/~ada/photo.jpg      # tried first for the card avatar
+  photo_alt: https://example.org/~ada/alt.jpg    # fallback picture; initials when both fail
   scholar_id: XXXXXXXXXXXX         # Google Scholar user id, if known
-  topic_citations: 1234            # how the ranking was made, kept for reference
+  scholar_citations: {value: 12000, as_of: '2026-01-01', source: Google Scholar label ranking}
+  rank_by: Google Scholar 引用（领域标签榜）   # shown above the cards
+  recent_llm_rec: 5                # why the scholar passed the field filter, kept for reference
   sources:
-    rank: OpenAlex topic-restricted citations, 2026-01-01
+    rank: Google Scholar label ranking, 2026-01-01
     affiliation: https://example.org/~ada
 lines:
 - id: l000001
