@@ -1,10 +1,21 @@
 // Reading list: inbox -> T1/T2/T3 -> reading -> done, with snooze / dismiss.
-import { useEffect, useMemo, useState, useCallback } from "preact/hooks";
-import { html, Icon, api } from "/lib.js";
+import { useEffect, useMemo, useRef, useState, useCallback } from "preact/hooks";
+import { html, Icon, api, prefs } from "/lib.js";
+import { C, Donut, Bars, Progress, Sparkline, perWeek } from "/charts.js";
+import { Thumb, loadThumbs, Skeleton, Empty, Collapse, Glyph } from "/ui.js";
 
 const SOURCE = { tracker: "Tracker", claude: "Claude", advisor: "导师", self: "自己" };
 const VERDICT = { key: "关键", useful: "有用", irrelevant: "无关" };
 const DEPTH = { skim: "略读", deep: "精读" };
+// Pipeline stages for the donut: inbox (neutral), tiers on one blue ramp (T1 darkest), reading, done.
+const STAGES = [
+  { id: "inbox", label: "收件箱", color: "var(--series-0)" },
+  { id: "T1", label: "T1", color: "var(--ord-3)" },
+  { id: "T2", label: "T2", color: "var(--ord-2)" },
+  { id: "T3", label: "T3", color: "var(--ord-1)" },
+  { id: "reading", label: "在读", color: C.orange },
+  { id: "done", label: "读完", color: C.aqua },
+];
 
 export function addDays(n) {
   const d = new Date(); d.setDate(d.getDate() + n);
@@ -58,15 +69,19 @@ export function DoneDialog({ item, onClose, onSaved }) {
   </div>`;
 }
 
-function Row({ i, selected, onSelect, onOpen, act }) {
+// Hover selects a row only when the pointer really moved, not when the list scrolls under a resting pointer.
+let lastPointer = "";
+const pointerMoved = (e) => { const p = `${e.screenX},${e.screenY}`; if (p === lastPointer) return false; lastPointer = p; return true; };
+
+function Row({ i, selected, onSelect, onOpen, act, ready }) {
   const due = i.due && html`<span class=${"due" + (i.due <= addDays(2) ? " soon" : "")}>截止 ${i.due.slice(5)}</span>`;
-  const left = i.status === "queued" ? html`<span class=${"tier " + i.tier}>${i.tier}</span>`
-    : i.status === "reading" ? html`<span class="tier R">读</span>`
+  const badge = i.status === "queued" ? html`<span class=${"tier " + i.tier}>${i.tier}</span>`
+    : i.status === "reading" ? html`<span class="tier R">在读</span>`
     : i.status === "done" ? html`<span class=${"tier D " + (i.verdict || "")}>${VERDICT[i.verdict] || "✓"}</span>`
-    : html`<span class="dot" />`;
+    : i.status === "inbox" ? html`<span class="newdot" title="收件箱" />` : null;
   const stop = (fn) => (e) => { e.stopPropagation(); fn(); };
-  return html`<div class=${"rl-row" + (selected ? " sel" : "")} onMouseEnter=${onSelect} onClick=${() => onOpen(i)}>
-    <div class="rl-left">${left}</div>
+  return html`<div class=${"rl-row" + (selected ? " sel" : "")} onMouseMove=${(e) => pointerMoved(e) && !selected && onSelect()} onClick=${() => onOpen(i)}>
+    <${Thumb} k=${i.key} title=${i.title} size="sm" ready=${ready} badge=${badge && html`<span class="badge">${badge}</span>`} />
     <div class="rl-main">
       <div class="rl-title">${i.title}${i.paper ? "" : html` <span class="muted">arXiv</span>`}</div>
       <div class="rl-reason">${i.status === "done" && i.takeaway ? i.takeaway : i.reason}</div>
@@ -87,21 +102,48 @@ function Row({ i, selected, onSelect, onOpen, act }) {
   </div>`;
 }
 
+function Insight({ items }) {
+  const count = (id) => items.filter((i) => id === "inbox" ? i.status === "inbox" && !i.stale
+    : ["T1", "T2", "T3"].includes(id) ? i.status === "queued" && i.tier === id : i.status === id).length;
+  const data = STAGES.map((s) => ({ ...s, value: count(s.id) }));
+  const active = data.filter((d) => d.id !== "done").reduce((a, d) => a + d.value, 0);
+  const ins = perWeek(items.map((i) => i.pushed_at));
+  const outs = perWeek(items.filter((i) => i.status === "done").map((i) => i.read_at));
+  const sum = (a) => a.reduce((x, y) => x + y, 0);
+  return html`<section class="card rl-insight">
+    <div class="ri-mix">
+      <${Donut} data=${data} size=${124} thickness=${13}><b>${active}</b><small>篇在列</small></${Donut}>
+      <div class="dlegend">${data.map((d) => html`<span class=${d.value ? "" : "zero"}><i class="key" style=${{ background: d.color }} />${d.label}<b>${d.value}</b></span>`)}</div>
+    </div>
+    <div class="ri-flow">
+      <div class="ri-head"><b>每周进出</b><span class="muted small">近 12 周加入 ${sum(ins.counts)} 篇，读完 ${sum(outs.counts)} 篇</span></div>
+      <${Bars} labels=${ins.labels} height=${118} series=${[{ name: "加入", color: C.gray, values: ins.counts }, { name: "读完", color: C.aqua, values: outs.counts }]} />
+    </div>
+  </section>`;
+}
+
 export function ReadingPage({ onOpen, toast, version }) {
   const [data, setData] = useState(null);
   const [line, setLine] = useState("");
   const [sel, setSel] = useState(0);
   const [doneItem, setDoneItem] = useState(null);
   const [open, setOpen] = useState({});
+  const [charts, setCharts] = useState(prefs.get("rlCharts", true));
+  const [ready, setReady] = useState(0);
+  const byKey = useRef(false);
 
-  const load = useCallback(() => api("/api/reading").then(setData), []);
+  const load = useCallback(() => api("/api/reading").then((r) => {
+    setData(r);
+    loadThumbs(r.items.map((i) => i.key)).then(() => setReady((n) => n + 1));
+  }), []);
   useEffect(() => { load(); }, [version]);
+  useEffect(() => prefs.set("rlCharts", charts), [charts]);
 
   const items = data?.items || [];
   const s = data?.summary;
+  const filtered = useMemo(() => items.filter((i) => !line || i.lines.includes(line)), [items, line]);
   const groups = useMemo(() => {
-    const f = items.filter((i) => !line || i.lines.includes(line));
-    const by = (st) => f.filter((i) => i.status === st);
+    const by = (st) => filtered.filter((i) => i.status === st);
     const order = (a, b) => (a.due || "9").localeCompare(b.due || "9") || a.age_days - b.age_days;
     const queued = by("queued").sort(order);
     return [
@@ -115,7 +157,7 @@ export function ReadingPage({ onOpen, toast, version }) {
       { id: "stale", label: "未处理归档", items: by("inbox").filter((i) => i.stale), fold: true, hint: "收件箱里超过 3 周没处理的" },
       { id: "dismissed", label: "不读", items: by("dismissed"), fold: true },
     ];
-  }, [items, line]);
+  }, [filtered]);
   const flat = groups.flatMap((g) => (g.fold && !open[g.id] ? [] : g.items));
   const current = flat[Math.min(sel, flat.length - 1)];
 
@@ -131,8 +173,8 @@ export function ReadingPage({ onOpen, toast, version }) {
     const k = (e) => {
       if (e.target?.closest?.("input, textarea, select, [contenteditable]") || doneItem || e.metaKey || e.ctrlKey) return;
       const i = current;
-      if (e.key === "j" || e.key === "ArrowDown") { e.preventDefault(); setSel((n) => Math.min(n + 1, flat.length - 1)); }
-      else if (e.key === "k" || e.key === "ArrowUp") { e.preventDefault(); setSel((n) => Math.max(n - 1, 0)); }
+      if (e.key === "j" || e.key === "ArrowDown") { e.preventDefault(); byKey.current = true; setSel((n) => Math.min(n + 1, flat.length - 1)); }
+      else if (e.key === "k" || e.key === "ArrowUp") { e.preventDefault(); byKey.current = true; setSel((n) => Math.max(n - 1, 0)); }
       else if (!i) return;
       else if (["1", "2", "3"].includes(e.key) && ["inbox", "queued"].includes(i.status)) act(i, { tier: "T" + e.key, status: "queued" });
       else if (e.key === "s" && ["inbox", "queued"].includes(i.status)) act(i, { status: "snoozed", snooze_until: addDays(7) });
@@ -144,31 +186,55 @@ export function ReadingPage({ onOpen, toast, version }) {
     return () => window.removeEventListener("keydown", k);
   }, [current, flat.length, doneItem, s]);
 
-  if (!s) return html`<div class="rl-page"><div class="loading">载入中…</div></div>`;
-  const stat = (n, label, warn) => html`<div class="stat"><b class=${warn ? "warn" : ""}>${n}</b><span>${label}</span></div>`;
+  // Keep the keyboard selection in view (not the mouse one: that would scroll under the pointer).
+  useEffect(() => { if (byKey.current) document.querySelector(".rl-row.sel")?.scrollIntoView?.({ block: "nearest", behavior: "smooth" }); byKey.current = false; }, [sel]);
+
+  if (!s) return html`<${Skeleton} tiles=${5} rows=${6} />`;
+  const reads = perWeek(items.filter((i) => i.status === "done").map((i) => i.read_at));
+  const staleN = items.filter((i) => i.stale).length;
+  const jump = (id) => { if (groups.find((g) => g.id === id)?.fold && !open[id]) setOpen({ ...open, [id]: true }); document.getElementById("g-" + id)?.scrollIntoView({ behavior: "smooth", block: "start" }); };
+  const kpi = (n, label, sub, viz, id, warn, i) => html`<button class="kpi click" style=${{ "--i": i }} onClick=${() => jump(id)}>
+    <span class="kpi-label">${label}</span><span class=${"kpi-value" + (warn ? " warn" : "")}>${n}</span>
+    ${sub && html`<span class="kpi-sub">${sub}</span>`}${viz && html`<div class="kpi-viz">${viz}</div>`}</button>`;
+  const active = groups.filter((g) => !g.fold).reduce((a, g) => a + g.items.length, 0);
   let idx = -1;
   return html`<div class="rl-page"><div class="rl-inner">
     <div class="rl-head">
-      <h1>阅读清单</h1>
-      <div class="stats">
-        ${stat(s.inbox, "收件箱")}
-        ${stat(html`${s.T1}<small>/${s.caps.T1}</small>`, "T1 本周", s.T1 > s.caps.T1)}
-        ${stat(html`${s.queued}<small>/${s.caps.queued}</small>`, "待读", s.queued > s.caps.queued)}
-        ${stat(s.reading, "在读")}
-        ${stat(s.done_week, "本周读完")}
+      <div class="page-head"><h1>阅读清单</h1>
+        <div class="row-wrap tight">
+          ${s.lines.length > 0 && html`<div class="seg">
+            <button class=${!line ? "on" : ""} onClick=${() => setLine("")}>全部</button>
+            ${s.lines.map((l) => html`<button class=${line === l ? "on" : ""} onClick=${() => setLine(l)}>${l}</button>`)}
+          </div>`}
+          <button class=${"tb-btn" + (charts ? " on" : "")} title=${charts ? "收起图表" : "展开图表"} onClick=${() => setCharts(!charts)}><${Glyph} name="chart" sm />图表</button>
+        </div>
       </div>
-      ${s.lines.length > 0 && html`<div class="seg">
-        <button class=${!line ? "on" : ""} onClick=${() => setLine("")}>全部</button>
-        ${s.lines.map((l) => html`<button class=${line === l ? "on" : ""} onClick=${() => setLine(l)}>${l}</button>`)}
-      </div>`}
+      <div class="kpis stagger">
+        ${kpi(s.inbox, "收件箱", staleN ? `另有 ${staleN} 篇超过 3 周未处理` : "都在 3 周内", null, "inbox", false, 0)}
+        ${kpi(html`${s.T1}<small>/${s.caps.T1}</small>`, "T1 本周", s.T1 > s.caps.T1 ? "超出上限" : `还能放 ${s.caps.T1 - s.T1} 篇`,
+          html`<${Progress} value=${s.T1} max=${s.caps.T1} over=${s.T1 > s.caps.T1} color="var(--ord-3)" />`, "T1", s.T1 > s.caps.T1, 1)}
+        ${kpi(html`${s.queued}<small>/${s.caps.queued}</small>`, "待读", "T1 + T2 + T3",
+          html`<${Progress} value=${s.queued} max=${s.caps.queued} over=${s.queued > s.caps.queued} color="var(--ord-2)" />`, "T1", s.queued > s.caps.queued, 2)}
+        ${kpi(s.reading, "在读", "打开论文时自动进来", null, "reading", false, 3)}
+        ${kpi(s.done_week, "本周读完", "近 12 周",
+          html`<${Sparkline} values=${reads.counts} labels=${reads.labels.map((l) => l + " 那周")} unit=" 篇" color=${C.aqua} height=${26} />`, "done", false, 4)}
+      </div>
+      <${Collapse} open=${charts}><${Insight} items=${filtered} /></${Collapse}>
     </div>
-    ${groups.map((g) => g.items.length === 0 ? null : html`<section class="rl-group">
-      <div class=${"rl-gh" + (g.fold ? " fold" : "")} onClick=${() => g.fold && setOpen({ ...open, [g.id]: !open[g.id] })}>
-        ${g.fold && html`<${Icon} name=${open[g.id] ? "down" : "right"} sm />`}<span>${g.label}</span><small>${g.items.length}</small>
+    ${items.length === 0 && html`<div class="card"><${Empty} icon="inbox" title="阅读清单是空的"
+      hint="Tracker、Claude 和你自己推来的论文都会先进收件箱。在论文库（⌘K）里打开一篇，或在阅读器里点「加入清单」。" /></div>`}
+    ${items.length > 0 && active === 0 && html`<div class="card"><${Empty} icon="check" title=${line ? `「${line}」没有待处理的论文` : "清单清空了"}
+      hint="收件箱、在读和 T1–T3 都没有论文。下面折叠着读完、稍后和不读的记录。" /></div>`}
+    ${groups.map((g) => g.items.length === 0 ? null : html`<section class="rl-group" id=${"g-" + g.id}>
+      <div class=${"rl-gh" + (g.fold ? " fold" : "") + (open[g.id] ? " open" : "")} onClick=${() => g.fold && setOpen({ ...open, [g.id]: !open[g.id] })}>
+        ${g.fold && html`<${Icon} name="right" sm />`}<span>${g.label}</span><small>${g.items.length}</small>
         ${g.hint && !g.fold && html`<em>${g.hint}</em>`}
       </div>
-      ${(!g.fold || open[g.id]) && g.items.map((i) => { idx += 1; const my = idx;
-        return html`<${Row} i=${i} selected=${current && current.id === i.id} onSelect=${() => setSel(my)} onOpen=${onOpen} act=${act} />`; })}
+      ${g.fold
+        ? html`<${Collapse} open=${!!open[g.id]}>${g.items.map((i) => { const vis = !!open[g.id]; if (vis) idx += 1; const my = idx;
+            return html`<${Row} key=${i.id} i=${i} ready=${ready} selected=${vis && current && current.id === i.id} onSelect=${() => vis && setSel(my)} onOpen=${onOpen} act=${act} />`; })}</${Collapse}>`
+        : g.items.map((i) => { idx += 1; const my = idx;
+            return html`<${Row} key=${i.id} i=${i} ready=${ready} selected=${current && current.id === i.id} onSelect=${() => setSel(my)} onOpen=${onOpen} act=${act} />`; })}
     </section>`)}
     <div class="rl-keys"><span class="kbd">1</span><span class="kbd">2</span><span class="kbd">3</span> 定优先级 · <span class="kbd">S</span> 稍后一周 · <span class="kbd">X</span> 不读 · <span class="kbd">D</span> 读完 · <span class="kbd">J</span>/<span class="kbd">K</span> 上下 · <span class="kbd">↵</span> 打开</div>
   </div>
