@@ -555,3 +555,89 @@ def test_cleanup_route(fake):
     assert client.post("/api/bilingual-queue/cleanup", json={"days": 5}).status_code == 400
     r = client.post("/api/bilingual-queue/cleanup", json={"days": 30}).json()
     assert r["removed"] == 1 and r["disk"]["papers"] == 0
+
+
+# ---------- papers known by a DOI, OpenReview or ACL key ----------
+
+DOI_KEY = "doi:10.1145|3626772.3657833"
+
+
+def note_with(stem: str, front: str) -> None:
+    (config.PAPERS_DIR / f"{stem}.md").write_text(f"---\ntype: paper\n{front}\n---\n- Title: {stem}\n", encoding="utf-8")
+    (config.VAULT_PDFS_DIR / f"{stem}.pdf").write_bytes(b"%PDF-1.4")
+    library._arxiv_index.cache_clear()
+    library._ext_index.cache_clear()
+
+
+@pytest.mark.parametrize("key, front", [
+    (DOI_KEY, "doi: 10.1145/3626772.3657833"),
+    ("openreview:abc123XYZ", "source: https://openreview.net/forum?id=abc123XYZ"),
+    ("acl:2024.acl-long.1", "source: https://aclanthology.org/2024.acl-long.1/"),
+])
+def test_a_pdf_made_before_the_note_is_found_after_it_for_every_kind_of_key(fake, key, front):
+    _make_output(key)
+    note_with("Later Note", front)
+    assert bilingual.aliases("Later Note") == ["Later Note", key]
+    assert bilingual.aliases(key) == [key, "Later Note"]
+    assert bilingual.status("Later Note")["state"] == "done" and bilingual.start("Later Note")["state"] == "done"
+    assert fake.starts() == []  # never translated (and paid for) again
+
+
+def test_an_item_with_an_arxiv_key_and_a_doi_joins_them_with_its_note(fake):
+    reading.push(arxiv="2610.11920", ext=DOI_KEY, title="Both", reason="r", source="tracker")
+    _make_output("arxiv:2610.11920")
+    note_with("Found By Doi", "doi: 10.1145/3626772.3657833")  # the note knows the DOI, not the arXiv id
+    reading.load()  # the item is now attached to the note
+    assert reading.key_of(reading.load()[0]) == "Found By Doi"
+    assert set(bilingual.aliases("Found By Doi")) == {"Found By Doi", "arxiv:2610.11920", DOI_KEY}
+    assert bilingual.aliases("arxiv:2610.11920")[1] == "Found By Doi"
+    assert bilingual.status("Found By Doi")["state"] == "done"
+
+
+def test_a_job_under_the_old_doi_key_is_seen_under_the_new_one(fake):
+    (config.PDF_CACHE_DIR / f"{library.safe_name(DOI_KEY)}.pdf").write_bytes(b"%PDF-1.4")
+    fake.mode = "slow"
+    bilingual.start(DOI_KEY)
+    note_with("New Note", "doi: 10.1145/3626772.3657833")
+    assert bilingual.status("New Note")["state"] == "running" and bilingual.start("New Note")["state"] == "running"
+    until(lambda: fake.starts())
+    assert fake.starts() == [library.safe_name(DOI_KEY)] and bilingual.running() == [DOI_KEY]
+
+
+def test_doi_items_are_queued_by_their_key(fake):
+    reading.push(ext=DOI_KEY, title="Loose", reason="r", source="tracker")
+    bq.set_paused(True)
+    bq.tick()
+    tier(DOI_KEY, "T1")
+    bq.tick()
+    assert queued() == [DOI_KEY]
+
+
+@pytest.mark.parametrize("relinked", [False, True])
+@pytest.mark.parametrize("key, front, push", [
+    (DOI_KEY, "doi: 10.1145/3626772.3657833", {"ext": DOI_KEY}),
+    ("openreview:abc123XYZ", "source: https://openreview.net/forum?id=abc123XYZ", {"ext": "openreview:abc123XYZ"}),
+])
+def test_a_waiting_external_item_follows_its_new_note(fake, key, front, push, relinked):
+    reading.push(title="Loose", reason="r", source="tracker", **push)
+    bq.set_paused(True)
+    bq.tick()
+    tier(key, "T1")
+    bq.tick()
+    assert queued() == [key]
+    note_with("Got A Note", front)
+    if relinked:
+        reading.load()  # the reading list itself now says paper: Got A Note
+    assert queued() == ["Got A Note"]  # followed, not dropped as "no longer T1"
+    assert bilingual.status("Got A Note") == {"state": "queued", "position": 1, "paused": True}
+    bq.set_paused(False)
+    bq.tick()
+    assert wait("Got A Note") == "done"
+    bq.tick()
+    assert jobs()["Got A Note"]["state"] == "done" and fake.starts() == ["Got A Note"]
+
+
+def test_the_cleanup_keeps_the_folders_of_unread_external_papers(fake):
+    out = _make_output(DOI_KEY)
+    reading.push(ext=DOI_KEY, title="Unread", reason="r", source="tracker")
+    assert library.safe_name(DOI_KEY) in bq._keep() and out.exists()

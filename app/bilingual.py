@@ -4,9 +4,11 @@ pdf2zh-next keeps formulas, figures and layout and writes a side-by-side dual PD
 plus a Chinese-only PDF. Output lives in the data dir, never in the vault.
 Jobs start from the reader (one click) or from the background queue in bilingual_queue.py.
 
-A paper can have two keys over its life: arxiv:<id> while it is only on the reading list, then its
-note stem once a note exists. Outputs and running jobs are looked up under both (aliases), so a PDF
-made before the note was written is still found, and never translated (and paid for) twice.
+A paper can have several keys over its life: arxiv:<id>, or doi:/openreview:/acl: (library.ext_key),
+while it is only on the reading list, then its note stem once a note exists; an item can also carry two
+of them (a DOI that turned out to have a preprint). Outputs and running jobs are looked up under all of
+them (aliases), so a PDF made before the note was written is still found, and never translated (and
+paid for) twice.
 """
 from __future__ import annotations
 
@@ -19,7 +21,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import library
+from . import library, reading
 from .config import BILINGUAL_DIR, load_settings, secret
 
 UVX = shutil.which("uvx") or str(Path.home() / ".local" / "bin" / "uvx")
@@ -33,16 +35,56 @@ _ENV_DROP = ("PYTHONHOME", "PYTHONNOUSERSITE", "PYTHONPATH", "PYTHONEXECUTABLE",
 QUEUED: dict[str, dict[str, Any]] = {}
 
 
-def aliases(stem: str) -> list[str]:
-    """The paper's keys: the one asked for, then its other name (note stem <-> arxiv:<id>)."""
+_groups: dict[str, Any] = {"stamp": None, "groups": []}
+
+
+def _item_groups() -> list[list[str]]:
+    """Every key a reading-list item is known by, for the items that have more than one (read again
+    only when the list file changes)."""
     try:
-        by_arxiv = library.arxiv_index()
+        st = reading.READING_LIST.stat()
+    except OSError:
+        return []
+    stamp = (st.st_ino, st.st_mtime_ns, st.st_size)
+    if _groups["stamp"] != stamp:
+        groups = []
+        try:
+            for i in reading._load_raw():
+                keys = [k for k in (i.get("paper"), f"arxiv:{i['arxiv']}" if i.get("arxiv") else None, i.get("ext")) if k]
+                if len(keys) > 1:
+                    groups.append(keys)
+        except Exception:  # noqa: BLE001 - a list that is mid-sync: no extra aliases this time, and not cached
+            return []
+        _groups.update(stamp=stamp, groups=groups)
+    return _groups["groups"]
+
+
+def aliases(stem: str) -> list[str]:
+    """The paper's keys: the one asked for, then its note stem if it has one, then its other names
+    (arxiv:<id>, doi:/openreview:/acl: keys)."""
+    try:
+        by_arxiv, by_ext = library.arxiv_index(), library.ext_index()
     except OSError:  # no Papers folder
         return [stem]
     if aid := library.arxiv_key(stem):
-        note = by_arxiv.get(aid)
-        return [stem, note] if note else [stem]
-    return [stem] + [f"arxiv:{a}" for a, s in by_arxiv.items() if s == stem]
+        keys = [stem] + ([by_arxiv[aid]] if aid in by_arxiv else [])
+    elif library.ext_key(stem):
+        keys = [stem] + ([by_ext[stem]] if stem in by_ext else [])
+    else:
+        keys = [stem] + [f"arxiv:{a}" for a, s in by_arxiv.items() if s == stem] + [k for k, s in by_ext.items() if s == stem]
+    grew = True
+    while grew:  # an item with two keys joins them (a note found by DOI, an arXiv key and a DOI on one item)
+        grew = False
+        for group in _item_groups():
+            if any(k in group for k in keys) and (new := [k for k in group if k not in keys]):
+                keys += new
+                grew = True
+    return keys[:1] + sorted(keys[1:], key=library.is_external)  # note stems first (stable)
+
+
+def note_of(key: str) -> str | None:
+    """The note stem of a paper known by an external key, once it has one."""
+    return next((k for k in aliases(key)[1:] if not library.is_external(k)), None)
 
 
 def _dir(stem: str) -> Path:
