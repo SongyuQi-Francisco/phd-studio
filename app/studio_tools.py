@@ -1,7 +1,8 @@
 """In-process MCP tools that let the Studio assistant change the workbench itself:
 reading list, milestones, submission targets, watched venues, ideas.
 
-These write only the app's own YAML stores (direct, no approval card). Every
+These write only the app's own YAML stores (direct, no approval card), except venue_details_propose, which
+only records a proposal the user confirms in the venue sheet. Every
 change is reported to the UI through `emit` so the pages refresh and the chat
 shows what was done.
 """
@@ -14,7 +15,7 @@ from typing import Any
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
-from . import idea_ops, plan, reading, tracking, venues
+from . import idea_ops, plan, reading, tracking, venue_check, venues
 
 SERVER = "studio"
 
@@ -142,6 +143,22 @@ def build(emit: Callable[[dict[str, Any]], Awaitable[None]]):
         await changed("plan", f"{'关注' if res['watched'] else '取消关注'}：{res['venue'].upper()}", res)
         return _ok(res)
 
+    @tool("venue_details_propose",
+          "提交会议投稿信息（赛道、页数、模板、审稿规则、截稿）的更新提案。只提交提案，不会改任何数据：用户在会议详情页看差异后确认才生效。"
+          "venue=会议简称；details 只写有变化的字段（可用：status=confirmed|previous-edition、edition、edition_year、dates、location、homepage、cfp_url、"
+          "deadlines=[{track,abstract,paper}]、tracks=[{name,page_limit,notes}]、format={template,review_model,notable_rules[]}、notes）。"
+          "列表字段要写完整的新列表；核对后没有变化就让 details 为空（只更新核对日期）。sources 必填：你实际读过的官方网址。summary 一句话说明改了什么。",
+          _obj({"venue": S, "details": {"type": "object"}, "sources": SA, "summary": S}, ["venue", "sources"]))
+    async def venue_details_propose(a):
+        try:
+            prop = venue_check.propose(a["venue"], a.get("details") or {}, a.get("sources") or [], a.get("summary") or "")
+        except ValueError as e:
+            return _err(str(e))
+        what = f"{prop['changes']} 处改动" if prop["changes"] else "没有变化，只更新核对日期"
+        await changed("venues", f"会议核对：{prop['acronym']} 的更新提案待你确认（{what}）", prop)
+        return _ok({"proposal": prop["id"], "changes": prop["diff"],
+                    "note": "已提交，等用户在会议详情页确认后才会写入；你不能应用它。"})
+
     @tool("idea_add", "记一个想法到想法收件箱。tags 是自由标签（先 idea_list 看看已有的，尽量复用）。",
           _obj({"text": S, "line": S, "tags": SA, "paper": S}, ["text"]))
     async def idea_add(a):
@@ -231,6 +248,6 @@ def build(emit: Callable[[dict[str, Any]], Awaitable[None]]):
 
     tools = [reading_push, reading_list, reading_update, milestone_add, milestone_update, target_add,
              target_update, venue_search, venue_watch, idea_add, idea_update, idea_merge, idea_list, follow,
-             tracker_latest, timeline]
+             tracker_latest, timeline, venue_details_propose]
     names = [f"mcp__{SERVER}__{t.name}" for t in tools]
     return create_sdk_mcp_server(SERVER, tools=tools), names

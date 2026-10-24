@@ -4,7 +4,10 @@ Sources, refreshed weekly into the data dir (nothing is shipped in the repo):
 - ccfddl/ccf-deadlines (MIT): CCF/CORE ranks, per-edition deadlines with timezone, acceptance rates
 - CORE portal export (ICORE2026): the full CORE conference ranking list
 Curated per-venue details (tracks, page limits, format, review model) live in
-data/venue_details.json with the official URLs they were taken from.
+data/venue_details.json with the official URLs they were taken from, the edition they describe
+(`edition_year`) and when they were checked (`verified_at`). Details the user re-checked and confirmed in the
+app are kept in a vault file (venue_overrides) and merged over the shipped ones; venue_fresh says when
+details have gone stale.
 """
 from __future__ import annotations
 
@@ -23,6 +26,7 @@ from typing import Any
 import httpx
 import yaml
 
+from . import venue_fresh, venue_overrides
 from .config import DATA_DIR, STUDIO_DIR
 
 VENUE_DIR = DATA_DIR / "venues"
@@ -156,15 +160,21 @@ def _accept_rates() -> dict[str, list[dict[str, Any]]]:
     return out
 
 
-def _details() -> dict[str, dict[str, Any]]:
-    if not DETAILS_FILE.exists():
-        return {}
-    data = json.loads(DETAILS_FILE.read_text(encoding="utf-8"))
-    return {_key(v["key"]): v for v in data.get("venues", [])}
+def _details() -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    """(details by venue key with the vault overrides merged on top, the override records by venue key)."""
+    out: dict[str, dict[str, Any]] = {}
+    if DETAILS_FILE.exists():
+        data = json.loads(DETAILS_FILE.read_text(encoding="utf-8"))
+        for v in data.get("venues", []):
+            out[_key(v["key"])] = {"verified_at": data.get("verified_at"), **v}
+    overrides = venue_overrides.load()
+    for k, rec in overrides.items():
+        out[k] = venue_overrides.merge_detail(out.get(k) or {"key": rec.get("key") or k.upper()}, rec.get("details") or {})
+    return out, overrides
 
 
 @lru_cache(maxsize=1)
-def _catalog(_stamp: float) -> dict[str, dict[str, Any]]:
+def _catalog(_stamp: Any) -> dict[str, dict[str, Any]]:
     cat: dict[str, dict[str, Any]] = {}
     # CORE: the authoritative list for CORE ranks.
     if CORE_CSV.exists():
@@ -209,12 +219,14 @@ def _catalog(_stamp: float) -> dict[str, dict[str, Any]]:
                                       "date": conf.get("date"), "place": conf.get("place"),
                                       "timezone": conf.get("timezone") or "AoE", "timeline": timeline})
     rates = {_match(k, cat): v for k, v in _accept_rates().items()}  # accept_rates files use the ccfddl title (SIGKDD)
-    details = _details()
+    details, overrides = _details()
     now = datetime.now(timezone.utc)
     for k, e in cat.items():
         e["editions"].sort(key=lambda x: x.get("year") or 0)
+        e["ccfddl_editions"] = list(e["editions"])  # before the CFP-derived edition below is added
         e["accept_rates"] = rates.get(k, [])
         e["detail"] = details.get(k)
+        e["override"] = overrides.get(k)
         official = _official_edition(e["detail"])
         if official and not any(datetime.fromisoformat(t[kind]) >= now for ed in e["editions"]
                                 for t in ed["timeline"] for kind in ("abstract", "deadline") if t.get(kind)):
@@ -250,8 +262,7 @@ def _official_edition(d: dict[str, Any] | None) -> dict[str, Any] | None:
             timeline.append({"abstract": a, "deadline": p, "comment": f"{row.get('track') or '主会'}（官网）"})
     if not timeline:
         return None
-    year = re.search(r"(20\d{2})", d.get("edition") or "")
-    return {"year": int(year.group(1)) if year else None, "link": d.get("cfp_url") or d.get("homepage"),
+    return {"year": venue_fresh.edition_year(d), "link": d.get("cfp_url") or d.get("homepage"),
             "date": d.get("dates"), "place": d.get("location"), "timezone": "官网", "timeline": timeline}
 
 
@@ -263,7 +274,7 @@ def catalog() -> dict[str, dict[str, Any]]:
             stamp = STAMP.stat().st_mtime
         except Exception:  # noqa: BLE001
             pass
-    return _catalog(stamp)
+    return _catalog((stamp, venue_overrides.stamp()))  # confirming a re-check rebuilds the catalog
 
 
 def next_deadline(e: dict[str, Any], now: datetime | None = None) -> dict[str, Any] | None:
@@ -298,7 +309,7 @@ def next_deadline(e: dict[str, Any], now: datetime | None = None) -> dict[str, A
 def summary(e: dict[str, Any]) -> dict[str, Any]:
     return {"key": e["key"], "acronym": e["acronym"], "title": e["title"], "core": e["core"],
             "ccf": e["ccf"], "field": e["field"], "next": next_deadline(e),
-            "has_detail": bool(e.get("detail")),
+            "has_detail": bool(e.get("detail")), "freshness": venue_fresh.check(e),
             "accept_rate": (e["accept_rates"][-1] if e["accept_rates"] else None)}
 
 
@@ -327,7 +338,7 @@ def get(key: str) -> dict[str, Any] | None:
     if not e:
         return None
     return {**summary(e), "editions": e["editions"][-3:], "accept_rates": e["accept_rates"],
-            "detail": e.get("detail"), "core_source": CORE_SOURCE,
+            "detail": e.get("detail"), "overridden": bool(e.get("override")), "core_source": CORE_SOURCE,
             "core_url": f"https://portal.core.edu.au/conf-ranks/{e['core_id']}/" if e.get("core_id") else None,
             "dblp_url": f"https://dblp.org/db/conf/{e['dblp']}/" if e.get("dblp") else None}
 

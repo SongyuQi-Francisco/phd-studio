@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { html, Icon, api } from "/lib.js";
 import { C, Ring, Progress, Sparkline, Bars, HeatStrip, perWeek, dayKey } from "/charts.js";
 import { Days, daysTo, Skeleton, Empty, Collapse, transition } from "/ui.js";
+import { FreshTag, CheckPanel, StaleCard, StaleNote } from "/venue-check.js";
 
 const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
 const TZ_LABEL = TZ.split("/").pop().replace(/_/g, " ");
@@ -138,8 +139,9 @@ export function OverviewPage({ version, onOpenVenue, go }) {
   const [more, setMore] = useState(false);
   useEffect(() => {
     api("/api/overview").then(setO);
-    Promise.allSettled([api("/api/reading"), api("/api/ideas"), api("/api/track/runs"), api("/api/direction")])
-      .then(([r, i, t, d]) => setX({ items: r.value?.items || [], ideas: i.value?.ideas || [], runs: t.value?.runs || [], lines: d.value?.lines || [] }));
+    Promise.allSettled([api("/api/reading"), api("/api/ideas"), api("/api/track/runs"), api("/api/direction"), api("/api/venue-check/stale")])
+      .then(([r, i, t, d, s]) => setX({ items: r.value?.items || [], ideas: i.value?.ideas || [], runs: t.value?.runs || [], lines: d.value?.lines || [],
+        stale: s.value?.venues || [] }));
   }, [version]);
   if (!o) return html`<${Skeleton} tiles=${5} rows=${2} />`;
   const up = o.events.filter((e) => e.days >= 0);
@@ -168,6 +170,8 @@ export function OverviewPage({ version, onOpenVenue, go }) {
 
     ${cds.length > 0 && html`<div class="countdowns stagger" style=${{ "--n": cds.length }}>${cds.map((c, i) => html`<${Countdown} c=${c} i=${i}
       onClick=${() => c.kind === "milestone" ? go("plan") : (c.ev?.venue || c.t?.venue) ? onOpenVenue(c.ev?.venue || c.t.venue) : go("timeline")} />`)}</div>`}
+
+    <${StaleNote} items=${x.stale} onOpen=${() => go("timeline")} />
 
     <div class="kpis stagger">
       <${Kpi} i=${0} label="本周读完" value=${r.done_week} sub=${`近 12 周共 ${reads.counts.reduce((a, b) => a + b, 0)} 篇 · 在读 ${r.reading}`} onClick=${() => go("list")}>
@@ -230,11 +234,14 @@ function EvRow({ e, onOpenVenue, go }) {
 
 // ---------------- venue detail sheet ----------------
 
-export function VenueSheet({ vkey, onClose, toast, onChanged }) {
+export function VenueSheet({ vkey, onClose, toast, onChanged, onAsk }) {
   const [v, setV] = useState(null);
+  const [chk, setChk] = useState(null);
   const [tgt, setTgt] = useState(null);
   const [rules, setRules] = useState(false);
-  useEffect(() => { setV(null); api(`/api/venues/${encodeURIComponent(vkey)}`).then(setV).catch((e) => toast(e.message)); }, [vkey]);
+  const reload = () => Promise.all([api(`/api/venues/${encodeURIComponent(vkey)}`), api(`/api/venue-check/${encodeURIComponent(vkey)}`)])
+    .then(([venue, check]) => { setV(venue); setChk(check); });
+  useEffect(() => { setV(null); setChk(null); reload().catch((e) => toast(e.message)); }, [vkey]);
   if (!v) return html`<div class="sheet-bg" onClick=${onClose}><div class="sheet"><div class="skel" style="width:120px;height:28px" />
     <div class="skel" style="width:70%;height:14px;margin-top:12px" /><div class="skel" style="width:100%;height:96px;margin-top:22px;border-radius:14px" /></div></div>`;
   const d = v.detail;
@@ -253,7 +260,7 @@ export function VenueSheet({ vkey, onClose, toast, onChanged }) {
       <div><h2>${v.acronym}</h2><div class="muted">${v.title}</div></div>
       <button class="tb-btn" onClick=${onClose}><${Icon} name="x" /></button>
     </div>
-    <div class="row-wrap"><${Ranks} core=${v.core} ccf=${v.ccf} />${v.field && html`<span class="tag">${v.field}</span>`}</div>
+    <div class="row-wrap"><${Ranks} core=${v.core} ccf=${v.ccf} />${v.field && html`<span class="tag">${v.field}</span>`}<${FreshTag} f=${v.freshness} /></div>
 
     <div class="v-hero">
       <${DaysRing} d=${live ? daysTo(n.at) : null} max=${180} size=${86} stroke=${7} color=${C.blue} />
@@ -268,6 +275,7 @@ export function VenueSheet({ vkey, onClose, toast, onChanged }) {
     </div>
 
     <div class="row-wrap">${links.map(([l, u]) => html`<a class="chip" href=${u} target="_blank" rel="noreferrer"><${Icon} name="external" sm />${l}</a>`)}</div>
+    <${CheckPanel} vkey=${v.key} v=${v} chk=${chk} reload=${reload} onAsk=${onAsk} onClose=${onClose} toast=${toast} onChanged=${onChanged} />
     <div class="row-wrap">
       <button class=${"btn " + (v.watched ? "" : "primary")} onClick=${toggle}><${Icon} name="star" sm /> ${v.watched ? "已关注" : "关注（上时间线）"}</button>
       <button class="btn" onClick=${() => setTgt(tgt ? null : { title: "", line: "" })}>设为投稿目标</button>
@@ -281,7 +289,7 @@ export function VenueSheet({ vkey, onClose, toast, onChanged }) {
         series=${[{ name: "录用率", color: C.blue, values: rates.map((r) => r.rate) }]} />
       <div class="muted small">${rates.map((r) => `${r.year}：${r.accepted}/${r.submitted}`).join(" · ")}</div>`}
 
-    ${d && html`<h3>赛道与投稿要求 <span class=${"tag " + (d.status === "confirmed" ? "ok" : "warn")}>${d.status === "confirmed" ? "官网核实" : d.status === "previous-edition" ? "沿用上一届" : "未核实"}</span> <span class="muted small">${d.edition || ""}</span></h3>
+    ${d && html`<h3>赛道与投稿要求 <span class=${"tag " + (d.status === "confirmed" ? "ok" : "warn")}>${d.status === "confirmed" ? "官网核实" : d.status === "previous-edition" ? "沿用上一届" : "未核实"}</span> <span class="muted small">${d.edition || ""}${d.verified_at ? " · 核对于 " + d.verified_at : ""}</span></h3>
       ${(d.deadlines || []).length > 0 && html`<div class="mini-table">${d.deadlines.map((x) => html`<div><span>${x.track || "主会"}</span><span>${[x.abstract && "摘要 " + x.abstract, x.paper && "全文 " + x.paper].filter(Boolean).join(" · ")}</span></div>`)}</div>`}
       ${(d.tracks || []).length > 0 && html`<div class="mini-table">${d.tracks.map((t) => html`<div><span><b>${t.name}</b></span><span>${t.page_limit || ""}${t.notes ? html`<em class="muted"> ${t.notes}</em>` : ""}</span></div>`)}</div>`}
       ${(d.location || d.dates) && html`<div class="muted small">${[d.dates, d.location].filter(Boolean).join(" · ")}</div>`}
@@ -322,7 +330,7 @@ function VenueCard({ v, target, onOpen, onStar, i }) {
         ? html`<span class="muted small">${n.year} ${n.kind === "abstract" ? "摘要截止" : "全文截止"}</span><b>${fmt(n.at)}</b><span class="muted small vc-place">${n.place || ""}</span>`
         : html`<span class="muted small">下一届未公布</span><span class="small">上届 ${n ? fmt(n.at, false) : "—"}</span>`}</div>
     </div>
-    <div class="vc-foot"><${Ranks} core=${v.core} ccf=${v.ccf} /><span class="grow" />
+    <div class="vc-foot"><${Ranks} core=${v.core} ccf=${v.ccf} /><${FreshTag} f=${v.freshness} /><span class="grow" />
       ${rate && html`<span class="vc-rate" title=${`${rate.year} 录用率 ${rate.accepted}/${rate.submitted}`}><span class="muted small">录用</span><b>${(rate.rate * 100).toFixed(0)}%</b></span>`}</div>
   </div>`;
 }
@@ -335,11 +343,13 @@ export function TimelinePage({ version, tab: initialTab, onOpenVenue, toast, onC
   const [core, setCore] = useState("");
   const [ccf, setCcf] = useState("");
   const [plan, setPlan] = useState(null);
+  const [stale, setStale] = useState(null);
   useEffect(() => { if (initialTab) setTab(initialTab); }, [initialTab]);
   const loadVenues = () => api(`/api/venues?scope=${tab === "watched" ? "watched" : "all"}&q=${encodeURIComponent(q)}&core=${encodeURIComponent(core)}&ccf=${ccf}`)
     .then((r) => { setStats(r.stats); setRows(tab === "watched" ? r.venues.sort((a, b) => (a.next && !a.next.past ? a.next.at : "9") .localeCompare(b.next && !b.next.past ? b.next.at : "9")) : r.venues); });
   const loadPlan = () => api("/api/plan").then(setPlan);
-  useEffect(() => { if (tab !== "plan") loadVenues(); if (tab !== "all") loadPlan(); }, [tab, q, core, ccf, version]);
+  useEffect(() => { if (tab !== "plan") loadVenues(); if (tab !== "all") loadPlan(); if (tab === "watched") api("/api/venue-check/stale").then(setStale).catch(() => {}); },
+    [tab, q, core, ccf, version]);
   const star = async (v) => { await api(`/api/venues/${v.key}/watch`, { json: { on: !v.watched } }); toast(v.watched ? `已取消关注 ${v.acronym}` : `已关注 ${v.acronym}`); loadVenues(); onChanged?.(); };
   const refresh = async () => { toast("正在更新会议数据…"); try { await api("/api/venues/refresh", { method: "POST" }); toast("会议数据已更新"); loadVenues(); } catch (e) { toast(e.message); } };
   const targetOf = Object.fromEntries((plan?.targets || []).flatMap((t) => [[t.venue, t]]));
@@ -355,6 +365,7 @@ export function TimelinePage({ version, tab: initialTab, onOpenVenue, toast, onC
     ${tab === "watched" && plan && html`<section class="card">
       <div class="card-head"><h2>未来 180 天</h2><span class="muted small">${live} 个会议已公布下一届截稿</span></div>
       <${TimelineChart} events=${plan.events} days=${180} onPick=${(e) => e.venue && onOpenVenue(e.venue)} /></section>`}
+    ${tab === "watched" && html`<${StaleCard} items=${stale?.venues} months=${stale?.months} onOpen=${onOpenVenue} />`}
     ${tab === "all" && html`<div class="filters">
       <label class="search"><${Icon} name="search" sm /><input placeholder="搜索会议简称或全称" value=${q} onInput=${(e) => setQ(e.target.value)} /></label>
       <div class="seg">${["", "A*", "A", "B", "C"].map((r) => html`<button class=${core === r ? "on" : ""} onClick=${() => setCore(r)}>${r ? "CORE " + r : "CORE 全部"}</button>`)}</div>

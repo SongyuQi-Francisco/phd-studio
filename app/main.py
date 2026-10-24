@@ -586,4 +586,6 @@ from .idea_api import router as idea_router  # noqa: E402  (想法: tags, merge,
 app.include_router(idea_router)
 from .line_api import router as line_router  # noqa: E402  (方向 page: research-line chats, advisor packets)
 app.include_router(line_router)
+from .venue_api import router as venue_check_router  # noqa: E402  (venue details: freshness, 让助手核对)
+app.include_router(venue_check_router)
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")

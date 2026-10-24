@@ -1,0 +1,45 @@
+/* Venue details freshness: badge, reasons, the assistant's proposal diff, stale list, overview note. */
+.fresh-tag { cursor: help; }
+
+.v-check { display: flex; flex-direction: column; gap: 10px; margin: 6px 0 4px; }
+.v-stale, .v-proposal { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--surface-2); }
+.v-stale { border-color: color-mix(in srgb, var(--amber) 38%, var(--line)); background: color-mix(in srgb, var(--amber) 7%, var(--surface-2)); }
+.v-proposal { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); background: color-mix(in srgb, var(--accent) 5%, var(--surface-2)); }
+.vs-head, .vp-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.vp-head b { font-size: 13.5px; }
+.v-stale ul { margin: 8px 0 4px; padding-left: 18px; font-size: 13px; color: var(--text); }
+.v-stale li { margin: 3px 0; }
+.vp-sum { margin: 8px 0 4px; font-size: 13px; }
+.vp-warn { margin: 8px 0; padding: 8px 10px; border-radius: 9px; background: color-mix(in srgb, var(--amber) 14%, transparent); color: var(--amber); font-size: 12.5px; }
+.v-proposal code { font-size: 11.5px; background: var(--hover); padding: 1px 5px; border-radius: 5px; }
+.v-proposal .srcs { margin: 6px 0; overflow-wrap: anywhere; }
+.v-fresh { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.v-fresh .i { color: var(--green); }
+
+.vdiff { margin: 8px 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--surface); }
+.vd-field { padding: 6px 0 4px; border-top: 1px solid var(--line); }
+.vd-field:first-child { border-top: 0; }
+.vd-field > b { display: block; padding: 0 10px 3px; font-size: 11.5px; color: var(--text-2); font-weight: 600; }
+.vd-line { display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 4px; padding: 2px 10px; font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.vd-line i { font-style: normal; font-weight: 700; text-align: center; }
+.vd-line.add { background: var(--add); }
+.vd-line.add i { color: var(--green); }
+.vd-line.del { background: var(--del); color: var(--text-2); }
+.vd-line.del i { color: var(--red); }
+
+.stale-card .card-head h2 { white-space: nowrap; }
+.stale-card .srow { display: grid; grid-template-columns: 78px minmax(0, 1fr) auto auto; gap: 10px; align-items: center; width: 100%; padding: 8px 6px; border-radius: 9px; text-align: left; transition: background .15s; }
+.stale-card .srow:hover { background: var(--hover); }
+.srow-why { display: flex; gap: 6px; flex-wrap: wrap; }
+.srow .i { color: var(--text-3); }
+
+.stale-note { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 14px; margin-bottom: 12px; border-radius: 12px; text-align: left; font-size: 13px;
+  background: color-mix(in srgb, var(--amber) 8%, var(--surface)); border: 1px solid color-mix(in srgb, var(--amber) 30%, var(--line)); transition: background .15s; }
+.stale-note:hover { background: color-mix(in srgb, var(--amber) 13%, var(--surface)); }
+.stale-note span:nth-child(2) { flex: 1; min-width: 0; }
+.stale-note .i { color: var(--text-3); }
+
+@media (max-width: 720px) {
+  .stale-card .srow { grid-template-columns: 64px minmax(0, 1fr) auto; }
+  .stale-card .srow > .muted { display: none; }
+}

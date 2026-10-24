@@ -5,6 +5,8 @@
   {
    "name": "SIGIR",
    "edition": "SIGIR 2027",
+   "edition_year": 2027,
+   "verified_at": "2026-10-24",
    "homepage": "https://sigir2027.org/",
    "cfp_url": "https://sigir2027.org/pages/submit-full.html",
    "location": "Signia by Hilton San Jose, San Jose, California, USA",
@@ -86,6 +88,8 @@
   {
    "name": "RecSys",
    "edition": "RecSys 2026",
+   "edition_year": 2026,
+   "verified_at": "2026-10-24",
    "homepage": "https://recsys.acm.org/recsys26/",
    "cfp_url": "https://recsys.acm.org/recsys26/call/",
    "location": "Minneapolis, Minnesota, USA",
@@ -181,6 +185,8 @@
   {
    "name": "KDD",
    "edition": "KDD 2027",
+   "edition_year": 2027,
+   "verified_at": "2026-10-24",
    "homepage": "https://kdd2027.kdd.org/",
    "cfp_url": "https://kdd2027.kdd.org/research-track-call-for-papers/",
    "location": "San Jose McEnery Convention Center, San Jose, United States",
@@ -260,6 +266,8 @@
   {
    "name": "WWW",
    "edition": "WWW 2027",
+   "edition_year": 2027,
+   "verified_at": "2026-10-24",
    "homepage": "https://www2027.thewebconf.org/",
    "cfp_url": "https://www2027.thewebconf.org/?p=296",
    "location": "Dublin Royal Convention Centre, Dublin, Ireland",
@@ -343,6 +351,8 @@
   {
    "name": "WSDM",
    "edition": "WSDM 2027",
+   "edition_year": 2027,
+   "verified_at": "2026-10-24",
    "homepage": "https://wsdm-conference.org/2027/",
    "cfp_url": "https://wsdm-conference.org/2027/cffp.html",
    "location": "Cordis, Hong Kong (555 Shanghai St, Mong Kok)",
@@ -417,6 +427,8 @@
   {
    "name": "CIKM",
    "edition": "CIKM 2026",
+   "edition_year": 2026,
+   "verified_at": "2026-10-24",
    "homepage": "https://cikm2026.diag.uniroma1.it/",
    "cfp_url": "https://cikm2026.diag.uniroma1.it/full-research-papers/",
    "location": "Rome, Italy",
@@ -497,6 +509,8 @@
   {
    "name": "ECIR",
    "edition": "ECIR 2027",
+   "edition_year": 2027,
+   "verified_at": "2026-10-24",
    "homepage": "https://www.ecir2027.co.uk/",
    "cfp_url": "https://www.ecir2027.co.uk/call-for-full-papers",
    "location": "Southampton Football Club, St Mary's Stadium, Southampton, UK",
@@ -593,6 +607,8 @@
   {
    "name": "UMAP",
    "edition": "UMAP 2027",
+   "edition_year": 2027,
+   "verified_at": "2026-10-24",
    "homepage": "https://um.org/umap2027/",
    "cfp_url": "https://um.org/umap2027/call-for-full-and-short-paper/",
    "location": "Chicago, USA (in person)",
@@ -662,6 +678,8 @@
   {
    "name": "ACL",
    "edition": "ACL 2027",
+   "edition_year": 2027,
+   "verified_at": "2026-10-24",
    "homepage": "https://2027.aclweb.org/",
    "cfp_url": "https://2027.aclweb.org/calls/main/",
    "location": "Kyoto, Japan",
@@ -730,6 +748,8 @@
   {
    "name": "EMNLP",
    "edition": "EMNLP 2026",
+   "edition_year": 2026,
+   "verified_at": "2026-10-24",
    "homepage": "https://2026.emnlp.org/",
    "cfp_url": "https://2026.emnlp.org/calls/main_conference_papers/",
    "location": "Budapest, Hungary",
@@ -791,6 +811,8 @@
   {
    "name": "NAACL",
    "edition": "NAACL 2027",
+   "edition_year": 2027,
+   "verified_at": "2026-10-24",
    "homepage": "https://2027.naacl.org/",
    "cfp_url": "https://2027.naacl.org/calls/main_conference_papers/",
    "location": "San Francisco, California, USA",
@@ -847,6 +869,8 @@
   {
    "name": "NeurIPS",
    "edition": "NeurIPS 2026",
+   "edition_year": 2026,
+   "verified_at": "2026-10-24",
    "homepage": "https://neurips.cc/",
    "cfp_url": "https://neurips.cc/Conferences/2026/CallForPapers",
    "location": "Sydney (main), Atlanta (satellite), Paris (satellite)",
@@ -908,6 +932,8 @@
   {
    "name": "ICLR",
    "edition": "ICLR 2027",
+   "edition_year": 2027,
+   "verified_at": "2026-10-24",
    "homepage": "https://iclr.cc/Conferences/2027/index.html",
    "cfp_url": "https://www.iclr.cc/Conferences/2027/CallForPapers",
    "location": "Venue TBA on Dates page; homepage says California, hero image captioned 'Moscone Center, San Francisco, CA'",
@@ -955,6 +981,8 @@
   {
    "name": "ICML",
    "edition": "ICML 2026",
+   "edition_year": 2026,
+   "verified_at": "2026-10-24",
    "homepage": "https://icml.cc/",
    "cfp_url": "https://icml.cc/Conferences/2026/CallForPapers",
    "location": "Seoul, South Korea (COEX Convention & Exhibition Center)",
@@ -1012,6 +1040,8 @@
   {
    "name": "AAAI",
    "edition": "AAAI-27",
+   "edition_year": 2027,
+   "verified_at": "2026-10-24",
    "homepage": "https://aaai.org/conference/aaai/aaai-27/",
    "cfp_url": "https://aaai.org/conference/aaai/aaai-27/main-technical-track-call/",
    "location": "Montréal, Canada (in person)",
@@ -1061,6 +1091,8 @@
   {
    "name": "IJCAI",
    "edition": "IJCAI 2027",
+   "edition_year": 2027,
+   "verified_at": "2026-10-24",
    "homepage": "https://2027.ijcai.org/",
    "cfp_url": "https://2027.ijcai.org/ijcai-2027-call-for-papers-main-track/",
    "location": "Kyoto, Japan, with satellite event in Hengqin, China",

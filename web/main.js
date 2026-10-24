@@ -608,7 +608,7 @@ function App() {
         <${ChatPanel} stem="studio" paper=${null} attachments=${studioAtt} setAttachments=${setStudioAtt}
           registerSend=${(api_) => (studioRef.current = api_)} claudeOk=${claudeOk} title="工作台助手"
           chips=${STUDIO_CHIPS} emptyHint="跟我说要做的事：加里程碑、设投稿目标、记想法、把论文推进清单、查会议截稿……"
-          onStudioChanged=${() => { bump(); }} />
+          onStudioChanged=${(area) => { bump(); if (area === "venues") toast("助手提交了会议核对结果，等你确认", { action: { label: "去看看", run: () => go("timeline") } }); }} />
       </div>
       ${lineChats.map((l) => html`<div key=${l.key} style=${{ display: sideLine === l.key ? "contents" : "none" }}>
         <${LinePanel} line=${l} claudeOk=${claudeOk} registerSend=${(api_) => (lineRefs.current[l.key] = api_)} toast=${toast}
@@ -618,7 +618,7 @@ function App() {
 
     ${notePath && html`<${NoteSheet} path=${notePath} onClose=${() => setNotePath(null)} onOpenPaper=${openPaper}
       actions=${[{ label: "和助手讨论", run: (n) => { setNotePath(null); ask(`我们来讨论这篇笔记：${n.path}。先读它，然后告诉我要点、和我当前课题的关系、以及值得跟进的下一步。`, `讨论 ${n.name}`); } }]} />`}
-    ${venueKey && html`<${VenueSheet} vkey=${venueKey} onClose=${() => setVenueKey(null)} toast=${toast} onChanged=${bump} />`}
+    ${venueKey && html`<${VenueSheet} vkey=${venueKey} onClose=${() => setVenueKey(null)} toast=${toast} onChanged=${bump} onAsk=${ask} />`}
     ${ideaOpen && html`<${IdeaCapture} lines=${status?.lines || []} context=${reading ? { paper: stem, page: pageRef.current } : null}
       onClose=${() => setIdeaOpen(false)} onSaved=${() => { setIdeaOpen(false); toast("想法已记下"); bump(); }} />`}
     ${doneOpen && paper?.reading && html`<${DoneDialog} item=${{ ...paper.reading, key: stem, title: paper.title }}
