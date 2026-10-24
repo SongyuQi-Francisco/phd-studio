@@ -14,14 +14,18 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 import threading
 import time
 import unicodedata
+import xml.etree.ElementTree as ET
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 import pymupdf as fitz
@@ -46,7 +50,8 @@ for _d in (CACHE, CACHE / "img", THUMBS):
 
 
 class _Pace:
-    """One request at a time, at least `gap` seconds apart."""
+    """Request starts at least `gap` seconds apart. `with` holds the slot for the whole request
+    (short API calls); `wait()` only reserves a start time (long downloads run unlocked)."""
 
     def __init__(self, gap: float):
         self.gap, self.lock, self.last = gap, threading.Lock(), 0.0
@@ -57,24 +62,41 @@ class _Pace:
         if wait > 0:
             time.sleep(wait)
 
-    def __exit__(self, *exc: Any) -> None:
+    def __exit__(self, *exc: object) -> None:
         self.last = time.time()
         self.lock.release()
+
+    def wait(self) -> None:
+        with self.lock:
+            start = max(time.time(), self.last + self.gap)
+            self.last = start
+        time.sleep(max(0.0, start - time.time()))
 
 
 _oa_pace = _Pace(0.2)
 _pdf_pace = _Pace(3.0)
 
 
+def redact(text: str) -> str:
+    """Errors reach toasts and banners: never let the OpenAlex key ride along in a URL."""
+    text = re.sub(r"(api_key=)[^&\s'\"]+", r"\1***", str(text))
+    key = secret("OPENALEX_API_KEY", "openalex")
+    return text.replace(key, "***") if key else text
+
+
 def _oa(path: str, **params: Any) -> dict[str, Any]:
     key = secret("OPENALEX_API_KEY", "openalex")
     if key:
         params["api_key"] = key
-    with _oa_pace:
-        r = httpx.get(f"{OPENALEX}/{path}", params=params, headers=UA, timeout=40)
+    try:
+        with _oa_pace:
+            r = httpx.get(f"{OPENALEX}/{path}", params=params, headers=UA, timeout=40)
+    except httpx.HTTPError as e:  # the message may carry the URL (and the key): rebuild it
+        raise httpx.HTTPError(f"OpenAlex 连接失败（{e.__class__.__name__}）") from None
     if r.status_code == 429:
         raise httpx.HTTPError("OpenAlex 今日免费额度已用完（可在 secrets/openalex.env 里放 OPENALEX_API_KEY）")
-    r.raise_for_status()
+    if r.status_code >= 400:
+        raise httpx.HTTPError(f"OpenAlex 返回 HTTP {r.status_code}")
     return r.json()
 
 
@@ -211,7 +233,7 @@ _FALLBACK_TOPICS = {
         {"id": "recsys", "label": "RecSys", "weight": 2, "patterns": ["recommend", "recsys", "collaborative filtering"]},
         {"id": "llm", "label": "LLM", "weight": 2, "patterns": ["large language model", r"\bllms?\b"]},
         {"id": "agent", "label": "Agentic", "weight": 3, "patterns": [r"\bagent", "agentic", "tool[- ]use"]},
-        {"id": "memory", "label": "Memory", "weight": 3, "patterns": ["memory", "lifelong"]},
+        {"id": "evaluation", "label": "Evaluation", "weight": 1, "patterns": ["benchmark", "evaluation"]},
     ],
     "tiers": {"A": {"min_score": 10}, "B": {"min_score": 6}, "C": {"min_score": 2}},
 }
@@ -296,10 +318,19 @@ def _cache_get(name: str) -> tuple[Any, float] | None:
         return None
 
 
+def _atomic_write(path: Path, data: bytes) -> None:
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
 def _cache_put(name: str, data: Any) -> None:
-    tmp = CACHE / f"{name}.json.tmp"
-    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(CACHE / f"{name}.json")
+    _atomic_write(CACHE / f"{name}.json", json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
 
 def _abstract(inv: dict[str, list[int]] | None) -> str:
@@ -395,12 +426,14 @@ def fetch_one(s: dict[str, Any], refresh: bool = False) -> dict[str, Any]:
         data = _fetch_author(s)
         try:
             data["arxiv"] = _fetch_arxiv(s["name"])
-        except (httpx.HTTPError, ValueError) as e:
+        except (httpx.HTTPError, ValueError, ET.ParseError) as e:  # keep the OpenAlex part either way
             data["arxiv"], data["arxiv_error"] = (hit[0].get("arxiv", []) if hit else []), e.__class__.__name__
         _cache_put(name, data)
+        _failed_at.pop(s["id"], None)
         return {**data, "stale": False}
     except (httpx.HTTPError, ValueError, KeyError) as e:
-        msg = str(e) if "额度" in str(e) else f"OpenAlex 连接失败（{e.__class__.__name__}）"
+        _failed_at[s["id"]] = time.time()
+        msg = redact(str(e)) if isinstance(e, httpx.HTTPError) else f"OpenAlex 数据异常（{e.__class__.__name__}）"
         if hit:
             return {**hit[0], "stale": True, "error": msg}
         return {"stale": True, "error": msg, "works": [], "arxiv": [], "by_year": [], "author": {}}
@@ -410,33 +443,56 @@ def fetch_one(s: dict[str, Any], refresh: bool = False) -> dict[str, Any]:
 
 _job: dict[str, Any] = {"running": False, "done": 0, "total": 0, "current": None, "error": None, "finished": None}
 _job_lock = threading.Lock()
-_last_try = [0.0]  # automatic refreshes wait 30 min after an attempt (offline: no hammering)
+_todo: list[dict[str, Any]] = []  # the running job's queue; scholars added mid-run are appended
+_forced: set[str] = set()
+_failed_at: dict[str, float] = {}  # scholar id -> last failed fetch (automatic retries wait 30 min)
 
 
-def refresh_in_background(force: bool = False) -> dict[str, Any]:
+def refresh_in_background(force: bool = False, ids: set[str] | None = None) -> dict[str, Any]:
+    want = [s for s in scholars() if s.get("openalex") and (ids is None or s["id"] in ids)]
     with _job_lock:
-        if _job["running"]:
+        if _job["running"]:  # join the running job instead of being dropped
+            queued = {s["id"] for s in _todo}
+            extra = [s for s in want if s["id"] not in queued]
+            _todo.extend(extra)
+            _forced.update(s["id"] for s in extra if force)
+            _job["total"] = len(_todo)
             return dict(_job)
-        todo = [s for s in scholars() if s.get("openalex")]
-        _job.update(running=True, done=0, total=len(todo), current=None, error=None)
-        _last_try[0] = time.time()
-
-    def run() -> None:
-        try:
-            for s in todo:
-                _job["current"] = s["name"]
-                got = fetch_one(s, refresh=force)
-                if got.get("error"):
-                    _job["error"] = got["error"]
-                _job["done"] += 1
-            _institutions(refresh=force)
-        except Exception as e:  # keep the page usable whatever happens
-            _job["error"] = f"{e.__class__.__name__}: {e}"
-        finally:
-            _job.update(running=False, current=None, finished=datetime.now(timezone.utc).isoformat(timespec="seconds"))
-
-    threading.Thread(target=run, daemon=True).start()
+        _todo[:] = want
+        _forced.clear()
+        _forced.update(s["id"] for s in want if force)
+        _job.update(running=True, done=0, total=len(want), current=None, error=None)
+    threading.Thread(target=_run_job, daemon=True).start()
     return dict(_job)
+
+
+def _run_job() -> None:
+    i, inst_for = 0, -1
+    while True:
+        with _job_lock:  # "nothing left" and "not running" flip together, so late additions start a new job
+            n = len(_todo)
+            if i >= n and inst_for == n:
+                _job.update(running=False, current=None, finished=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+                return
+            s = _todo[i] if i < n else None
+        if s is None:
+            try:
+                _institutions()
+            except Exception as e:  # logos are optional
+                _job["error"] = redact(f"机构信息：{e}")
+            inst_for = n
+            _prune(CACHE / "img", keep=300, days=180)
+            continue
+        _job["current"] = s["name"]
+        try:
+            got = fetch_one(s, refresh=s["id"] in _forced)
+            if got.get("error"):
+                _job["error"] = got["error"]
+        except Exception as e:  # one scholar's failure never stops the others
+            _failed_at[s["id"]] = time.time()
+            _job["error"] = redact(f"{s['name']}：{e.__class__.__name__}")
+        i += 1
+        _job["done"] = i
 
 
 def _needs_fetch(s: dict[str, Any]) -> bool:
@@ -458,8 +514,12 @@ def _months(n: int = 12) -> list[str]:
 def activity(refresh: bool = False) -> dict[str, Any]:
     """Everything the scholars tab draws, from cache; kicks off a background fetch when stale."""
     sch = [s for s in scholars() if s.get("openalex")]
-    if refresh or (time.time() - _last_try[0] > 1800 and any(_needs_fetch(s) for s in sch)):
-        refresh_in_background(force=refresh)
+    if refresh:
+        refresh_in_background(force=True)
+    else:
+        due = {s["id"] for s in sch if _needs_fetch(s) and time.time() - _failed_at.get(s["id"], 0) > 1800}
+        if due:
+            refresh_in_background(ids=due)
     terms = line_terms()
     labels = topic_labels()
     labs = _lab_ids()
@@ -585,34 +645,79 @@ def _institutions(refresh: bool = False) -> dict[str, Any]:
     return have
 
 
+_bad_hosts: dict[str, float] = {}  # host -> skip until (unreachable or refusing)
+FAIL_TTL = 86400
+
+
+def _fresh(marker: Path, ttl: float = FAIL_TTL) -> bool:
+    return marker.exists() and time.time() - marker.stat().st_mtime < ttl
+
+
+def _download(url: str, limit: int, timeout: float = 30) -> tuple[bytes, str]:
+    """GET with a size cap checked before (Content-Length) and while streaming; marks dead hosts."""
+    host = urlsplit(url).hostname or ""
+    if _bad_hosts.get(host, 0) > time.time():
+        raise ValueError(f"{host} skipped after a recent failure")
+    try:
+        with httpx.stream("GET", url, headers=UA, timeout=timeout, follow_redirects=True) as r:
+            r.raise_for_status()
+            if int(r.headers.get("content-length") or 0) > limit:
+                raise ValueError("too large")
+            buf = bytearray()
+            for chunk in r.iter_bytes():
+                buf += chunk
+                if len(buf) > limit:
+                    raise ValueError("too large")
+            return bytes(buf), r.headers.get("content-type", "")
+    except (httpx.TransportError, httpx.HTTPStatusError) as e:
+        if isinstance(e, httpx.TransportError) or e.response.status_code in (403, 429) or e.response.status_code >= 500:
+            _bad_hosts[host] = time.time() + 3600
+        raise
+
+
+def _prune(folder: Path, keep: int, days: int) -> None:
+    """Re-creatable caches: drop files older than `days`, then all but the newest `keep`."""
+    try:
+        files = sorted((f for f in folder.iterdir() if f.is_file()), key=lambda f: f.stat().st_mtime, reverse=True)
+    except OSError:
+        return
+    cutoff = time.time() - days * 86400
+    for n, f in enumerate(files):
+        if n >= keep or f.stat().st_mtime < cutoff:
+            f.unlink(missing_ok=True)
+
+
 def _download_image(url: str, dest_stem: Path) -> Path | None:
     for ext in (".jpg", ".png", ".gif", ".webp", ".svg"):
         if dest_stem.with_suffix(ext).exists():
             return dest_stem.with_suffix(ext)
-    try:
-        r = httpx.get(url, headers=UA, timeout=20, follow_redirects=True)
-        r.raise_for_status()
-    except httpx.HTTPError:
+    fail = dest_stem.with_suffix(".fail")
+    if _fresh(fail):
         return None
-    ctype = r.headers.get("content-type", "")
+    try:
+        content, ctype = _download(url, 8_000_000, timeout=20)
+    except (httpx.HTTPError, ValueError):
+        fail.touch()
+        return None
     ext = ".png" if "png" in ctype else ".gif" if "gif" in ctype else ".webp" if "webp" in ctype \
         else ".svg" if "svg" in ctype else ".jpg" if ("jpeg" in ctype or "jpg" in ctype) else None
-    if not ext or len(r.content) > 8_000_000:
+    if not ext:
+        fail.touch()
         return None
-    if ext in (".jpg", ".png") and len(r.content) > 80_000:  # card avatars are ≤ 64 px: keep a small copy
+    if ext in (".jpg", ".png") and len(content) > 80_000:  # card avatars are ≤ 64 px: keep a small copy
         try:
-            pix = fitz.Pixmap(r.content)
+            pix = fitz.Pixmap(content)
             while pix.width > 480:
                 pix.shrink(1)
             if pix.alpha:
                 pix = fitz.Pixmap(pix, 0)
             out = dest_stem.with_suffix(".jpg")
-            out.write_bytes(pix.tobytes("jpeg", jpg_quality=85))
+            _atomic_write(out, pix.tobytes("jpeg", jpg_quality=85))
             return out
         except Exception:  # pymupdf cannot decode it: keep the original bytes
             pass
     out = dest_stem.with_suffix(ext)
-    out.write_bytes(r.content)
+    _atomic_write(out, content)
     return out
 
 
@@ -630,29 +735,76 @@ def logo(inst_id: str) -> Path | None:
     return _download_image(info["logo"], CACHE / "img" / f"i-{inst_id}") if info.get("logo") else None
 
 
+# Thumbnails are rendered by a small paced worker pool; the page asks which are ready
+# (thumbs_status) and the image route only serves finished files, so no request waits on arXiv.
+_ARXIV_ID = re.compile(r"\d{4}\.\d{4,5}")
+_thumb_q: list[str] = []
+_thumb_busy: set[str] = set()
+_thumb_workers = [0]
+_thumb_lock = threading.Lock()
+THUMB_WORKERS = 2
+MAX_PDF = 40_000_000
+
+
 def thumbnail(arxiv: str) -> Path | None:
-    """Top of an arXiv PDF's first page as a small JPEG; downloaded once, one PDF every 3 s."""
-    if not re.fullmatch(r"\d{4}\.\d{4,5}", arxiv):
-        return None
+    out = THUMBS / f"{arxiv}.jpg"
+    return out if _ARXIV_ID.fullmatch(arxiv) and out.exists() else None
+
+
+def thumbs_status(ids: list[str]) -> dict[str, list[str]]:
+    ready, failed, pending = [], [], []
+    for a in dict.fromkeys(ids[:80]):
+        if not isinstance(a, str) or not _ARXIV_ID.fullmatch(a):
+            continue
+        if (THUMBS / f"{a}.jpg").exists():
+            ready.append(a)
+        elif _fresh(THUMBS / f"{a}.fail"):
+            failed.append(a)
+        else:
+            pending.append(a)
+    with _thumb_lock:
+        for a in pending:
+            if a not in _thumb_q and a not in _thumb_busy:
+                _thumb_q.append(a)
+        del _thumb_q[:-200]  # only the most recent asks matter
+        while _thumb_workers[0] < THUMB_WORKERS and len(_thumb_q) > _thumb_workers[0] - len(_thumb_busy):
+            _thumb_workers[0] += 1
+            threading.Thread(target=_thumb_worker, daemon=True).start()
+    return {"ready": ready, "failed": failed, "pending": pending}
+
+
+def _thumb_worker() -> None:
+    while True:
+        with _thumb_lock:
+            if not _thumb_q:
+                _thumb_workers[0] -= 1
+                last = _thumb_workers[0] == 0
+                break
+            a = _thumb_q.pop(0)
+            _thumb_busy.add(a)
+        try:
+            _render_thumb(a)
+        finally:
+            with _thumb_lock:
+                _thumb_busy.discard(a)
+    if last:
+        _prune(THUMBS, keep=600, days=120)
+
+
+def _render_thumb(arxiv: str) -> None:
     out, fail = THUMBS / f"{arxiv}.jpg", THUMBS / f"{arxiv}.fail"
-    if out.exists():
-        return out
-    if fail.exists() and time.time() - fail.stat().st_mtime < 86400:
-        return None
+    if out.exists() or _fresh(fail):
+        return
     try:
-        with _pdf_pace:
-            if out.exists():
-                return out
-            r = httpx.get(f"https://export.arxiv.org/pdf/{arxiv}", headers=UA, timeout=60, follow_redirects=True)
-        r.raise_for_status()
-        if not r.content.startswith(b"%PDF") or len(r.content) > 40_000_000:
+        _pdf_pace.wait()  # arXiv etiquette: starts ≥ 3 s apart; the download itself is not serialized
+        content, _ = _download(f"https://export.arxiv.org/pdf/{arxiv}", MAX_PDF, timeout=60)
+        if not content.startswith(b"%PDF"):
             raise ValueError("not a pdf")
-        with fitz.open(stream=r.content, filetype="pdf") as doc:
+        with fitz.open(stream=content, filetype="pdf") as doc:
             page = doc[0]
             zoom = 640 / page.rect.width  # sharp on a 2x screen at card width
-            pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=fitz.Rect(0, page.rect.height * 0.05, page.rect.width, page.rect.height * 0.5))
-            out.write_bytes(pix.tobytes("jpeg", jpg_quality=82))
-        return out
-    except Exception:  # bad download or a PDF pymupdf cannot open: show the placeholder
+            pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom),
+                                  clip=fitz.Rect(0, page.rect.height * 0.05, page.rect.width, page.rect.height * 0.5))
+            _atomic_write(out, pix.tobytes("jpeg", jpg_quality=82))
+    except Exception:  # bad download or a PDF pymupdf cannot open: the card keeps its placeholder
         fail.touch()
-        return None

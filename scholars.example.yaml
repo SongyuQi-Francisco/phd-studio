@@ -20,4 +20,4 @@ scholars:
 lines:
 - id: l000001
   line: Project A                  # a name from [profile].lines in studio.toml
-  keywords: ["memory consolidation", "memory + recommend"]   # "a + b" needs both; parts match as word prefixes
+  keywords: ["graph neural network", "contrastive + recommend"]   # "a + b" needs both; parts match as word prefixes

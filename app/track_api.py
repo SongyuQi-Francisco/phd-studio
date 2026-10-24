@@ -32,7 +32,7 @@ async def scholar_search(q: str) -> dict[str, Any]:
     try:
         return {"results": await run_in_threadpool(scholars.search_authors, q.strip())}
     except httpx.HTTPError as e:
-        raise HTTPException(502, f"OpenAlex 查询失败：{e}")
+        raise HTTPException(502, scholars.redact(f"OpenAlex 查询失败：{e}"))
 
 
 @router.post("/scholars")
@@ -41,7 +41,7 @@ def scholar_add(body: dict[str, Any]) -> dict[str, Any]:
         rec = scholars.add(body)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    scholars.refresh_in_background()
+    scholars.refresh_in_background(ids={rec["id"]})  # joins a running refresh if there is one
     return rec
 
 
@@ -97,9 +97,15 @@ async def logo(inst_id: str) -> FileResponse:
     return FileResponse(p, headers=IMG_HEADERS)
 
 
+@router.post("/thumbs")
+def thumbs(body: dict[str, Any]) -> dict[str, Any]:
+    """Which first-page thumbnails are ready; missing ones are queued for the paced renderer."""
+    return scholars.thumbs_status(list(body.get("ids") or []))
+
+
 @router.get("/thumb/{arxiv}")
-async def thumb(arxiv: str) -> FileResponse:
-    p = await run_in_threadpool(scholars.thumbnail, arxiv)
+def thumb(arxiv: str) -> FileResponse:
+    p = scholars.thumbnail(arxiv)  # only finished files; rendering happens in the background
     if not p:
         raise HTTPException(404)
     return FileResponse(p, media_type="image/jpeg", headers=IMG_HEADERS)

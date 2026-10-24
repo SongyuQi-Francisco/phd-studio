@@ -12,7 +12,7 @@ const ago = (d) => { const n = Math.round((Date.now() - new Date(d)) / 864e5); r
 
 // ---------------- paper card (shared by every tab) ----------------
 
-function PaperCard({ p, reason, lines, faces, labels, toast, onOpenPaper, onAsk, onAdded, extra }) {
+function PaperCard({ p, reason, lines, faces, labels, toast, onOpenPaper, onAsk, onAdded, extra, thumbReady }) {
   const [open, setOpen] = useState(false);
   const [state, setState] = useState(p.listed);
   const [thumb, setThumb] = useState(true);
@@ -33,7 +33,7 @@ function PaperCard({ p, reason, lines, faces, labels, toast, onOpenPaper, onAsk,
   return html`<article class=${"tk-paper" + (open ? " open" : "") + (rel ? " rel" : "")}>
     <div class="tk-thumb" onClick=${() => setOpen(!open)}>
       <div class="ph"><b>${p.venue && p.venue !== "arXiv" ? p.venue : (date || "").slice(0, 4)}</b><span>${p.venue === "arXiv" || !p.venue ? "arXiv 预印本" : p.venue_full || ""}</span></div>
-      ${p.arxiv && thumb && html`<img src=${`/api/track/thumb/${p.arxiv}`} alt="" loading="lazy" onError=${() => setThumb(false)} />`}
+      ${p.arxiv && thumbReady && thumb && html`<img src=${`/api/track/thumb/${p.arxiv}`} alt="" loading="lazy" onError=${() => setThumb(false)} />`}
       ${p.tier && html`<span class="tier-pin"><span class=${"tk-tier " + p.tier} title=${`Tier ${p.tier}（与巡检同一套打分）`}>${p.tier}</span></span>`}
     </div>
     <div class="tk-pbody">
@@ -63,11 +63,34 @@ function PaperCard({ p, reason, lines, faces, labels, toast, onOpenPaper, onAsk,
   </article>`;
 }
 
+// Thumbnails render in the background; ask which are ready and look again while some are pending.
+function useThumbs(ids) {
+  const [ready, setReady] = useState(() => new Set());
+  const key = ids.join(",");
+  useEffect(() => {
+    if (!ids.length) return;
+    let alive = true, tries = 0, timer;
+    const poll = async () => {
+      try {
+        const r = await api("/api/track/thumbs", { json: { ids } });
+        if (!alive) return;
+        setReady((old) => (r.ready.every((a) => old.has(a)) ? old : new Set([...old, ...r.ready])));
+        if (r.pending.length && ++tries < 30) timer = setTimeout(poll, 4000);
+      } catch {}
+    };
+    poll();
+    return () => { alive = false; clearTimeout(timer); };
+  }, [key]);
+  return ready;
+}
+
 function PaperGrid({ papers, step = 18, render }) {
   const [n, setN] = useState(step);
   useEffect(() => setN(step), [papers]);
+  const shown = papers.slice(0, n);
+  const ready = useThumbs(shown.map((p) => p.arxiv).filter(Boolean));
   if (!papers.length) return html`<div class="tk-empty">没有符合筛选的论文</div>`;
-  return html`<div class="tk-papers">${papers.slice(0, n).map(render)}</div>
+  return html`<div class="tk-papers">${shown.map((p) => render(p, ready.has(p.arxiv)))}</div>
     ${papers.length > n && html`<button class="btn tk-more" onClick=${() => setN(n + step * 2)}>再显示 ${Math.min(step * 2, papers.length - n)} 篇（共 ${papers.length}）</button>`}`;
 }
 
@@ -98,7 +121,7 @@ function ScholarEditor({ list, onClose, toast, onChanged }) {
   const remove = async (s) => { if (!confirm(`从名单移除 ${s.name}？`)) return; await api(`/api/track/scholars/${s.id}`, { method: "DELETE" }); toast(`已移除 ${s.name}`); onChanged(); };
   const have = new Set(list.map((s) => s.openalex));
   return html`<div class="tk-sheet-bg" onClick=${(e) => e.target === e.currentTarget && onClose()}><div class="tk-sheet">
-    <div class="head"><h2>学者名单</h2><span class="muted small">存在 vault 的 Lab Tracker/scholars.yaml，两台电脑同步</span><span class="spacer" />
+    <div class="head"><h2>学者名单</h2><span class="muted small">名单存在你的 vault 里，两台电脑同步</span><span class="spacer" />
       <button class="abtn" onClick=${onClose}><${Icon} name="x" sm /></button></div>
     <div class="tk-search">
       <input placeholder="按姓名在 OpenAlex 里找学者，如 Yongfeng Zhang" value=${q} onInput=${(e) => setQ(e.target.value)} onKeyDown=${(e) => e.key === "Enter" && q.trim() && search()} />
@@ -267,7 +290,7 @@ function ScholarsTab({ toast, onOpenPaper, onOpenNote, onAsk, onChanged, version
             <span class="t">${p.title}</span><span class="m">${p.date_approx ? p.date.slice(0, 4) : p.date.slice(5)} · ${p.lines.join(" / ")}</span></button>`)}
           ${!d.papers.some((p) => p.lines.length) && html`<div class="muted small">近一年没有命中的论文</div>`}</div></div>
     </div>
-    <${PaperGrid} papers=${papers} render=${(p) => html`<${PaperCard} key=${p.arxiv || p.oa || p.title} p=${p} labels=${labels} reason=${reason(p)}
+    <${PaperGrid} papers=${papers} render=${(p, ready) => html`<${PaperCard} thumbReady=${ready} key=${p.arxiv || p.oa || p.title} p=${p} labels=${labels} reason=${reason(p)}
       faces=${p.scholars.slice(0, 4).map((x) => byId[x] && html`<span title=${byId[x].name}><${Avatar} name=${byId[x].name} srcs=${avatarSrcs(byId[x])} size=${20} /></span>`)}
       toast=${toast} onOpenPaper=${onOpenPaper} onAsk=${onAsk} onAdded=${onChanged} />`} />
     ${edit && html`<${ScholarEditor} list=${d.scholars} onClose=${() => setEdit(false)} toast=${toast} onChanged=${() => load()} />`}`;
@@ -317,7 +340,7 @@ function Radar({ toast, onOpenPaper, onOpenNote, onAsk, onChanged }) {
       <button class="chip" onClick=${() => onAsk(`按 research_tracker/WEEKLY_RUNBOOK.md 第 3 步审阅巡检 ${run.run}（since ${run.since}），写 run note 的 ANALYSIS 区块。先读 vault 的 AGENTS.md。`, "审阅本周巡检")}><${Icon} name="sparkle" sm />交给助手写分析</button></div>`}
     ${labCounts.length > 0 && html`<div class="tk-filters"><span class="muted small">这次最活跃：</span>${labCounts.map(([l, n]) => html`<span class="tk-chip">${l}<b>${n}</b></span>`)}
       ${(tier || topic) && html`<button class="linkbtn" onClick=${() => { setTier(null); setTopic(null); }}>清除筛选</button>`}<span class="count">${papers.length} 篇</span></div>`}
-    ${run && html`<${PaperGrid} papers=${papers} render=${(p) => html`<${PaperCard} key=${p.arxiv} p=${{ ...p, lines: [] }} labels=${labels}
+    ${run && html`<${PaperGrid} papers=${papers} render=${(p, ready) => html`<${PaperCard} thumbReady=${ready} key=${p.arxiv} p=${{ ...p, lines: [] }} labels=${labels}
       reason=${`Lab Tracker ${run.run} · Tier ${p.tier}${p.labs?.length ? " · " + p.labs.join(", ") : ""}`} lines=${[]}
       extra=${(p.labs || []).map((l) => html`<span class="tk-chip">${l}</span>`)}
       toast=${toast} onOpenPaper=${onOpenPaper} onAsk=${onAsk} onAdded=${onChanged} />`} />`}`;
@@ -344,7 +367,7 @@ function Follows({ toast, onOpenPaper, onAsk, version, onChanged }) {
     <div class="tk-addfollow">
       <div class="seg"><button class=${kind === "keyword" ? "on" : ""} onClick=${() => setKind("keyword")}>关键词</button>
         <button class=${kind === "person" ? "on" : ""} onClick=${() => setKind("person")}>学者</button></div>
-      <input placeholder=${kind === "keyword" ? "如：memory consolidation agent（多个词同时出现；\"引号\" 表示整词组）" : "如：Julian McAuley"} value=${value}
+      <input placeholder=${kind === "keyword" ? "如：graph neural network recommendation（多个词同时出现；\"引号\" 表示整词组）" : "如：Julian McAuley"} value=${value}
         onInput=${(e) => setValue(e.target.value)} onKeyDown=${(e) => e.key === "Enter" && value.trim() && add()} />
       <button class="btn primary" disabled=${!value.trim()} onClick=${add}>关注</button>
     </div>
@@ -359,7 +382,7 @@ function Follows({ toast, onOpenPaper, onAsk, version, onChanged }) {
         <${Sparkline} values=${counts} labels=${weeks.map((w) => `${w.slice(5)} 起`)} w=${100} h=${24} unit=" 篇" />
         ${f.error && html`<span class="err">${f.error}</span>`}
       </button>`; })}</div>
-    <${PaperGrid} papers=${papers} render=${(p) => html`<${PaperCard} key=${p.arxiv} p=${{ ...p, date: p.published, venue: "arXiv", abstract: p.summary }}
+    <${PaperGrid} papers=${papers} render=${(p, ready) => html`<${PaperCard} thumbReady=${ready} key=${p.arxiv} p=${{ ...p, date: p.published, venue: "arXiv", abstract: p.summary }}
       reason=${`关注${p._f.kind === "person" ? "学者" : "关键词"}：${p._f.value}`} lines=${[]}
       extra=${html`<span class="tk-chip on">${p._f.value}</span>`} toast=${toast} onOpenPaper=${onOpenPaper} onAsk=${onAsk} onAdded=${onChanged} />`} />`}`;
 }
