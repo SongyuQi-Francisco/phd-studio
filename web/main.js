@@ -2,6 +2,7 @@ import { render } from "preact";
 import { useEffect, useMemo, useRef, useState, useCallback } from "preact/hooks";
 import { html, Icon, api, prefs, copyText, composing } from "/lib.js";
 import { PdfView } from "/pdfview.js";
+import { BilingualSettings } from "/bilingual.js";
 import { ChatPanel, NotePanel, PROMPTS } from "/chat.js";
 import { ReadingPage, DoneDialog } from "/reading.js";
 import { OverviewPage, TimelinePage, VenueSheet, IdeaCapture } from "/plan.js";
@@ -116,15 +117,15 @@ function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef
   useEffect(() => { if (pages) prefs.set("page:" + stem, page); }, [page]);
   useEffect(() => { if (paper?.bilingual) setBi(paper.bilingual); }, [paper]);
 
-  // poll bilingual job
+  // poll bilingual job (also while it waits in the background queue)
   useEffect(() => {
-    if (bi.state !== "running") return;
+    if (bi.state !== "running" && bi.state !== "queued") return;
     const t = setInterval(async () => {
       const s = await api(`/api/bilingual/${encodeURIComponent(stem)}`);
       setBi(s);
       if (s.state === "done") toast("双语版已生成");
       if (s.state === "error") toast("双语生成失败");
-    }, 3000);
+    }, bi.state === "queued" ? 5000 : 3000);
     return () => clearInterval(t);
   }, [bi.state, stem]);
 
@@ -257,7 +258,7 @@ function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef
       <div class="tb-sep" />
       <div class="seg">
         <button class=${variant === "original" ? "on" : ""} onClick=${() => switchVariant("original")}>原文</button>
-        <button class=${variant === "dual" ? "on" : ""} onClick=${() => switchVariant("dual")}>${bi.state === "running" ? `生成中 ${elapsed(bi.started)}` : "双语"}</button>
+        <button class=${variant === "dual" ? "on" : ""} onClick=${() => switchVariant("dual")}>${bi.state === "running" ? `生成中 ${elapsed(bi.started)}` : bi.state === "queued" ? (bi.paused ? "双语 · 暂停" : `排队第 ${bi.position}`) : "双语"}</button>
         <button class=${variant === "mono" ? "on" : ""} onClick=${() => switchVariant("mono")}>中文</button>
       </div>
       <div class="tb-sep" />
@@ -284,9 +285,10 @@ function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef
     </div>`}
 
     ${confirmBi && html`<div class="pop confirm">
-      <h3>生成整篇双语 PDF</h3>
-      <p>用 pdf2zh 翻译全文，保留公式、图表和版式，左右对照。一般 3–8 分钟，后台进行，期间可以继续阅读。</p>
-      <div class="row-end"><button class="btn ghost" onClick=${() => setConfirmBi(false)}>取消</button><button class="btn primary" onClick=${startBi}>开始生成</button></div>
+      <h3>${bi.state === "queued" ? "已在预生成队列" : "生成整篇双语 PDF"}</h3>
+      <p>${bi.state === "queued" ? `排在第 ${bi.position} 位${bi.paused ? "（队列已暂停）" : ""}，轮到时在后台生成。也可以现在就开始。`
+        : "用 pdf2zh 翻译全文，保留公式、图表和版式，左右对照。一般 3–8 分钟，后台进行，期间可以继续阅读。"}</p>
+      <div class="row-end"><button class="btn ghost" onClick=${() => setConfirmBi(false)}>取消</button><button class="btn primary" onClick=${startBi}>${bi.state === "queued" ? "现在就生成" : "开始生成"}</button></div>
     </div>`}
 
     ${pop && pop.kind === "sel" && html`<div class="pop" style=${transStyle || popStyle}>
@@ -355,6 +357,7 @@ function Settings({ status, onClose, onSaved }) {
         <select value=${s.translate_engine} onChange=${(e) => save({ translate_engine: e.target.value })}>
           <option value="deepseek">DeepSeek</option><option value="google">Google 翻译（免费）</option>
         </select></div>
+      <${BilingualSettings} settings=${s} save=${save} />
       <div class="row-end" style="margin-top:12px"><button class="btn" onClick=${onClose}>完成</button></div>
     </div>
   </div>`;

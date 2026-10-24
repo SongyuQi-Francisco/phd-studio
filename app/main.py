@@ -37,6 +37,8 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="PhD Studio", lifespan=lifespan)
 app.include_router(thumbs_router)
+from .bilingual_api import router as bilingual_queue_router  # noqa: E402  (bilingual PDFs made ahead of time)
+app.include_router(bilingual_queue_router)
 
 
 @app.middleware("http")
