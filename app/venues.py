@@ -208,7 +208,7 @@ def _catalog(_stamp: float) -> dict[str, dict[str, Any]]:
                 e["editions"].append({"year": conf.get("year"), "link": conf.get("link"),
                                       "date": conf.get("date"), "place": conf.get("place"),
                                       "timezone": conf.get("timezone") or "AoE", "timeline": timeline})
-    rates = _accept_rates()
+    rates = {_match(k, cat): v for k, v in _accept_rates().items()}  # accept_rates files use the ccfddl title (SIGKDD)
     details = _details()
     now = datetime.now(timezone.utc)
     for k, e in cat.items():

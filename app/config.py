@@ -63,7 +63,8 @@ VAULT_NAME = VAULT_DIR.name
 # machine only ever writes its own subfolder, so sync never sees two writers.
 DEVICE = re.sub(r"[^A-Za-z0-9_-]+", "-", os.environ.get("STUDIO_DEVICE") or socket.gethostname()
                 .removesuffix(".local")).strip("-") or "this-mac"
-STATE_DIR = STUDIO_DIR / "state" / DEVICE
+STATE_ROOT = _p(_paths["state"]) if _paths.get("state") else STUDIO_DIR / "state"
+STATE_DIR = STATE_ROOT / DEVICE
 CHATS_DIR = STATE_DIR / "chats"
 SETTINGS_FILE = STATE_DIR / "settings.json"
 
@@ -82,7 +83,7 @@ for _d in (STATE_DIR, CHATS_DIR, PDF_CACHE_DIR, BILINGUAL_DIR, TEXT_DIR, CROPS_D
     _d.mkdir(parents=True, exist_ok=True)
 
 # One-time move of state written before it became per-device.
-_legacy = STUDIO_DIR / "state"
+_legacy = STATE_ROOT
 for _name in ("chats", "settings.json", "sessions.json"):
     _old = _legacy / _name
     if _old.exists() and not (_old.is_dir() and not any(_old.iterdir())):

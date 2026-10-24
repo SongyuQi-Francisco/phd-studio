@@ -13,6 +13,7 @@ zotero = "~/Zotero"                            # Zotero data dir (read-only)
 secrets = "~/.config/secrets"                  # claude.env / deepseek.env live here
 # claude_cli = "~/.local/bin/claude"           # default: `claude` on PATH
 # data = "~/Library/Application Support/PhD Studio"  # downloaded and translated PDFs
+# state = "~/phd-studio-state"                  # chat logs, session ids, settings (default: <project>/state/<hostname>)
 ideas_dir = "Ideas"                            # idea and research-line notes
 idea_template = "Templates/Idea Note Template.md"
 roadmap = "Atlas/PhD Roadmap.md"

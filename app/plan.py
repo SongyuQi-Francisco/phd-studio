@@ -40,7 +40,7 @@ def _date(value: str | None) -> None:
 
 def watched_keys() -> list[str]:
     keys = [w["venue"] for w in plan_store.load()["watched"]]
-    if not keys:  # first run: start from the profile's list
+    if not keys and not plan_store.load(include_deleted=True)["watched"]:  # first run only: start from the profile's list
         for v in PROFILE.get("venues", []):
             if venues.catalog().get(venues._key(v)):
                 plan_store.add("watched", {"venue": venues._key(v)}, "w")

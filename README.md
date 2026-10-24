@@ -66,6 +66,14 @@ Optional: `DEEPSEEK_API_KEY=...` in `~/.config/secrets/deepseek.env` for fast se
 - The reading-queue note lists papers as `[[Note Name]]` under `##` sections.
 - An optional rules file (e.g. `AGENTS.md`) is given to Claude verbatim and must be followed for every edit.
 
+## Tests
+
+```bash
+uv run pytest
+```
+
+The suite runs against a throwaway vault, data dir and state dir created by `tests/conftest.py` (it points `STUDIO_CONFIG` at a generated config, so no `studio.toml` is needed and your real vault, Zotero and `state/` are never touched). The network is blocked; venue data comes from small fixtures. CI runs it on every push and pull request; a PR needs the `tests` check to pass before it can merge.
+
 ## Where data lives
 
 | What | Where |
