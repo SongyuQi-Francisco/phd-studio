@@ -39,8 +39,11 @@ built on top of an Obsidian vault and a Zotero library you already have.
 ./studio milestone "Draft experiments" --date 2026-11-15 --line "Project A" --kind gate
 ./studio milestone list --status todo            # soonest first; also --line, --json
 ./studio milestone done "Draft experiments"      # by id, title or part of the title
-./studio idea "use X as a verifier for Y" --line "Project A"
-./studio idea list --status new                  # newest first; also --line, --json
+./studio idea "use X as a verifier for Y" --line "Project A" --tag verifier
+./studio idea list --status new                  # newest first; also --line, --tag (repeatable), --all, --json
+./studio idea tag i1a2b3 +memory -todo           # add / remove free-form tags
+./studio idea merge i1a2b3 i4d5e6 --text "..."   # one idea from several; the originals stay, hidden
+./studio idea restore i1a2b3                     # bring a merged-away idea back
 ./studio deadlines --days 90
 ```
 

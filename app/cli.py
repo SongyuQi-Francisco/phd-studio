@@ -7,11 +7,15 @@
     studio milestone "Draft experiments" --date 2026-11-15 --line "Project A" [--kind gate] [--notes "..."]
     studio milestone list [--status todo] [--line "Project A"] [--json]
     studio milestone done "Draft experiments"
-    studio idea "use X as a verifier for Y" [--line "Project A"]
-    studio idea list [--status new] [--line "Project A"] [--json]
+    studio idea "use X as a verifier for Y" [--line "Project A"] [--tag verifier]
+    studio idea list [--status new] [--line "Project A"] [--tag verifier] [--all] [--json]
+    studio idea tag i1a2b3 +verifier -todo
+    studio idea merge i1a2b3 i4d5e6 [--text "the merged idea"]
+    studio idea restore i1a2b3
     studio deadlines [--days 90]
 
 `studio milestone "Title" ...` and `studio idea "text"` are short for `milestone add` / `idea add`.
+`idea list` hides ideas that were merged into another one (--all or --status merged shows them).
 Works whether or not the web app is running (the YAML file is locked while writing).
 """
 from __future__ import annotations
@@ -20,7 +24,7 @@ import argparse
 import json
 import sys
 
-from . import plan, reading
+from . import idea_ops, plan, reading
 
 
 def _row(i: dict) -> str:
@@ -34,10 +38,19 @@ def _milestone_row(m: dict) -> str:
 
 
 def _idea_row(i: dict) -> str:
-    return f"{i['id']}  {i.get('status', 'new'):8} {i.get('line', ''):16} {i['text'][:70]}"
+    tags = " ".join("#" + t for t in i.get("tags", []))
+    return f"{i['id']}  {i.get('status', 'new'):8} {i.get('line', ''):16} {tags:20} {i['text'][:70]}"
 
 
-_SUBCOMMANDS = {"milestone": ("add", "list", "done"), "idea": ("add", "list")}
+def _tag_ops(tokens: list[str]) -> tuple[list[str], list[str]]:
+    """`+x -y z` -> (add [x, z], remove [y]). A bare word adds."""
+    add, drop = [], []
+    for t in tokens:
+        (drop if t.startswith("-") else add).append(t.lstrip("+-"))
+    return add, drop
+
+
+_SUBCOMMANDS = {"milestone": ("add", "list", "done"), "idea": ("add", "list", "tag", "merge", "restore")}
 
 
 def _default_to_add(argv: list[str]) -> list[str]:
@@ -90,15 +103,27 @@ def main(argv: list[str] | None = None) -> int:
     md = msub.add_parser("done", help="mark a milestone as done")
     md.add_argument("key", help="milestone id, title, or a part of the title")
 
-    i = sub.add_parser("idea", help="the idea inbox: add (the default), list")
+    i = sub.add_parser("idea", help="the idea inbox: add (the default), list, tag, merge, restore")
     isub = i.add_subparsers(dest="action", required=True)
     ia = isub.add_parser("add", help="add an idea to the idea inbox")
     ia.add_argument("text")
     ia.add_argument("--line")
+    ia.add_argument("--tag", action="append", default=[], help="free-form tag; repeatable")
     il = isub.add_parser("list", help="show the idea inbox, newest first")
-    il.add_argument("--status", choices=plan.I_STATUS)
+    il.add_argument("--status", choices=plan.I_STATUS_ALL)
     il.add_argument("--line")
+    il.add_argument("--tag", action="append", default=[], help="only ideas with this tag; repeat to require several")
+    il.add_argument("--all", action="store_true", help="also list ideas merged into another one")
     il.add_argument("--json", action="store_true")
+    it = isub.add_parser("tag", help="add or remove tags: studio idea tag <id> +verifier -todo")
+    it.add_argument("id")
+    it.add_argument("ops", nargs=argparse.REMAINDER, help="+tag adds, -tag removes (a bare tag adds)")
+    im = isub.add_parser("merge", help="merge two or more ideas into one (the originals are kept, hidden)")
+    im.add_argument("ids", nargs="+")
+    im.add_argument("--text", help="text of the merged idea (default: the first idea's)")
+    im.add_argument("--line")
+    ir = isub.add_parser("restore", help="bring back an idea that was merged into another one")
+    ir.add_argument("id")
 
     dl = sub.add_parser("deadlines", help="upcoming watched-venue deadlines, targets and milestones")
     dl.add_argument("--days", type=int, default=90)
@@ -149,11 +174,22 @@ def main(argv: list[str] | None = None) -> int:
                 ms = plan.update("milestones", ms["id"], {"status": "done"})
                 print(f"done: {ms['id']} {ms['date']} {ms['title']}")
         elif a.cmd == "idea" and a.action == "add":
-            rec = plan.add_idea(a.text, line=a.line, source="claude")
+            rec = plan.add_idea(a.text, line=a.line, tags=a.tag, source="claude")
             print(f"added: {rec['id']} {rec['text'][:60]}")
+        elif a.cmd == "idea" and a.action == "tag":
+            add, drop = _tag_ops(a.ops)
+            if not (add or drop):
+                raise ValueError("nothing to do: give tags like +x -y")
+            rec = idea_ops.tag(a.id, add, drop)
+            print(f"{rec['id']}  " + (" ".join("#" + t for t in rec.get("tags", [])) or "(no tags)"))
+        elif a.cmd == "idea" and a.action == "merge":
+            rec = idea_ops.merge(a.ids, text=a.text, line=a.line, source="claude")
+            print(f"merged: {rec['id']} <- {' '.join(rec['merged_from'])}  {rec['text'][:60]}")
+        elif a.cmd == "idea" and a.action == "restore":
+            rec = idea_ops.restore(a.id)
+            print(f"restored: {rec['id']} [{rec['status']}] {rec['text'][:60]}")
         elif a.cmd == "idea":
-            sel = [i for i in plan.ideas() if (not a.status or i.get("status", "new") == a.status)
-                   and (not a.line or i.get("line") == a.line)]
+            sel = idea_ops.listing(a.status, a.line, a.tag, include_merged=a.all)
             if a.json:
                 print(json.dumps(sel, ensure_ascii=False, indent=2))
             else:
@@ -163,6 +199,11 @@ def main(argv: list[str] | None = None) -> int:
                 if e["days"] >= 0:
                     tag = {"venue": "venue", "target": "TARGET", "milestone": "plan"}[e["type"]]
                     print(f"{e['at'][:16].replace('T', ' ')} UTC  {e['days']:>3}d  {tag:<6} {e['title']}")
+    except KeyError as e:
+        if a.cmd != "idea":
+            raise
+        print(f"error: no idea {e.args[0]}", file=sys.stderr)
+        return 2
     except (reading.ReadingError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
