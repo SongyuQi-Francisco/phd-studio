@@ -36,9 +36,18 @@ built on top of an Obsidian vault and a Zotero library you already have.
 ./studio push --arxiv 2606.17328 --reason "cited by X; check their metric" --by "weekly tracker" --source tracker
 ./studio list --status inbox
 ./studio done "Attention 2017" --depth deep --verdict key --takeaway "..."
+./studio milestone "Draft experiments" --date 2026-11-15 --line "Project A" --kind gate
+./studio milestone list --status todo            # soonest first; also --line, --json
+./studio milestone done "Draft experiments"      # by id, title or part of the title
+./studio idea "use X as a verifier for Y" --line "Project A"
+./studio idea list --status new                  # newest first; also --line, --json
+./studio deadlines --days 90
 ```
 
-`--reason` is required. Papers already read or dismissed are not re-added. The CLI works with or without the server running.
+`--reason` is required. Papers already read or dismissed are not re-added.
+`milestone "Title" ...` and `idea "text"` are short for `milestone add` and `idea add` (use the long form for a title that is literally `list` or `done`).
+`milestone done` needs a title or id that matches exactly one milestone, and prefers open ones when titles repeat.
+The CLI works with or without the server running: it uses the same stores and the same locked, atomic writes as the app.
 Tell your agents about it in the vault rules file (e.g. `AGENTS.md`).
 
 ## Setup
