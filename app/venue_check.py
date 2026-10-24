@@ -10,7 +10,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import threading
 from datetime import date, datetime
 from difflib import SequenceMatcher
@@ -20,15 +19,11 @@ from . import plan, venue_fresh, venue_overrides, venues
 from .config import STATE_DIR, VAULT_DIR, VENUE_OVERRIDES_FILE
 
 PROPOSALS_FILE = STATE_DIR / "venue_proposals.json"
-STATUSES = ("confirmed", "previous-edition")
 # Fields a proposal may change, in the order the diff shows them.
 FIELDS = [("status", "状态"), ("edition", "届次"), ("edition_year", "届次年份"), ("dates", "会议日期"), ("location", "地点"),
           ("homepage", "官网"), ("cfp_url", "CFP 页面"), ("deadlines", "各赛道截稿"), ("tracks", "赛道与页数"),
           ("format.template", "模板"), ("format.review_model", "审稿模式"), ("format.notable_rules", "投稿规则"),
           ("notes", "备注"), ("sources", "来源")]
-_STR = ("edition", "dates", "location")
-_URL = ("homepage", "cfp_url")
-_ROWS = {"deadlines": ("track", "abstract", "paper"), "tracks": ("name", "page_limit", "notes")}
 _lock = threading.Lock()
 
 
@@ -67,79 +62,29 @@ def _drop(key: str) -> None:
 # ---------- validating what the assistant sends ----------
 
 
-def _text(v: Any, name: str) -> str | None:
-    if v is None:
-        return None
-    if not isinstance(v, (str, int, float)) or isinstance(v, bool):
-        raise ValueError(f"{name} 必须是文字")
-    return str(v).strip() or None
-
-
-def _url(v: Any, name: str) -> str:
-    u = _text(v, name) or ""
-    if not re.match(r"https?://\S+$", u):
-        raise ValueError(f"{name} 必须是 http(s) 网址：{u!r}")
-    return u
-
-
-def _strings(v: Any, name: str) -> list[str]:
-    if isinstance(v, str):
-        v = [v]
-    if not isinstance(v, list):
-        raise ValueError(f"{name} 必须是文字列表")
-    return [t for t in (_text(x, name) for x in v) if t]
-
-
-def clean_patch(details: dict[str, Any], sources: list[str]) -> dict[str, Any]:
-    """Validated fields of a proposal; unknown fields are refused. `sources` is merged into the patch."""
-    if not isinstance(details, dict):
-        raise ValueError("details 必须是对象")
-    allowed = {f.split(".")[0] for f, _ in FIELDS}
-    extra = sorted(set(details) - allowed)
-    if extra:
-        raise ValueError(f"不能修改这些字段：{', '.join(extra)}（核对日期由系统在确认时写入）。可改字段：{', '.join(sorted(allowed))}")
-    out: dict[str, Any] = {}
-    for k, v in details.items():
-        if v is None:
-            continue
-        if k in _STR:
-            out[k] = _text(v, k)
-        elif k in _URL:
-            out[k] = _url(v, k)
-        elif k == "status":
-            if v not in STATUSES:
-                raise ValueError(f"status 只能是 {' / '.join(STATUSES)}")
-            out[k] = v
-        elif k == "edition_year":
-            if not isinstance(v, int) or isinstance(v, bool) or not 2000 <= v <= 2100:
-                raise ValueError("edition_year 必须是年份（整数）")
-            out[k] = v
-        elif k in _ROWS:
-            if not isinstance(v, list) or not all(isinstance(r, dict) for r in v):
-                raise ValueError(f"{k} 必须是对象列表")
-            for r in v:
-                if set(r) - set(_ROWS[k]):
-                    raise ValueError(f"{k} 的每一项只能有 {'、'.join(_ROWS[k])}")
-            out[k] = [{f: _text(r.get(f), f) for f in _ROWS[k]} for r in v]
-        elif k == "format":
-            if not isinstance(v, dict) or set(v) - {"template", "review_model", "notable_rules"}:
-                raise ValueError("format 只能有 template、review_model、notable_rules")
-            out[k] = {f: (_strings(x, f"format.{f}") if f == "notable_rules" else _text(x, f"format.{f}"))
-                      for f, x in v.items() if x is not None}
-        elif k == "notes":
-            out[k] = _strings(v, k) if isinstance(v, list) else _text(v, k)
-        elif k == "sources":
-            sources = [*sources, *_strings(v, k)]
-    srcs = [_url(s, "sources") for s in sources]
+def clean_patch(details: dict[str, Any], sources: list[str], remove: list[str] | None = None) -> dict[str, Any]:
+    """Validated fields of a proposal; unknown fields are refused. `sources` is merged into the patch (as
+    `_sources`), `remove` names fields to delete (as `_remove`)."""
+    out = dict(venue_overrides.clean_details(details))
+    srcs = list(dict.fromkeys([*(sources or []), *out.pop("sources", [])]))
+    srcs = [venue_overrides.url(u, "sources") for u in srcs]
     if not srcs:
         raise ValueError("必须附上你读过的官方网址（sources）")
-    out["_sources"] = list(dict.fromkeys(srcs))
+    out["_sources"] = srcs
+    gone = list(dict.fromkeys(remove or []))
+    venue_overrides.tombstones(gone)                       # validates the names
+    touched = {f"format.{sub}" for sub in out.get("format", {})} | {k for k in out if k != "format"}
+    clash = [f for f in gone if f in touched]
+    if clash:
+        raise ValueError(f"这些字段不能既修改又删除：{', '.join(clash)}")
+    if gone:
+        out["_remove"] = gone
     if "edition" in out and "edition_year" not in out:
         year = venue_fresh.edition_year({"edition": out["edition"]})
         if year is None:
             raise ValueError("edition 里没有年份，请同时给出 edition_year")
         out["edition_year"] = year
-    return {k: v for k, v in out.items() if v is not None}
+    return out
 
 
 # ---------- diff ----------
@@ -186,10 +131,15 @@ def _digest(detail: dict[str, Any] | None) -> str:
     return hashlib.sha1(json.dumps(d, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()[:12]
 
 
-def _after(before: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
-    p = {k: v for k, v in patch.items() if k != "_sources"}
+def _fields(patch: dict[str, Any], before: dict[str, Any]) -> dict[str, Any]:
+    """A proposal's details as an override patch: its fields, the sources added to what is there, the removals."""
+    p = {k: v for k, v in patch.items() if not k.startswith("_")}
     p["sources"] = list(dict.fromkeys([*(before.get("sources") or []), *patch.get("_sources", [])]))
-    return venue_overrides.merge_detail(before, p)
+    return venue_overrides.merge_detail(p, venue_overrides.tombstones(patch.get("_remove")), keep_none=True)
+
+
+def _after(before: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    return venue_overrides.merge_detail(before, _fields(patch, before))
 
 
 # ---------- propose / view / apply ----------
@@ -202,11 +152,12 @@ def _entry(venue: str) -> dict[str, Any]:
     return e
 
 
-def propose(venue: str, details: dict[str, Any], sources: list[str], summary: str = "") -> dict[str, Any]:
+def propose(venue: str, details: dict[str, Any], sources: list[str], summary: str = "",
+            remove: list[str] | None = None) -> dict[str, Any]:
     """Record the assistant's proposed update for a venue (replacing its earlier pending one). Applies nothing."""
     e = _entry(venue)
     before = e.get("detail") or {}
-    patch = clean_patch(details or {}, list(sources or []))
+    patch = clean_patch(details or {}, list(sources or []), list(remove or []))
     if not before and "status" not in patch:
         raise ValueError(f"{e['acronym']} 还没有详情记录，提案里要给出 status 和 edition 等字段")
     rec = {"id": "p" + hashlib.sha1(os.urandom(8)).hexdigest()[:6], "venue": e["key"], "acronym": e["acronym"],
@@ -236,14 +187,15 @@ def proposal(venue: str) -> dict[str, Any] | None:
 
 
 def _commit(key: str, patch: dict[str, Any]) -> dict[str, Any]:
-    """Store `patch` (fields to change; may be empty) as the venue's override, dated today."""
+    """Store `patch` (details fields to change, None removes one; may be empty) as the venue's override, dated today."""
     e = _entry(key)
     before = e.get("detail") or {}
     if not before and not patch:
         raise ValueError(f"{e['acronym']} 还没有详情，没有可核对的内容")
     patch = {**patch, "verified_at": date.today().isoformat()}
     after = venue_overrides.merge_detail(before, patch)
-    saved = venue_overrides.save(e["key"], patch, venue_fresh.fingerprint(e, venue_fresh.edition_year(after)), name=e["acronym"])
+    saved = venue_overrides.save(e["key"], patch, venue_fresh.fingerprint(e, venue_fresh.edition_year(after)), name=e["acronym"],
+                                 base=venue_overrides.base_of(e.get("bundled")), fresh=bool(e.get("override_outdated")))
     venues._catalog.cache_clear()
     return saved
 
@@ -257,9 +209,7 @@ def apply(venue: str, proposal_id: str) -> dict[str, Any]:
     e = _entry(key)
     if rec["base"] != _digest(e.get("detail")):
         raise Conflict("会议详情在助手核对之后又变了（比如另一台电脑已更新），请重新核对")
-    patch = {k: v for k, v in rec["details"].items() if k != "_sources"}
-    patch["sources"] = list(dict.fromkeys([*((e.get("detail") or {}).get("sources") or []), *rec["details"].get("_sources", [])]))
-    saved = _commit(key, patch)
+    saved = _commit(key, _fields(rec["details"], e.get("detail") or {}))
     _drop(key)
     return {"ok": True, "venue": key, "verified_at": saved["details"]["verified_at"]}
 
@@ -292,9 +242,10 @@ def reset(venue: str) -> dict[str, Any]:
 
 def status(venue: str) -> dict[str, Any]:
     e = _entry(venue)
-    ov = e.get("override")
-    return {"venue": e["key"], "acronym": e["acronym"], "freshness": venue_fresh.check(e), "proposal": proposal(e["key"]),
-            "override": {"updated_at": ov.get("updated_at")} if ov else None, "prompt": check_prompt(e["key"]),
+    ov, old = e.get("override"), e.get("override_outdated")
+    return {"venue": e["key"], "acronym": e["acronym"], "freshness": venues.freshness(e), "proposal": proposal(e["key"]),
+            "override": {"updated_at": (ov or old).get("updated_at"), "outdated": not ov} if ov or old else None,
+            "prompt": check_prompt(e["key"]),
             "store": str(VENUE_OVERRIDES_FILE.relative_to(VAULT_DIR) if VENUE_OVERRIDES_FILE.is_relative_to(VAULT_DIR)
                          else VENUE_OVERRIDES_FILE)}
 
@@ -304,7 +255,7 @@ def stale_watched() -> list[dict[str, Any]]:
     cat, waiting, out = venues.catalog(), pending(), []
     for k in plan.watched_keys():
         e = cat.get(k)
-        f = venue_fresh.check(e) if e else None
+        f = venues.freshness(e) if e else None
         if e and ((f and f["stale"]) or k in waiting):
             out.append({"key": k, "acronym": e["acronym"], "core": e["core"], "ccf": e["ccf"], "pending": k in waiting,
                         "reasons": f["reasons"] if f else [], "edition_year": f and f["edition_year"],
@@ -316,7 +267,7 @@ def check_prompt(venue: str) -> str:
     """What 「让助手核对」 sends to the workbench assistant."""
     e = _entry(venue)
     d = e.get("detail") or {}
-    f = venue_fresh.check(e)
+    f = venues.freshness(e)
     reasons = "；".join(r["text"] for r in (f or {}).get("reasons", [])) or "手动发起"
     ccf_link = next((ed.get("link") for ed in reversed(e.get("ccfddl_editions") or []) if ed.get("link")), None)
     starts = "；".join(f"{n}：{u}" for n, u in (("CFP", d.get("cfp_url")), ("官网", d.get("homepage")), ("ccfddl 的当前链接", ccf_link)) if u)
@@ -326,5 +277,5 @@ def check_prompt(venue: str) -> str:
 步骤：
 1. 先用 venue_search 查 "{e['acronym']}"，看现在记录的内容。
 2. 读官方页面，只采信官网，不要用第三方转载。起点：{starts or '会议官网'}。如果已经有更新的一届，找那一届的 CFP。
-3. 对照记录，用 venue_details_propose 提交更新提案：details 只写有变化的字段（deadlines、tracks、format.notable_rules 这类列表要写完整的新列表，截稿日期保留官网原文并带时区）；sources 填你实际读过的官方网址；官网已发布这一届的 CFP 就 status=confirmed，只找到上一届的就 previous-edition；换届时同时给 edition 和 edition_year。核对后没有变化也要提交（details 留空，只更新核对日期）。
+3. 对照记录，用 venue_details_propose 提交更新提案：details 只写有变化的字段（deadlines、tracks、format.notable_rules 这类列表要写完整的新列表，截稿日期保留官网原文并带时区）；sources 填你实际读过的官方网址；官网已发布这一届的 CFP 就 status=confirmed，只找到上一届的就 previous-edition；换届时同时给 edition 和 edition_year；官网已经没有的旧字段（比如旧的 cfp_url、location）用 remove 列出来删掉。核对后没有变化也要提交（details 留空，只更新核对日期）。
 4. 这个工具只提交提案，不会改任何数据；我会在会议详情页看差异后确认。提交后用一两句话告诉我改了什么、哪些没查到。"""

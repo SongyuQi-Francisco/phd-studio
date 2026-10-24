@@ -451,3 +451,111 @@ def test_venue_search_tells_the_assistant_whether_details_may_be_stale(tools, ve
     shipped(stale_acl())
     out = json.loads(call(by_name["venue_search"], {"query": "ACL"})["content"][0]["text"])
     assert out["freshness"]["stale"] is True and out["freshness"]["reasons"][0]["code"] == "age"
+
+
+# ---------- addresses must be openable ----------
+
+
+@pytest.mark.parametrize("bad", ["https://<cfp>", "https://", "http://exa mple.com", "javascript:alert(1)"])
+def test_unopenable_addresses_are_refused_in_sources_and_links(bad):
+    with pytest.raises(ValueError, match="http"):
+        vc.clean_patch({}, [bad])
+    with pytest.raises(ValueError, match="http"):
+        vc.clean_patch({"cfp_url": bad}, [SRC])
+    with pytest.raises(ValueError, match="http"):
+        vc.clean_patch({"sources": [bad]}, [SRC])
+
+
+# ---------- removing a field ----------
+
+
+def test_a_proposal_can_remove_fields_the_new_edition_no_longer_has(venue_data):
+    shipped(stale_acl(location="Vienna", dates="Aug 2027"))
+    prop = vc.propose("ACL", {"edition": "ACL 2028"}, [SRC], "next year", remove=["location", "cfp_url", "format.template"])
+    fields = {d["field"]: d["lines"] for d in prop["diff"]}
+    assert fields["location"] == [{"op": "-", "text": "Vienna"}]
+    assert fields["cfp_url"] == [{"op": "-", "text": "https://2027.example.org/cfp"}]
+    assert fields["format.template"] == [{"op": "-", "text": "ACL style"}]
+    assert "dates" not in fields                                           # not asked to go
+    assert not override_file_exists()
+    vc.apply("acl", prop["id"])
+    d = venues.catalog()["acl"]["detail"]
+    assert "location" not in d and "cfp_url" not in d and "template" not in d["format"]
+    assert d["dates"] == "Aug 2027" and d["format"]["review_model"] == "double-anonymous" and d["edition"] == "ACL 2028"
+    text = config.VENUE_OVERRIDES_FILE.read_text(encoding="utf-8")
+    assert "location: null" in text and "cfp_url: null" in text and "template: null" in text
+    assert json.loads(venues.DETAILS_FILE.read_text(encoding="utf-8"))["venues"][0]["cfp_url"] == "https://2027.example.org/cfp"
+
+
+def test_a_removal_survives_the_next_check_and_goes_away_with_the_override(venue_data):
+    shipped(stale_acl(location="Vienna"))
+    vc.apply("acl", vc.propose("ACL", {}, [SRC], remove=["location"])["id"])
+    vc.mark_verified("ACL")
+    assert "location" not in venues.catalog()["acl"]["detail"]
+    vc.reset("ACL")
+    assert venues.catalog()["acl"]["detail"]["location"] == "Vienna"
+
+
+def test_only_removable_fields_can_go_and_not_those_the_proposal_changes(venue_data):
+    shipped(stale_acl())
+    for bad in (["status"], ["edition"], ["sources"], ["bogus"], ["format"]):
+        with pytest.raises(ValueError, match="不能删除"):
+            vc.propose("ACL", {}, [SRC], remove=bad)
+    with pytest.raises(ValueError, match="既修改又删除"):
+        vc.propose("ACL", {"cfp_url": "https://x.example/cfp"}, [SRC], remove=["cfp_url"])
+    with pytest.raises(ValueError, match="既修改又删除"):
+        vc.propose("ACL", {"format": {"template": "T"}}, [SRC], remove=["format.template"])
+    vc.propose("ACL", {"format": {"template": "T"}}, [SRC], remove=["format.review_model"])         # a different sub-field is fine
+    assert vc.pending()["acl"]["details"]["_remove"] == ["format.review_model"]
+
+
+def test_the_studio_tool_passes_remove_on(tools, venue_data):
+    by_name, _, _ = tools
+    shipped(stale_acl(location="Vienna"))
+    res = call(by_name["venue_details_propose"], {"venue": "ACL", "sources": [SRC], "remove": ["location"]})
+    out = json.loads(res["content"][0]["text"])
+    assert not res.get("is_error") and out["changes"][0]["field"] == "location"
+    assert "remove" in by_name["venue_details_propose"].description
+
+
+# ---------- a proposal for a venue that has no details yet ----------
+
+
+def test_a_first_entry_for_a_venue_without_details_can_be_proposed_seen_and_applied(client):
+    shipped(acl(verified_at=TODAY))                           # KDD has no details
+    plan.watched_keys()
+    plan.watch("kdd")
+    prop = vc.propose("KDD", {"status": "confirmed", "edition": "KDD 2028", "homepage": "https://kdd2028.example.org/"}, [SRC], "first entry")
+    s = client.get("/api/venue-check/kdd").json()
+    assert s["freshness"] is None and s["proposal"]["id"] == prop["id"]          # what the sheet needs to show the card
+    assert {d["field"] for d in s["proposal"]["diff"]} >= {"status", "edition", "homepage", "sources"}
+    assert [(v["key"], v["pending"], v["reasons"]) for v in client.get("/api/venue-check/stale").json()["venues"]] == [("kdd", True, [])]
+    assert client.post("/api/venue-check/kdd/apply", json={"proposal_id": prop["id"]}).status_code == 200
+    d = venues.catalog()["kdd"]["detail"]
+    assert d["edition"] == "KDD 2028" and d["verified_at"] == TODAY and d["key"] == "KDD"
+    assert client.get("/api/venue-check/kdd").json()["proposal"] is None
+
+
+# ---------- an override that the shipped data has moved past ----------
+
+
+def test_status_says_when_the_override_is_older_than_the_shipped_details(venue_data):
+    shipped(acl(verified_at="2026-10-24"))
+    vc.mark_verified("ACL")
+    assert vc.status("acl")["override"]["outdated"] is False
+    shipped(acl(edition="ACL 2028", edition_year=2028, verified_at="2026-10-20"))
+    s = vc.status("acl")
+    assert s["override"]["outdated"] is True and s["override"]["updated_at"]
+    assert venues.catalog()["acl"]["detail"]["edition"] == "ACL 2028"
+    assert vc.reset("ACL")["ok"] is True and vc.status("acl")["override"] is None
+
+
+def test_confirming_over_an_outdated_override_keeps_none_of_its_old_fields(venue_data):
+    shipped(acl(verified_at="2026-10-24"))
+    vc.apply("acl", vc.propose("ACL", {"location": "Old place", "dates": "Old dates"}, [SRC])["id"])
+    shipped(acl(edition="ACL 2028", edition_year=2028, verified_at="2026-10-20"))
+    prop = vc.propose("ACL", {"dates": "New dates"}, [SRC])
+    assert {d["field"] for d in prop["diff"]} == {"dates", "sources"}            # the diff is against the shipped 2028 details
+    vc.apply("acl", prop["id"])
+    d = venues.catalog()["acl"]["detail"]
+    assert d["dates"] == "New dates" and "location" not in d and d["edition"] == "ACL 2028"

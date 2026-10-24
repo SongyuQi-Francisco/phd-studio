@@ -5,6 +5,12 @@ import { html, Icon, api } from "/lib.js";
 
 export const isStale = (v) => !!v?.freshness?.stale;
 
+// Only http(s) links, and a host name that never throws on a malformed address.
+export const httpUrl = (u) => (typeof u === "string" && /^https?:\/\//i.test(u) ? u : null);
+export function hostOf(u) {
+  try { return new URL(u).hostname || u; } catch { return String(u); }
+}
+
 export function FreshTag({ f }) {
   if (!f?.stale) return null;
   return html`<span class="tag warn fresh-tag" title=${f.reasons.map((r) => r.text).join("\n")}>信息可能过期</span>`;
@@ -28,7 +34,7 @@ function Proposal({ p, store, vkey, reload, toast, onChanged }) {
     <div class="vp-head"><b>助手核对了官网</b><span class="muted small">${p.created_at.replace("T", " ").slice(5, 16)} 提交，待你确认</span></div>
     ${p.summary && html`<p class="vp-sum">${p.summary}</p>`}
     <${DiffView} diff=${p.diff} />
-    ${p.sources.length > 0 && html`<div class="muted small srcs">来源：${p.sources.map((u) => html`<a href=${u} target="_blank" rel="noreferrer">${u.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "")}</a>`)}</div>`}
+    ${p.sources.length > 0 && html`<div class="muted small srcs">来源：${p.sources.filter(httpUrl).map((u) => html`<a href=${u} target="_blank" rel="noreferrer">${u.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "")}</a>`)}</div>`}
     ${p.outdated
       ? html`<div class="vp-warn">这个会议的记录在助手核对之后又变了（比如另一台电脑已更新），这份结果不能再直接应用。请重新让助手核对。</div>`
       : html`<div class="muted small">确认后写进 vault 的 <code>${store}</code>（盖在内置数据上，两台电脑通过 Syncthing 同步），核对日期记为今天。</div>`}
@@ -42,7 +48,8 @@ function Proposal({ p, store, vkey, reload, toast, onChanged }) {
 // Everything the venue sheet shows about freshness: why it may be stale, the buttons, the pending proposal.
 export function CheckPanel({ vkey, v, chk, reload, onAsk, onClose, toast, onChanged }) {
   const [busy, setBusy] = useState(false);
-  if (!chk || !v.detail) return null;
+  // A venue without details can still have a proposal waiting (the assistant may propose a first entry).
+  if (!chk || (!v.detail && !chk.proposal)) return null;
   const f = chk.freshness;
   const ask = () => { onAsk(chk.prompt, `核对 ${v.acronym}`); onClose(); };
   const post = async (what, msg) => {
@@ -64,8 +71,10 @@ export function CheckPanel({ vkey, v, chk, reload, onAsk, onClose, toast, onChan
     ${!f?.stale && !chk.proposal && html`<div class="v-fresh muted small">
       <${Icon} name="check" sm /> ${f?.edition_year ? f.edition_year + " 届" : ""}信息在 ${f?.verified_at || "?"} 核对过，${f?.limit_months} 个月内不会提醒
       <button class="linkbtn" onClick=${ask}>让助手重新核对</button></div>`}
-    ${chk.override && html`<div class="muted small v-ov">这个会议的详情有你确认过的更新（${chk.override.updated_at.replace("T", " ").slice(0, 16)}）。
+    ${chk.override && !chk.override.outdated && html`<div class="muted small v-ov">这个会议的详情有你确认过的更新（${chk.override.updated_at.replace("T", " ").slice(0, 16)}）。
       <button class="linkbtn" disabled=${busy} onClick=${() => post("reset", "已恢复为内置数据")}>恢复内置数据</button></div>`}
+    ${chk.override?.outdated && html`<div class="v-warn muted small">你在 ${chk.override.updated_at.slice(0, 10)} 确认过的更新比内置数据旧，现在显示的是内置数据。
+      <button class="linkbtn" disabled=${busy} onClick=${() => post("reset", "已清除旧的更新")}>清除旧的更新</button></div>`}
   </div>`;
 }
 

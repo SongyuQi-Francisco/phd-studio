@@ -4,9 +4,10 @@ A catalog entry (see `venues._catalog`) counts as stale when any of these holds:
 - edition: the details describe an older edition than the upcoming one in ccfddl, or no edition is recorded;
 - age: `verified_at` is `months` or more months ago (config.VENUE_STALE_MONTHS), or missing;
 - link / dates: ccfddl shows a link or deadlines for the details' edition that the details do not have.
-Once a check was confirmed in the app, `override.ccfddl_seen` remembers what ccfddl showed then, and only a
-change since counts: a newer edition that was already looked at (say a placeholder page with no CFP yet), or
-a link / date difference that was already looked at, does not keep the warning on.
+Once a check was confirmed in the app, `override.ccfddl_seen` remembers what ccfddl showed then (for the
+details' edition and for every newer one), and only a change since counts: a newer edition that was already
+looked at (say a placeholder page with no CFP yet) stays quiet until it gets a link or deadlines, and a
+difference that was already looked at does not keep the warning on.
 
 Pure functions over the catalog entry; no I/O.
 """
@@ -63,11 +64,19 @@ def _edition(entry: dict[str, Any], year: int | None) -> dict[str, Any] | None:
     return next((e for e in reversed(entry.get("ccfddl_editions") or []) if year and e.get("year") == year), None)
 
 
+def _newer(entry: dict[str, Any], year: int | None) -> list[dict[str, Any]]:
+    return [e for e in entry.get("ccfddl_editions") or [] if year and e.get("year") and e["year"] > year]
+
+
+def _shown(ed: dict[str, Any]) -> dict[str, Any]:
+    return {"link": norm_url(ed.get("link")), "dates": _instants(ed)}
+
+
 def fingerprint(entry: dict[str, Any], year: int | None, now: datetime | None = None) -> dict[str, Any]:
-    """What ccfddl shows now: the link and deadline instants (ISO UTC) of the `year` edition, and which edition is upcoming."""
-    ed = _edition(entry, year) or {}
-    return {"year": year, "link": norm_url(ed.get("link")), "dates": _instants(ed),
-            "upcoming": upcoming_year(entry, now or datetime.now(timezone.utc))}
+    """What ccfddl shows now: the link and deadline instants (ISO UTC) of the `year` edition and of every newer
+    one, and which edition is upcoming."""
+    return {"year": year, **_shown(_edition(entry, year) or {}), "upcoming": upcoming_year(entry, now or datetime.now(timezone.utc)),
+            "newer": {str(e["year"]): _shown(e) for e in _newer(entry, year)}}
 
 
 def upcoming_year(entry: dict[str, Any], now: datetime) -> int | None:
@@ -99,6 +108,29 @@ def _day(iso: str) -> str:
     return iso[:10]
 
 
+def _changes(now_shown: dict[str, Any], was: dict[str, Any]) -> tuple[str | None, str | None]:
+    """How what ccfddl shows differs from what it showed at the last check: (link change, date change) as text."""
+    link = f"{was.get('link') or '（无）'} → {now_shown['link']}" if now_shown["link"] and now_shown["link"] != was.get("link") else None
+    new = sorted(set(now_shown["dates"]) - set(was.get("dates") or []))
+    gone = sorted(set(was.get("dates") or []) - set(now_shown["dates"]))
+    parts = ([f"新增 {'、'.join(map(_day, new))}"] if new else []) + ([f"移除 {'、'.join(map(_day, gone))}"] if gone else [])
+    return link, "；".join(parts) or None
+
+
+def _newer_reasons(entry: dict[str, Any], year: int, seen: dict[str, Any]) -> list[dict[str, str]]:
+    """A newer edition ccfddl already listed at the last check has since got a link or changed deadlines."""
+    out = []
+    for e in _newer(entry, year):
+        was = (seen.get("newer") or {}).get(str(e["year"]))
+        if was is None:
+            continue                    # not listed then: the edition rule covers a new one
+        link, dates = _changes(_shown(e), was)
+        if link or dates:
+            out.append({"code": "edition", "text": f"ccfddl 的 {e['year']} 届有新信息：" + "；".join(
+                x for x in (f"链接 {link}" if link else None, f"截稿日期 {dates}" if dates else None) if x)})
+    return out
+
+
 def _ccfddl_reasons(entry: dict[str, Any], detail: dict[str, Any], year: int, now: datetime) -> list[dict[str, str]]:
     if not _edition(entry, year):
         return []
@@ -106,12 +138,11 @@ def _ccfddl_reasons(entry: dict[str, Any], detail: dict[str, Any], year: int, no
     seen = (entry.get("override") or {}).get("ccfddl_seen")
     out = []
     if seen and seen.get("year") == year:
-        if fp["link"] and fp["link"] != seen.get("link"):
-            out.append({"code": "link", "text": f"ccfddl 的 {year} 届链接变了：{seen.get('link') or '（无）'} → {fp['link']}"})
-        new, gone = sorted(set(fp["dates"]) - set(seen.get("dates") or [])), sorted(set(seen.get("dates") or []) - set(fp["dates"]))
-        if new or gone:
-            parts = ([f"新增 {'、'.join(map(_day, new))}"] if new else []) + ([f"移除 {'、'.join(map(_day, gone))}"] if gone else [])
-            out.append({"code": "dates", "text": f"ccfddl 的 {year} 届截稿日期有变化：{'；'.join(parts)}"})
+        link, dates = _changes(fp, seen)
+        if link:
+            out.append({"code": "link", "text": f"ccfddl 的 {year} 届链接变了：{link}"})
+        if dates:
+            out.append({"code": "dates", "text": f"ccfddl 的 {year} 届截稿日期有变化：{dates}"})
         return out
     known = _known_links(detail)
     if fp["link"] and fp["link"] not in known and not any(k.startswith(fp["link"] + "/") for k in known):
@@ -134,11 +165,15 @@ def check(entry: dict[str, Any], now: datetime | date | None = None, months: int
         now = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
     now = now or datetime.now(timezone.utc)
     year, upcoming, verified = edition_year(detail), upcoming_year(entry, now), verified_on(detail)
+    seen = (entry.get("override") or {}).get("ccfddl_seen") or {}
     reasons: list[dict[str, str]] = []
     if year is None:
         reasons.append({"code": "edition", "text": "没有记录这些详情属于哪一届"})
-    elif upcoming and year < upcoming and upcoming > ((entry.get("override") or {}).get("ccfddl_seen") or {}).get("upcoming", 0):
-        reasons.append({"code": "edition", "text": f"详情是 {year} 届的，ccfddl 已有 {upcoming} 届"})
+    elif upcoming and year < upcoming:
+        if upcoming > (seen.get("upcoming") or 0):
+            reasons.append({"code": "edition", "text": f"详情是 {year} 届的，ccfddl 已有 {upcoming} 届"})
+        else:
+            reasons += _newer_reasons(entry, year, seen)
     since = None
     if verified is None:
         reasons.append({"code": "age", "text": "没有记录上次核对的日期"})

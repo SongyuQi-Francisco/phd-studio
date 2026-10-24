@@ -78,10 +78,17 @@ def test_norm_url(u, n):
 def test_fingerprint_is_the_link_and_sorted_unique_dates_of_one_edition_and_the_upcoming_year():
     e = entry(eds=[ed(2026, "https://a/"), ed(2027, "https://www.B.org/", "2027-02-02T00:00:00+00:00", "2027-01-01T00:00:00+00:00",
                                                 "2027-01-01T00:00:00+00:00")])
-    assert vf.fingerprint(e, 2027, NOW) == {"year": 2027, "link": "b.org", "upcoming": 2027,
+    assert vf.fingerprint(e, 2027, NOW) == {"year": 2027, "link": "b.org", "upcoming": 2027, "newer": {},
                                             "dates": ["2027-01-01T00:00:00+00:00", "2027-02-02T00:00:00+00:00"]}
-    assert vf.fingerprint(e, 2030, NOW) == {"year": 2030, "link": "", "dates": [], "upcoming": 2027}
+    assert vf.fingerprint(e, 2030, NOW) == {"year": 2030, "link": "", "dates": [], "upcoming": 2027, "newer": {}}
     assert vf.fingerprint(entry(), None, NOW)["upcoming"] is None
+
+
+def test_fingerprint_also_keeps_what_ccfddl_shows_for_every_newer_edition():
+    e = entry(eds=[ed(2026, "https://a/", "2026-01-01T00:00:00+00:00"), ed(2027), ed(2028, "https://c.org", "2028-03-03T00:00:00+00:00")])
+    fp = vf.fingerprint(e, 2026, NOW)
+    assert fp["newer"] == {"2027": {"link": "", "dates": []}, "2028": {"link": "c.org", "dates": ["2028-03-03T00:00:00+00:00"]}}
+    assert vf.fingerprint(e, None, NOW)["newer"] == {}
 
 
 # ---------- upcoming edition ----------
@@ -267,6 +274,54 @@ def test_an_even_newer_edition_after_the_check_is_flagged_again():
     looked_at = vf.fingerprint(entry(d, eds), 2026, NOW)
     f = vf.check(entry(d, [*eds, ed(2028)], override={"ccfddl_seen": looked_at}), NOW)
     assert codes(f) == ["edition"] and "2028" in f["reasons"][0]["text"]
+
+
+RECSYS = dict(edition="RecSys 2026", edition_year=2026)
+
+
+def looked_at(eds, d=None, **kw):
+    """The override a confirmed check leaves behind for these ccfddl editions."""
+    return {"ccfddl_seen": {**vf.fingerprint(entry(d or detail(**RECSYS), eds), 2026, NOW), **kw}}
+
+
+def test_a_placeholder_edition_that_later_gets_deadlines_is_flagged_again():
+    placeholder = [ed(2026, None, "2026-04-01T00:00:00+00:00"), ed(2027)]
+    d = detail(**RECSYS)
+    override = looked_at(placeholder)
+    assert vf.check(entry(d, placeholder, override=override), NOW)["stale"] is False
+    published = [placeholder[0], ed(2027, "https://recsys.example/27/", "2027-04-14T11:59:59+00:00")]
+    f = vf.check(entry(d, published, override=override), NOW)
+    assert codes(f) == ["edition"] and f["stale"]
+    assert "2027" in f["reasons"][0]["text"] and "2027-04-14" in f["reasons"][0]["text"] and "recsys.example/27" in f["reasons"][0]["text"]
+    assert f["reasons"][0]["short"] == "有新一届"
+
+
+def test_a_placeholder_edition_that_only_gets_a_link_is_flagged_too():
+    placeholder = [ed(2026, None, "2026-04-01T00:00:00+00:00"), ed(2027)]
+    f = vf.check(entry(detail(**RECSYS), [placeholder[0], ed(2027, "https://recsys.example/27/")], override=looked_at(placeholder)), NOW)
+    assert codes(f) == ["edition"] and "链接" in f["reasons"][0]["text"]
+
+
+def test_a_later_edition_with_dates_is_noticed_even_when_the_seen_upcoming_was_a_later_placeholder():
+    # at the check ccfddl listed 2027 and 2028 without dates (upcoming = the latest listed, 2028); now 2027 has dates
+    before = [ed(2026, None, "2026-04-01T00:00:00+00:00"), ed(2027), ed(2028)]
+    after = [before[0], ed(2027, None, "2027-04-14T11:59:59+00:00"), ed(2028)]
+    f = vf.check(entry(detail(**RECSYS), after, override=looked_at(before)), NOW)
+    assert codes(f) == ["edition"] and "2027-04-14" in f["reasons"][0]["text"]
+
+
+def test_a_newer_edition_nothing_changed_for_stays_quiet():
+    eds = [ed(2026, None, "2026-04-01T00:00:00+00:00"), ed(2027, "https://recsys.example/27/", "2027-04-14T11:59:59+00:00")]
+    assert not vf.check(entry(detail(**RECSYS), eds, override=looked_at(eds)), NOW)["stale"]
+
+
+def test_a_missing_upcoming_in_the_remembered_check_never_raises():
+    # a venue confirmed while ccfddl had no edition at all stores upcoming: None (yaml null)
+    e = entry(detail(**RECSYS), [ed(2026), ed(2027)], override={"ccfddl_seen": {"year": 2026, "link": "", "dates": [], "upcoming": None, "newer": {}}})
+    assert codes(vf.check(e, NOW)) == ["edition"]
+    e = entry(detail(**RECSYS), [ed(2026), ed(2027)], override={"ccfddl_seen": {"year": None, "upcoming": None}})
+    assert codes(vf.check(e, NOW)) == ["edition"]
+    assert vf.check(entry(eds=[]), NOW) is not None
 
 
 def test_age_and_edition_still_apply_after_a_check():

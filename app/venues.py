@@ -14,6 +14,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import logging
 import re
 import tarfile
 import threading
@@ -45,6 +46,7 @@ CCF_FIELDS = {
     "HI": "人机交互与普适计算", "MX": "交叉/综合/新兴",
 }
 _refresh_lock = threading.Lock()
+log = logging.getLogger(__name__)
 
 
 def _key(acronym: str) -> str:
@@ -160,17 +162,26 @@ def _accept_rates() -> dict[str, list[dict[str, Any]]]:
     return out
 
 
-def _details() -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
-    """(details by venue key with the vault overrides merged on top, the override records by venue key)."""
-    out: dict[str, dict[str, Any]] = {}
+def _details() -> dict[str, Any]:
+    """The shipped details, the vault overrides merged over them, and how each override was used.
+
+    `details` has the effective details by venue key, `overrides` the override records that were applied,
+    `bundled` the shipped details alone, and `outdated` the overrides left out because the shipped details
+    moved past what they were confirmed against.
+    """
+    bundled: dict[str, dict[str, Any]] = {}
     if DETAILS_FILE.exists():
         data = json.loads(DETAILS_FILE.read_text(encoding="utf-8"))
         for v in data.get("venues", []):
-            out[_key(v["key"])] = {"verified_at": data.get("verified_at"), **v}
-    overrides = venue_overrides.load()
-    for k, rec in overrides.items():
-        out[k] = venue_overrides.merge_detail(out.get(k) or {"key": rec.get("key") or k.upper()}, rec.get("details") or {})
-    return out, overrides
+            bundled[_key(v["key"])] = {"verified_at": data.get("verified_at"), **v}
+    details, applied, outdated = dict(bundled), {}, {}
+    for k, rec in venue_overrides.load().items():
+        if venue_overrides.outdated(bundled.get(k), rec):
+            outdated[k] = rec
+            continue
+        details[k] = venue_overrides.merge_detail(bundled.get(k) or {"key": rec.get("key") or k.upper()}, rec["details"])
+        applied[k] = rec
+    return {"details": details, "overrides": applied, "bundled": bundled, "outdated": outdated}
 
 
 @lru_cache(maxsize=1)
@@ -219,7 +230,8 @@ def _catalog(_stamp: Any) -> dict[str, dict[str, Any]]:
                                       "date": conf.get("date"), "place": conf.get("place"),
                                       "timezone": conf.get("timezone") or "AoE", "timeline": timeline})
     rates = {_match(k, cat): v for k, v in _accept_rates().items()}  # accept_rates files use the ccfddl title (SIGKDD)
-    details, overrides = _details()
+    loaded = _details()
+    details, overrides = loaded["details"], loaded["overrides"]
     now = datetime.now(timezone.utc)
     for k, e in cat.items():
         e["editions"].sort(key=lambda x: x.get("year") or 0)
@@ -227,6 +239,8 @@ def _catalog(_stamp: Any) -> dict[str, dict[str, Any]]:
         e["accept_rates"] = rates.get(k, [])
         e["detail"] = details.get(k)
         e["override"] = overrides.get(k)
+        e["override_outdated"] = loaded["outdated"].get(k)
+        e["bundled"] = loaded["bundled"].get(k)
         official = _official_edition(e["detail"])
         if official and not any(datetime.fromisoformat(t[kind]) >= now for ed in e["editions"]
                                 for t in ed["timeline"] for kind in ("abstract", "deadline") if t.get(kind)):
@@ -306,10 +320,19 @@ def next_deadline(e: dict[str, Any], now: datetime | None = None) -> dict[str, A
     return None
 
 
+def freshness(e: dict[str, Any]) -> dict[str, Any] | None:
+    """venue_fresh.check, but a bad record can never take the venue library down with it."""
+    try:
+        return venue_fresh.check(e)
+    except Exception:  # noqa: BLE001
+        log.warning("freshness check failed for %s", e.get("key"), exc_info=True)
+        return None
+
+
 def summary(e: dict[str, Any]) -> dict[str, Any]:
     return {"key": e["key"], "acronym": e["acronym"], "title": e["title"], "core": e["core"],
             "ccf": e["ccf"], "field": e["field"], "next": next_deadline(e),
-            "has_detail": bool(e.get("detail")), "freshness": venue_fresh.check(e),
+            "has_detail": bool(e.get("detail")), "freshness": freshness(e),
             "accept_rate": (e["accept_rates"][-1] if e["accept_rates"] else None)}
 
 

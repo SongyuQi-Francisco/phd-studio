@@ -147,11 +147,14 @@ def build(emit: Callable[[dict[str, Any]], Awaitable[None]]):
           "提交会议投稿信息（赛道、页数、模板、审稿规则、截稿）的更新提案。只提交提案，不会改任何数据：用户在会议详情页看差异后确认才生效。"
           "venue=会议简称；details 只写有变化的字段（可用：status=confirmed|previous-edition、edition、edition_year、dates、location、homepage、cfp_url、"
           "deadlines=[{track,abstract,paper}]、tracks=[{name,page_limit,notes}]、format={template,review_model,notable_rules[]}、notes）。"
-          "列表字段要写完整的新列表；核对后没有变化就让 details 为空（只更新核对日期）。sources 必填：你实际读过的官方网址。summary 一句话说明改了什么。",
-          _obj({"venue": S, "details": {"type": "object"}, "sources": SA, "summary": S}, ["venue", "sources"]))
+          "列表字段要写完整的新列表；官网已经没有的旧字段用 remove 列出来删掉（可删：dates、location、homepage、cfp_url、deadlines、tracks、notes、"
+          "format.template、format.review_model、format.notable_rules）；核对后没有变化就让 details 为空（只更新核对日期）。"
+          "sources 必填：你实际读过的官方网址。summary 一句话说明改了什么。",
+          _obj({"venue": S, "details": {"type": "object"}, "sources": SA, "summary": S, "remove": SA}, ["venue", "sources"]))
     async def venue_details_propose(a):
         try:
-            prop = venue_check.propose(a["venue"], a.get("details") or {}, a.get("sources") or [], a.get("summary") or "")
+            prop = venue_check.propose(a["venue"], a.get("details") or {}, a.get("sources") or [], a.get("summary") or "",
+                                       a.get("remove") or [])
         except ValueError as e:
             return _err(str(e))
         what = f"{prop['changes']} 处改动" if prop["changes"] else "没有变化，只更新核对日期"

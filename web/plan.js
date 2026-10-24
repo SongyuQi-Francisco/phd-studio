@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { html, Icon, api } from "/lib.js";
 import { C, Ring, Progress, Sparkline, Bars, HeatStrip, perWeek, dayKey } from "/charts.js";
 import { Days, daysTo, Skeleton, Empty, Collapse, transition } from "/ui.js";
-import { FreshTag, CheckPanel, StaleCard, StaleNote } from "/venue-check.js";
+import { FreshTag, CheckPanel, StaleCard, StaleNote, httpUrl, hostOf } from "/venue-check.js";
 
 const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
 const TZ_LABEL = TZ.split("/").pop().replace(/_/g, " ");
@@ -251,7 +251,7 @@ export function VenueSheet({ vkey, onClose, toast, onChanged, onAsk }) {
     try { await api("/api/plan/targets", { json: { title: tgt.title, venue: v.key, line: tgt.line || null } }); toast("已设为投稿目标"); setTgt(null); onChanged?.(); }
     catch (e) { toast(e.message); }
   };
-  const links = [["官网", d?.homepage || ed?.link], ["CFP", d?.cfp_url], ["CORE", v.core_url], ["DBLP", v.dblp_url]].filter(([, u]) => u);
+  const links = [["官网", d?.homepage || ed?.link], ["CFP", d?.cfp_url], ["CORE", v.core_url], ["DBLP", v.dblp_url]].filter(([, u]) => httpUrl(u));
   const n = v.next, live = n && !n.past;
   const rates = v.accept_rates || [];
   const ruleList = d?.format?.notable_rules || [];
@@ -300,7 +300,7 @@ export function VenueSheet({ vkey, onClose, toast, onChanged, onAsk }) {
           <${Collapse} open=${rules}><ul class="rules">${ruleList.map((r) => html`<li>${r}</li>`)}</ul></${Collapse}>`}
       </div>`}
       ${d.notes && html`<div class="muted small">${Array.isArray(d.notes) ? d.notes.join("；") : d.notes}</div>`}
-      ${(d.sources || []).length > 0 && html`<div class="muted small srcs">来源：${d.sources.map((u) => html`<a href=${u} target="_blank" rel="noreferrer">${new URL(u).hostname}</a> `)}</div>`}`}
+      ${(d.sources || []).length > 0 && html`<div class="muted small srcs">来源：${d.sources.filter(httpUrl).map((u) => html`<a href=${u} target="_blank" rel="noreferrer">${hostOf(u)}</a> `)}</div>`}`}
   </div></div>`;
 }
 
