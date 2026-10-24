@@ -164,15 +164,17 @@ def excerpt_add(stem: str, req: ExcerptReq) -> dict[str, Any]:
 
 class ExcerptUndoReq(BaseModel):
     line: str
-    section: str
+    inserted: str | None = None  # exactly what append() inserted, for a byte-exact undo
+    section: str = excerpt.NEW_SECTION
     created: bool = False
+    mtime_ns: int | None = None
 
 
 @app.post("/api/excerpt/{stem}/undo")
 def excerpt_undo(stem: str, req: ExcerptUndoReq) -> dict[str, bool]:
     _stem_or_404(stem)
     try:
-        return {"ok": excerpt.undo(stem, req.line, req.section, req.created)}
+        return excerpt.undo(stem, req.line, req.inserted, req.section, req.created, req.mtime_ns)
     except FileNotFoundError:
         raise HTTPException(404, "没有这篇笔记")
 

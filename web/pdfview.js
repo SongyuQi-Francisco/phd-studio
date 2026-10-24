@@ -27,7 +27,7 @@ export class PdfView {
     this.eventBus.on("pagesinit", () => {
       this.viewer.currentScaleValue = this.initialScale || "page-width";
       if (this.initialPage > 1) this.viewer.currentPageNumber = this.initialPage;
-      this._ready?.();
+      this._ready?.(true);
       onReady?.();
     });
     this.onPages = onPages;
@@ -42,14 +42,17 @@ export class PdfView {
   async open(url, { page = 1, scale } = {}) {
     this.initialPage = page;
     this.initialScale = scale;
-    this.ready = new Promise((r) => (this._ready = r)); // resolves once pages are laid out
+    this._ready?.(false); // anyone still waiting on an earlier open() gives up
+    let settle;
+    this.ready = new Promise((r) => (settle = this._ready = r)); // true once pages are laid out, false if opening fails
     const task = pdfjsLib.getDocument({
       url,
       cMapUrl: "/vendor/pdfjs/cmaps/",
       cMapPacked: true,
       standardFontDataUrl: "/vendor/pdfjs/standard_fonts/",
     });
-    const doc = await task.promise;
+    let doc;
+    try { doc = await task.promise; } catch (e) { settle(false); throw e; }
     if (this.doc) await this.doc.destroy();
     this.doc = doc;
     this.viewer.setDocument(doc);
@@ -70,10 +73,10 @@ export class PdfView {
   }
   goToDest(dest) { this.linkService.goToDestination(dest); }
 
-  // "5.4.1" -> the outline entry titled "5.4.1 …" / "5. …"; false when there is no outline or no match.
+  // "5.4.1" -> the outline entry titled "5.4.1 …" / "5. …", else the heading in the text.
+  // false: no such section; null: no PDF is open (it failed to load or is still loading another one).
   async goToSection(num) {
-    if (!this.doc) return false;
-    await this.ready;
+    if (!this.doc || !(await this.ready)) return null;
     const want = String(num).replace(/\.$/, "");
     const re = new RegExp("^\\s*(?:§\\s*)?" + want.replace(/\./g, "\\.") + "(?:\\.?\\s|\\.?$)");
     const walk = (items) => {

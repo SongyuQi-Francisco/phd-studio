@@ -1,6 +1,6 @@
 import { render } from "preact";
 import { useEffect, useMemo, useRef, useState, useCallback } from "preact/hooks";
-import { html, Icon, api, prefs, copyText } from "/lib.js";
+import { html, Icon, api, prefs, copyText, composing } from "/lib.js";
 import { PdfView } from "/pdfview.js";
 import { ChatPanel, NotePanel, PROMPTS } from "/chat.js";
 import { ReadingPage, DoneDialog } from "/reading.js";
@@ -56,7 +56,7 @@ function Library({ papers, current, open, onPick, onClose }) {
 
 // Exactly the line the server appends to the note (see app/excerpt.py line_for).
 function excerptLine(text, page, comment) {
-  const q = text.replace(/\s+/g, " ").trim().replace(/"/g, "'");
+  const q = text.replace(/\s+/g, " ").trim().replace(/"/g, "'").replace(/([\\<>&$])/g, "\\$1");
   const c = (comment || "").replace(/\s+/g, " ").trim();
   return `- "${q}"` + (page ? ` [p.${page}]` : "") + (c ? ` — ${c}` : "");
 }
@@ -109,7 +109,7 @@ function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef
     const jump = jumpRef.current?.stem === stem ? jumpRef.current : null;
     jumpRef.current = null;
     load("original", jump?.page).then(async () => {
-      if (jump?.sec && !(await viewRef.current.goToSection(jump.sec))) toast(`PDF 里找不到 §${jump.sec}`);
+      if (jump?.sec && (await viewRef.current.goToSection(jump.sec)) === false) toast(`PDF 里找不到 §${jump.sec}`);
     });
   }, [stem]);
 
@@ -218,7 +218,7 @@ function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef
       setPop(null);
       window.getSelection()?.removeAllRanges();
       if (r.duplicate) toast("这段已经摘录过");
-      else onExcerpted({ ...r, page: pg });
+      else onExcerpted({ ...r, page: pg, stem });
     } catch (e) { setEx({ saving: false }); toast(e.message); }
   };
 
@@ -305,7 +305,7 @@ function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef
         <input class="ex-comment" placeholder="批注（可选）· Enter 摘录" value=${pop.excerpt.comment}
           ref=${(el) => { if (el && !el.dataset.focused) { el.dataset.focused = "1"; el.focus(); } }}
           onInput=${(e) => setEx({ comment: e.target.value })}
-          onKeyDown=${(e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); saveExcerpt(); } if (e.key === "Escape") setPop(null); }} />
+          onKeyDown=${(e) => { if (e.key === "Enter" && !composing(e)) { e.preventDefault(); saveExcerpt(); } if (e.key === "Escape") setPop(null); }} />
         <div class="ex-preview" title="将追加到笔记的这一行">${excerptLine(pop.text, pop.page, pop.excerpt.comment)}</div>
         <div class="row-end"><button class="btn ghost" onClick=${() => setPop(null)}>取消</button>
           <button class="btn primary" disabled=${pop.excerpt.saving} onClick=${saveExcerpt}>${pop.excerpt.saving ? "写入中…" : "摘录"}</button></div>
@@ -420,8 +420,12 @@ function App() {
   }, []);
   useEffect(() => prefs.set("assistant", assistant), [assistant]);
 
-  const loadPaper = (s) => api(`/api/papers/${encodeURIComponent(s)}`).then(setPaper)
-    .catch(() => { setStem(null); prefs.set("lastStem", null); setView("list"); });
+  const stemRef = useRef(stem);
+  stemRef.current = stem;
+  // Only the paper still open gets its data applied (a reply can arrive after you switched papers).
+  const loadPaper = (s) => api(`/api/papers/${encodeURIComponent(s)}`)
+    .then((p) => { if (stemRef.current === s) setPaper(p); })
+    .catch(() => { if (stemRef.current !== s) return; setStem(null); prefs.set("lastStem", null); setView("list"); });
 
   useEffect(() => {
     if (!stem || view !== "reader") return;
@@ -464,14 +468,21 @@ function App() {
     if (v?.doc && (n < 1 || n > v.doc.numPages)) toast(`这篇只有 ${v.doc.numPages} 页`);
     else v?.goTo(n);
   };
-  const goSection = async (sec) => { if (!(await viewRef.current?.goToSection(sec))) toast(`PDF 里找不到 §${sec}`); };
+  const goSection = async (sec) => {
+    const ok = await viewRef.current?.goToSection(sec);
+    if (ok === false) toast(`PDF 里找不到 §${sec}`);
+    else if (!ok) toast("PDF 还没打开，没法跳转");
+  };
+  // r.stem is the paper the excerpt went into; you may have switched papers before pressing 撤销.
   const onExcerpted = (r) => {
-    loadPaper(stem);
-    setNoteVersion((n) => n + 1);
+    const refresh = () => { if (stemRef.current === r.stem) { loadPaper(r.stem); setNoteVersion((n) => n + 1); } };
+    refresh();
     const undo = async () => {
       try {
-        await api(`/api/excerpt/${encodeURIComponent(stem)}/undo`, { json: { line: r.line, section: r.section, created: r.created } });
-        loadPaper(stem); setNoteVersion((n) => n + 1); toast("已撤销摘录");
+        const u = await api(`/api/excerpt/${encodeURIComponent(r.stem)}/undo`,
+          { json: { line: r.line, inserted: r.inserted, section: r.section, created: r.created, mtime_ns: r.mtime_ns } });
+        refresh();
+        toast(u.ok ? "已撤销摘录" : "撤销失败：笔记里已找不到这一行");
       } catch (e) { toast(e.message); }
     };
     toast(`已摘录到 ${r.section}${r.page ? " · p." + r.page : ""}`, { action: { label: "撤销", run: undo } });

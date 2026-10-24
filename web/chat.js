@@ -1,6 +1,6 @@
 // Right panel: Claude co-reader (one persistent session per paper) and the paper's Obsidian note.
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
-import { html, Icon, renderMarkdown, api } from "/lib.js";
+import { html, Icon, renderMarkdown, api, composing } from "/lib.js";
 
 export const PROMPTS = {
   brief: "给我这篇论文的中文速读：①要解决的问题 ②方法核心（一句话 + 关键机制）③主要证据（关键数字，带页码）④局限 ⑤和我当前课题的关系。先读全文再回答。",
@@ -187,7 +187,7 @@ export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, r
   };
 
   const onKey = (e) => {
-    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); }
+    if (e.key === "Enter" && !e.shiftKey && !composing(e)) { e.preventDefault(); submit(); }
   };
   const autosize = (e) => {
     setText(e.target.value);

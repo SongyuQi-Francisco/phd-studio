@@ -13,7 +13,7 @@ built on top of an Obsidian vault and a Zotero library you already have.
   PDFs are taken from the vault, or downloaded once (Zotero attachment URL, arXiv, OpenReview, ACL Anthology, ACM) into a local cache.
 - **Reader**: pdf.js viewer with outline, find (⌘F) and zoom.
   - Select text → **翻译 / Translate** (DeepSeek or Google; the engine used is shown), **讲解 / Explain**, **Ask Claude**, **摘录 / Excerpt**.
-  - Excerpt appends one line, `- "quote" [p.N] — your comment`, to a section of the paper's note (default: a new `## Excerpts`). You see the line before it is written, and can undo it from the toast.
+  - Excerpt appends one line, `- "quote" [p.N] — your comment`, to a section of the paper's note (default: a new `## Excerpts`). You see the line before it is written, and can undo it from the toast (byte for byte, unless the note was edited in between; then just that line goes). The quote is escaped, so `<tags>` or `$` from the PDF stay text; the note is rewritten in place (same file, creation time and line endings).
   - ⌥-drag (or the crop tool) on a figure, table or formula → the actual image is sent to Claude.
   - **Bilingual / translated PDF** of the whole paper via [pdf2zh-next](https://github.com/PDFMathTranslate/PDFMathTranslate-next) (keeps formulas and layout), generated in the background.
 - **Claude co-reader**: one persistent session per paper (resumed after restarts), streamed.

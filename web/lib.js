@@ -97,7 +97,31 @@ export function renderMarkdown(src, { loose = false } = {}) {
   out = out.replace(/\[(?:p\.|P\.|第)\s?(\d+)(?:\s?页)?\]/g, '<a class="pagelink" data-page="$1">p.$1</a>');
   out = out.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, t, a) =>
     `<span class="wikilink" data-target="${esc(t.split("#")[0].trim())}">${a || t}</span>`);
-  return loose ? linkLoose(out) : out;
+  return sanitize(loose ? linkLoose(out) : out);
+}
+
+// Notes come from many places (PDF text, the web, other tools) and marked keeps raw HTML:
+// drop active elements, on* handlers and script URLs before the HTML reaches the page.
+const DROP = new Set(["SCRIPT", "IFRAME", "FRAME", "FRAMESET", "OBJECT", "EMBED", "LINK", "META", "BASE", "STYLE",
+  "FORM", "INPUT", "BUTTON", "TEXTAREA", "SELECT"]);
+const URL_ATTR = new Set(["href", "src", "xlink:href", "action", "formaction", "srcset", "poster", "background"]);
+function sanitize(markup) {
+  const t = document.createElement("template"); // inert: nothing in it loads or runs
+  t.innerHTML = markup;
+  for (const el of [...t.content.querySelectorAll("*")]) {
+    if (DROP.has(el.tagName.toUpperCase())) { el.remove(); continue; }
+    for (const a of [...el.attributes]) {
+      const n = a.name.toLowerCase();
+      if (n.startsWith("on") || n === "srcdoc" || (URL_ATTR.has(n) && /^\s*(?:javascript|vbscript|data):/i.test(a.value) &&
+          !(n === "src" && /^\s*data:image\/(?:png|jpe?g|gif|webp);/i.test(a.value)))) el.removeAttribute(a.name);
+    }
+  }
+  return t.innerHTML;
+}
+
+// Enter that only confirms an IME candidate (WebKit fires compositionend first, then keyCode 229).
+export function composing(e) {
+  return e.isComposing || e.keyCode === 229;
 }
 
 export async function api(path, opts = {}) {
