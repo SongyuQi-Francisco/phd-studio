@@ -8,9 +8,11 @@ the user has seen the exact line and confirmed it (link_preview, then write_link
 snapshot can't be read, nothing is added (fail closed): an unreadable index would let every paper
 through the dedupe.
 
-Item metadata comes from the note, then from Crossref (DOI) or the arXiv API, fetched only when an
-item is about to be created (never for a status check) and cached in the data dir. A DOI paper that
-Crossref calls a proceedings article becomes a conferencePaper, not a journalArticle.
+Item metadata comes from the note, then from Crossref (DOI), the arXiv API, the ACL Anthology or
+OpenReview, fetched only when an item is about to be created (never for a status check) and cached in
+the data dir. A DOI paper that Crossref calls a proceedings article becomes a conferencePaper, not a
+journalArticle. Papers without a note can be pushed by any reading-list key: arxiv:<id>, or the
+doi:/openreview:/acl: keys of papers captured from a DOI or an OpenReview / ACL link.
 
 The Web API key is created by the user at zotero.org/settings/keys and kept in <secrets>/zotero.env
 (ZOTERO_API_KEY, ZOTERO_USER_ID). The app never asks for a Zotero password.
@@ -37,7 +39,7 @@ from typing import Any
 import httpx
 import yaml
 
-from . import library, reading
+from . import bilingual, library, reading, sources
 from .config import DATA_DIR, PAPERS_DIR, READING_LIST, SECRETS_DIR, VAULT_DIR, load_settings, secret
 from .excerpt import _locked as _note_locked, _read as _read_note, _write as _write_note
 
@@ -104,9 +106,18 @@ def norm_url(url: str) -> str:
     return re.sub(r"^https?://(www\.)?", "", url.split("#")[0], flags=re.I).rstrip("/").lower()
 
 
-def ident_keys(*, doi: str = "", arxiv: str = "", url: str = "", extra: str = "") -> set[str]:
-    """Identity keys ("doi:…", "arxiv:…", "url:…") shared by a paper and its Zotero item."""
+def ident_keys(*, doi: str = "", arxiv: str = "", url: str = "", extra: str = "", openreview: str = "",
+               acl: str = "") -> set[str]:
+    """Identity keys ("doi:…", "arxiv:…", "openreview:…", "acl:…", "url:…") shared by a paper and its Zotero item."""
     out = set()
+    if openreview:
+        out.add("openreview:" + openreview)
+    if acl:
+        out.add("acl:" + acl.lower())
+    for text in (url, extra):  # an OpenReview forum/pdf link or an ACL Anthology link, however it is written
+        for line in (text or "").splitlines():
+            if (parts := sources.ext_parts(sources.ext_from_url(line))) and parts[0] in ("openreview", "acl"):
+                out.add(f"{parts[0]}:{parts[1].lower() if parts[0] == 'acl' else parts[1]}")
     doi_line = re.search(r"^DOI:(.*)$", extra or "", re.M | re.I)
     for d in (norm_doi(doi), norm_doi(doi_line.group(1)) if doi_line else ""):
         if d:
@@ -289,12 +300,22 @@ def _crossref_fetch(doi: str) -> dict[str, Any]:
             "publisher": m.get("publisher", "")}
 
 
+def _ext_ids(ext: str | None) -> dict[str, str]:
+    parts = sources.ext_parts(ext)
+    return {parts[0]: parts[1]} if parts else {}
+
+
 def paper_meta(key: str) -> dict[str, Any]:
     """What the note (or the reading-list item) says about a paper. No network: see enrich()."""
-    if aid := library.arxiv_key(key):
+    if library.is_external(key):  # arxiv:<id>, doi:<doi>, openreview:<id> or acl:<id>, no note yet
         item = reading.find(reading._load_raw(), key) or {}
+        ext = {**_ext_ids(item.get("ext")), **_ext_ids(key)}  # an arXiv item may also carry its DOI
+        aid = library.arxiv_key(key) or item.get("arxiv") or ""
+        doi, orid, acl = ext.get("doi", ""), ext.get("openreview", ""), ext.get("acl", "")
+        url = (f"https://arxiv.org/abs/{aid}" if aid else f"https://openreview.net/forum?id={orid}" if orid
+               else f"https://aclanthology.org/{acl}/" if acl else f"https://doi.org/{doi}" if doi else "")
         meta = {"key": key, "note": None, "title": item.get("title") or "", "authors": [], "date": "", "arxiv": aid,
-                "doi": "", "url": f"https://arxiv.org/abs/{aid}", "venue": "", "zotero_key": "", "abstract": ""}
+                "doi": doi, "openreview": orid, "acl": acl, "url": url, "venue": "", "zotero_key": "", "abstract": ""}
     else:
         path = library.note_path(key)
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -312,10 +333,16 @@ def paper_meta(key: str) -> dict[str, Any]:
                 "authors": [a.strip() for a in re.split(r",|;| and ", fields.get("Authors", "")) if a.strip()],
                 "date": str(info["year"] or fields.get("Year", "") or ""), "arxiv": arxiv, "doi": doi,
                 "url": url if url.startswith("http") else (f"https://arxiv.org/abs/{arxiv}" if arxiv else ""),
-                "venue": fields.get("Venue / status", ""), "zotero_key": info["zotero_key"], "abstract": ""}
+                "venue": fields.get("Venue / status", ""), "zotero_key": info["zotero_key"], "abstract": "",
+                "openreview": "", "acl": "",
+                **{k: v for k, v in _ext_ids(sources.ext_from_url(url)).items() if k != "doi"}}
     meta["authors"] = [a for a in meta["authors"] if a.lower().rstrip(".") not in ("et al", "others")]
-    meta["ids"] = ident_keys(doi=meta["doi"], arxiv=meta["arxiv"], url=meta["url"])
-    meta["pdf_url"] = next((u for u in library.pdf_urls({"arxiv": meta["arxiv"], "source": meta["url"]})), "")
+    meta["ids"] = ident_keys(doi=meta["doi"], arxiv=meta["arxiv"], url=meta["url"], openreview=meta["openreview"],
+                             acl=meta["acl"])
+    if meta["acl"] and not meta["doi"]:  # the Anthology's own DOI, for matching only (it isn't written to the item)
+        meta["ids"].add("doi:" + norm_doi(f"10.18653/v1/{meta['acl']}"))
+    meta["pdf_url"] = next((u for u in library.pdf_urls({"arxiv": meta["arxiv"], "openreview": meta["openreview"],
+                                                         "acl": meta["acl"], "source": meta["url"]})), "")
     meta["crossref"] = {}
     meta["title"] = meta["title"] or key
     return meta
@@ -328,6 +355,19 @@ def _published_doi(meta: dict[str, Any]) -> str:
 def enrich(meta: dict[str, Any]) -> list[str]:
     """Fill in metadata from Crossref (DOI) and arXiv, just before an item is created. Returns warnings."""
     warnings = []
+    for scheme, fetch in (("acl", sources.acl_meta), ("openreview", sources.openreview_meta)):
+        if ident := meta.get(scheme):
+            c, err = _cached(scheme, ident, lambda: fetch(ident))
+            if err:
+                warnings.append(f"没取到{'ACL Anthology' if scheme == 'acl' else ' OpenReview '}元数据（{err}）")
+            if meta["title"] == meta["key"] and c.get("title"):
+                meta["title"] = c["title"]
+            meta["authors"] = meta["authors"] or c.get("authors", [])
+            meta["date"] = meta["date"] or str(c.get("year") or "")
+            meta["venue"] = meta["venue"] or c.get("venue", "")
+            meta["abstract"] = meta["abstract"] or c.get("abstract", "")
+            if c.get("doi") and not meta["doi"]:
+                meta["doi"] = norm_doi(c["doi"])
     if doi := _published_doi(meta):
         meta["crossref"], err = _cached("doi", doi, lambda: _crossref_fetch(doi))
         if err:
@@ -371,6 +411,11 @@ def _guess_type(venue: str) -> str:
     return "conferencePaper"
 
 
+def _accepted(venue: str) -> bool:
+    """An OpenReview venue line of a published paper ("ICLR 2025 Poster"), not "Submitted to ICLR 2026"."""
+    return bool(venue) and not re.search(r"submitted|submission|withdrawn|rejected|under review", venue, re.I)
+
+
 def build_item(meta: dict[str, Any]) -> dict[str, Any]:
     """A Zotero item in the shape both the connector and the Web API accept."""
     cr = meta.get("crossref") or {}
@@ -394,8 +439,14 @@ def build_item(meta: dict[str, Any]) -> dict[str, Any]:
             item.update(bookTitle=venue, pages=cr.get("pages", ""), publisher=cr.get("publisher", ""))
         else:
             item.update(repository=cr.get("publisher", ""))
+    elif meta.get("acl"):  # ACL Anthology: conference and workshop proceedings
+        item.update(itemType="conferencePaper", proceedingsTitle=meta["venue"])
+    elif meta.get("openreview") and _accepted(meta["venue"]):
+        item.update(itemType="conferencePaper", proceedingsTitle=venue_name(meta["venue"]))
     elif meta["arxiv"]:
         item.update(itemType="preprint", repository="arXiv", archiveID=f"arXiv:{meta['arxiv']}", DOI=meta["doi"])
+    elif meta.get("openreview"):  # under review, withdrawn or rejected: not published
+        item.update(itemType="preprint", repository="OpenReview")
     else:
         item["itemType"] = "document"
     item["extra"] = "\n".join(extra)
@@ -572,7 +623,7 @@ def _with_links(out: dict[str, Any], meta: dict[str, Any]) -> dict[str, Any]:
     key = out.get("key")
     if key:
         out["link"] = select_link(key)
-    note = meta["note"] or (library.arxiv_index().get(meta["arxiv"]) if meta["arxiv"] else None)
+    note = meta["note"] or bilingual.note_of(meta["key"])
     if key and note:
         try:
             if not library._parse_note(library.note_path(note))["zotero_key"]:
@@ -692,15 +743,13 @@ def write_link(stem: str, zkey: str, base: str) -> dict[str, Any]:
 def pending_links() -> list[dict[str, Any]]:
     """Papers this Mac put into Zotero whose note doesn't carry the link yet."""
     out, seen = [], set()
-    by_arxiv = library.arxiv_index()
     snap = snapshot()
     for e in reversed(_pushed()):
         key = e.get("key") or next((snap["by_ident"][k] for k in e.get("ids", []) if k in snap["by_ident"]), None)
         if not key:
             continue
         paper = e.get("paper", "")
-        aid = library.arxiv_key(paper)
-        stem = by_arxiv.get(aid) if aid else paper
+        stem = bilingual.note_of(paper) if library.is_external(paper) else paper
         if not stem or stem in seen:
             continue
         seen.add(stem)
@@ -752,7 +801,8 @@ def auto_tick(force: bool = False) -> list[dict[str, Any]]:
             return []
         if not READING_LIST.exists() or not PAPERS_DIR.is_dir():  # not even a first look (vault not mounted yet?)
             return []
-        items = {i["id"]: [reading.key_of(i), i["status"]] for i in reading._load_raw()}
+        items = {i["id"]: [reading.key_of(i), i["status"]] for i in reading._load_raw()
+                 if i.get("paper") or library.is_external(reading.key_of(i))}
         notes = sorted(p.stem for p in PAPERS_DIR.glob("*.md"))
         if (not items and state.get("items")) or (not notes and state.get("notes")):
             return []

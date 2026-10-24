@@ -830,3 +830,118 @@ def test_module_state_lives_in_the_sandbox():
     for p in (zotero_push.PUSHED_FILE, zotero_push.AUTO_FILE):
         assert p.is_relative_to(ROOT)
     assert zotero_push.CONNECTOR != "" and "4242" not in zotero_push.WEB_API
+
+
+# ---------- papers known by doi: / openreview: / acl: keys (captured without a note or arXiv id) ----------
+
+from app import sources  # noqa: E402
+
+
+def test_a_doi_key_is_pushed_as_the_published_paper(zot):
+    reading.push(ext="doi:10.1145|3726302.3730238", title="A SIGIR Paper", reason="r", source="self")
+    zot.crossref["10.1145/3726302.3730238"] = SIGIR
+    key = "doi:10.1145|3726302.3730238"
+    meta = zotero_push.paper_meta(key)
+    assert (meta["doi"], meta["url"]) == ("10.1145/3726302.3730238", "https://doi.org/10.1145/3726302.3730238")
+    assert "doi:10.1145/3726302.3730238" in meta["ids"]
+    assert zotero_push.status(key)["state"] == "absent"
+    r = zotero_push.push(key)
+    assert r["state"] == "added" and r["warnings"] == []
+    item = zot.last("/connector/saveItems")["body"]["items"][0]
+    assert item["itemType"] == "conferencePaper" and item["DOI"] == "10.1145/3726302.3730238"
+    assert zotero_push.push(key)["state"] == "exists"  # the saved item's DOI dedupes it
+
+
+def test_an_arxiv_item_that_also_has_a_doi_uses_the_published_version(zot):
+    reading.push(arxiv="2610.11920", ext="doi:10.1145|3726302.3730238", title="Both", reason="r", source="self")
+    zot.crossref["10.1145/3726302.3730238"] = SIGIR
+    meta = zotero_push.paper_meta("arxiv:2610.11920")
+    assert meta["doi"] == "10.1145/3726302.3730238" and {"arxiv:2610.11920", "doi:10.1145/3726302.3730238"} <= meta["ids"]
+    zotero_push.enrich(meta)
+    item = zotero_push.build_item(meta)
+    assert item["itemType"] == "conferencePaper" and item["extra"].startswith("arXiv: 2610.11920")
+
+
+def test_an_acl_key(zot, monkeypatch):
+    reading.push(ext="acl:2024.acl-long.15", title="An ACL Paper", reason="r", source="self")
+    key = "acl:2024.acl-long.15"
+    meta = zotero_push.paper_meta(key)
+    assert meta["url"] == "https://aclanthology.org/2024.acl-long.15/"
+    assert {"acl:2024.acl-long.15", "url:aclanthology.org/2024.acl-long.15", "doi:10.18653/v1/2024.acl-long.15"} <= meta["ids"]
+    assert meta["pdf_url"] == "https://aclanthology.org/2024.acl-long.15.pdf"
+    monkeypatch.setattr(sources, "acl_meta", lambda acl_id: sources.candidate(
+        title="An ACL Paper", authors=["Ada Lovelace"], year=2024, acl=acl_id,
+        venue="Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics"))
+    assert zotero_push.enrich(meta) == []
+    item = zotero_push.build_item(meta)
+    assert item["itemType"] == "conferencePaper" and item["proceedingsTitle"].startswith("Proceedings of the 62nd")
+    assert "DOI" not in item  # the derived Anthology DOI only matches, it isn't written
+
+
+def test_an_acl_paper_already_in_zotero_is_found_by_its_doi_or_link(zot):
+    reading.push(ext="acl:2024.acl-long.15", title="T", reason="r", source="self")
+    zot.fake.add("ACLKEY23", DOI="10.18653/v1/2024.acl-long.15")
+    assert zotero_push.status("acl:2024.acl-long.15")["key"] == "ACLKEY23"
+    reading.push(ext="acl:P19-1001", title="Old", reason="r", source="self")
+    zot.fake.add("ACLOLD23", url="https://www.aclanthology.org/P19-1001.pdf")
+    assert zotero_push.status("acl:P19-1001")["key"] == "ACLOLD23"
+
+
+@pytest.mark.parametrize("venue, kind, proceedings", [
+    ("ICLR 2025 Poster", "conferencePaper", "ICLR 2025"),
+    ("Submitted to ICLR 2026", "preprint", None),
+])
+def test_an_openreview_key(zot, monkeypatch, venue, kind, proceedings):
+    reading.push(ext="openreview:AbCdEf123", title="An OpenReview Paper", reason="r", source="self")
+    meta = zotero_push.paper_meta("openreview:AbCdEf123")
+    assert meta["url"] == "https://openreview.net/forum?id=AbCdEf123" and "openreview:AbCdEf123" in meta["ids"]
+    monkeypatch.setattr(sources, "openreview_meta", lambda forum: sources.candidate(
+        title="An OpenReview Paper", authors=["Grace Hopper"], year=2025, venue=venue, openreview=forum))
+    zotero_push.enrich(meta)
+    item = zotero_push.build_item(meta)
+    assert item["itemType"] == kind and item.get("proceedingsTitle") == proceedings
+    if kind == "preprint":
+        assert item["repository"] == "OpenReview"
+
+
+def test_an_openreview_paper_saved_from_its_pdf_link_is_found(zot):
+    reading.push(ext="openreview:AbCdEf123", title="T", reason="r", source="self")
+    zot.fake.add("ORKEY234", url="https://openreview.net/pdf?id=AbCdEf123")
+    assert zotero_push.status("openreview:AbCdEf123")["key"] == "ORKEY234"
+
+
+def test_external_metadata_failures_are_warnings(zot, monkeypatch):
+    reading.push(ext="openreview:AbCdEf123", title="T", reason="r", source="self")
+
+    def human_check(forum):
+        raise sources.SourceError("OpenReview 要求人机验证，暂时查不了标题")
+    monkeypatch.setattr(sources, "openreview_meta", human_check)
+    r = zotero_push.push("openreview:AbCdEf123")
+    assert r["state"] == "added" and any("OpenReview" in w and "人机验证" in w for w in r["warnings"])
+
+
+def test_a_note_written_later_for_a_doi_key_gets_the_link(zot, make_note):
+    reading.push(ext="doi:10.1145|3726302.3730238", title="A SIGIR Paper", reason="r", source="self")
+    zot.crossref["10.1145/3726302.3730238"] = SIGIR
+    zotero_push.push("doi:10.1145|3726302.3730238")
+    assert zotero_push.pending_links() == []  # no note yet
+    make_note("Sigir Note 2025", title="A SIGIR Paper", source="https://dl.acm.org/doi/10.1145/3726302.3730238")
+    assert [p["stem"] for p in zotero_push.pending_links()] == ["Sigir Note 2025"]
+    s = zotero_push.status("doi:10.1145|3726302.3730238")
+    assert s["linkback"]["stem"] == "Sigir Note 2025"
+
+
+def test_routes_accept_external_keys(zot, client):
+    reading.push(ext="doi:10.1145|3726302.3730238", title="T", reason="r", source="self")
+    assert client.get("/api/zotero/paper/doi:10.1145|3726302.3730238").json()["state"] == "absent"
+    assert client.get("/api/zotero/paper/doi:not-a-doi").status_code == 404
+
+
+def test_auto_mode_pushes_external_keys(zot, monkeypatch):
+    config.save_settings({"zotero_auto": "all"})
+    monkeypatch.setattr(sources, "acl_meta", lambda acl_id: sources.candidate(title="ACL", acl=acl_id))
+    reading.load()
+    zotero_push.auto_tick()
+    reading.push(ext="acl:2024.acl-long.15", title="An ACL Paper", reason="r", source="tracker")
+    _touch_list()
+    assert [(x["paper"], x["state"]) for x in zotero_push.auto_tick()] == [("acl:2024.acl-long.15", "added")]
