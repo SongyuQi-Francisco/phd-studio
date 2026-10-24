@@ -212,14 +212,18 @@ def find(items: list[dict[str, Any]], key: str) -> dict[str, Any] | None:
     return None
 
 
+def norm_title(title: str | None) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (title or "").lower())
+
+
 def _same_title(items: list[dict[str, Any]], title: str | None) -> dict[str, Any] | None:
     """An item that already carries this exact title: the same paper captured through another door
-    (an arXiv link, then its OpenReview or DOI link)."""
-    want = re.sub(r"[^a-z0-9]+", "", (title or "").lower())
+    (an arXiv link, then its OpenReview or DOI link, or the other way round)."""
+    want = norm_title(title)
     if len(want) < 12:
         return None
     for i in items:
-        if re.sub(r"[^a-z0-9]+", "", (i.get("title") or "").lower()) == want:
+        if norm_title(i.get("title")) == want:
             return i
     return None
 
@@ -244,19 +248,21 @@ def push(*, paper: str | None = None, arxiv: str | None = None, ext: str | None 
         raise ReadingError(f"tier must be one of {TIERS}")
     if arxiv:
         arxiv = re.sub(r"v\d+$", "", arxiv.strip().removeprefix("arXiv:").removeprefix("arxiv:"))
+    if ext and not library.ext_key(ext):
+        raise ReadingError("ext must look like doi:<doi>, openreview:<id> or acl:<id>")
     if paper:
         try:
             library.note_path(paper)
         except FileNotFoundError:
             raise ReadingError(f"no paper note named '{paper}'; use --arxiv for papers without a note")
-    elif arxiv:
-        paper = library.arxiv_index().get(arxiv)
-    elif ext:
-        if not library.ext_key(ext):
-            raise ReadingError("ext must look like doi:<doi>, openreview:<id> or acl:<id>")
-        paper = library.ext_index().get(ext)
+    elif arxiv or ext:  # an arXiv paper may also be known by its DOI: a note can carry either
+        paper = (library.arxiv_index().get(arxiv) if arxiv else None) or (library.ext_index().get(ext) if ext else None)
     else:
         raise ReadingError("give --paper (note name), --arxiv or an ext key (doi:/openreview:/acl:)")
+    if not title and arxiv and not paper and not find(_load_raw(), f"arxiv:{arxiv}"):
+        # The title is what a second door (an OpenReview or DOI item of the same paper) is recognised by,
+        # so it is known before the duplicate check; asked here, not under the list's lock.
+        title = fetch_arxiv_title(arxiv)
 
     with editing() as items:
         existing = find(items, paper) if paper else None
@@ -267,6 +273,8 @@ def push(*, paper: str | None = None, arxiv: str | None = None, ext: str | None 
                 return existing, "dismissed earlier; not re-added (use --force to bring it back)"
             if existing["status"] == "done" and not force:
                 return existing, f"already read on {existing.get('read_at', '?')}"
+            if ext and not existing.get("ext"):
+                existing["ext"] = ext
             existing["lines"] = sorted(set(existing.get("lines", [])) | set(lines or []))
             if tier and (not existing.get("tier") or tier < existing["tier"]):
                 existing["tier"] = tier
@@ -284,7 +292,7 @@ def push(*, paper: str | None = None, arxiv: str | None = None, ext: str | None 
             "arxiv": arxiv,
             "ext": ext,
             "url": url,
-            "title": title or (fetch_arxiv_title(arxiv) if arxiv and not paper else None),
+            "title": title,
             "status": status or ("queued" if tier and source == "self" else "inbox"),
             "tier": tier,
             "lines": sorted(set(lines or [])),

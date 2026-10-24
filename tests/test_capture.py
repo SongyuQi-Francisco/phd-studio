@@ -64,7 +64,7 @@ def test_doi_of_a_paper_with_a_preprint_dedupes_against_the_arxiv_item(net):
     r = tracking.capture("10.9999/example.2025.7", "via the journal")
     assert "already listed" in r["result"]
     item = only_item()
-    assert item["arxiv"] == "2609.29973" and not item.get("ext")
+    assert item["arxiv"] == "2609.29973" and item["ext"] == "doi:10.9999|example.2025.7"  # one item, now known by both
 
 
 def test_unknown_doi_is_reported_and_nothing_is_added(net):
@@ -219,3 +219,135 @@ def test_pick_route_refuses_what_is_not_a_paper_key(client, body):
 def test_pick_route_only_keeps_https_links(client):
     client.post("/api/track/capture/pick", json={"candidate": {"acl": "2024.acl-long.1", "url": "javascript:alert(1)"}})
     assert not only_item().get("url")
+
+
+# ---------- the same paper through two doors, in either order ----------
+
+OR_TITLE = "G-Memory: Tracing Hierarchical Memory for Multi-Agent Systems"
+
+
+def test_openreview_first_then_the_arxiv_version_is_one_item(net, monkeypatch):
+    net.add("api2.openreview.net/notes", fixture_json("openreview_note.json"))
+    tracking.capture("https://openreview.net/forum?id=mmIAp3cVS0", "from OpenReview")
+    monkeypatch.setattr(reading, "fetch_arxiv_title", lambda aid: OR_TITLE)
+    r = tracking.capture("https://arxiv.org/abs/2506.07398", "from arXiv")
+    assert "already listed" in r["result"] and len(reading.load()) == 1
+    assert reading.load()[0]["reason"] == "from OpenReview | from arXiv"
+
+
+def test_the_arxiv_version_added_from_a_feed_card_is_recognised_too(net, monkeypatch):
+    net.add("api2.openreview.net/notes", fixture_json("openreview_note.json"))
+    tracking.capture("https://openreview.net/forum?id=mmIAp3cVS0", "x")
+    monkeypatch.setattr(reading, "fetch_arxiv_title", lambda aid: OR_TITLE.upper())
+    _, what = reading.push(arxiv="2506.07398", reason="card")  # what POST /api/reading does for an arXiv card
+    assert "already listed" in what and len(reading.load()) == 1
+
+
+def test_arxiv_first_then_openreview_is_one_item_as_before(net, monkeypatch):
+    monkeypatch.setattr(reading, "fetch_arxiv_title", lambda aid: OR_TITLE)
+    tracking.capture("2506.07398", "x")
+    net.add("api2.openreview.net/notes", fixture_json("openreview_note.json"))
+    r = tracking.capture("https://openreview.net/forum?id=mmIAp3cVS0", "y")
+    assert "already listed" in r["result"] and len(reading.load()) == 1
+
+
+def test_a_paper_already_listed_does_not_ask_arxiv_for_its_title(monkeypatch):
+    reading.push(arxiv="2506.07398", title="Known", reason="x")
+    monkeypatch.setattr(reading, "fetch_arxiv_title", lambda aid: pytest.fail("no need to ask"))
+    assert "already listed" in reading.push(arxiv="2506.07398", reason="again")[1]
+
+
+def test_the_title_is_asked_before_the_list_is_locked(monkeypatch):
+    import fcntl
+
+    def ask(aid):
+        with reading._LOCK.open("w") as f:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)  # raises if push holds the lock across the network call
+            fcntl.flock(f, fcntl.LOCK_UN)
+        return "A Title Long Enough To Compare"
+    monkeypatch.setattr(reading, "fetch_arxiv_title", ask)
+    assert reading.push(arxiv="2506.07398", reason="x")[1] == "added" and reading.load()[0]["title"] == "A Title Long Enough To Compare"
+
+
+def test_feed_cards_of_a_listed_paper_show_it_as_listed_under_either_key(net, monkeypatch):
+    # an arXiv card for a paper that is in the list under its OpenReview key
+    net.add("api2.openreview.net/notes", fixture_json("openreview_note.json"))
+    tracking.capture("https://openreview.net/forum?id=mmIAp3cVS0", "x")
+    from . import test_follow_sources as tf
+    net.add("export.arxiv.org/api/query", tf.atom(5, 20, 60).replace("AtomRec: Evolving Atomic Memory for Agentic Recommendation", OR_TITLE))
+    net.add("api2.openreview.net/notes/search", {"notes": []})
+    net.add("aclanthology.org/volumes/", "404", status=404)
+    tracking.add_follow("keyword", "memory")
+    [f] = tracking.feed(today=tf.TODAY, refresh=True)
+    card = [p for p in f["papers"] if p["title"] == OR_TITLE][0]
+    assert card["source"] == "arxiv" and card["listed"] == "inbox"
+
+
+# ---------- a DOI that resolves to an arXiv paper still finds its note ----------
+
+def write_note(stem, front):
+    from app import config, library
+    (config.PAPERS_DIR / f"{stem}.md").write_text(f"---\ntype: paper\n{front}\n---\n- Title: A note\n", encoding="utf-8")
+    library._ext_index.cache_clear()
+    library._arxiv_index.cache_clear()
+
+
+def route_preprint_doi(net):
+    net.add("api.crossref.org/works/10.9999/example.2025.7", fixture_json("crossref_work.json"))
+    net.add("api.openalex.org/works/doi:10.9999/example.2025.7", fixture_json("openalex_doi_arxiv.json"))
+
+
+def test_a_doi_with_a_preprint_links_to_the_note_that_has_that_doi(net):
+    write_note("Gamma", "doi: 10.9999/example.2025.7")
+    route_preprint_doi(net)
+    tracking.capture("10.9999/example.2025.7", "x")
+    item = only_item()
+    assert item["paper"] == "Gamma" and item["arxiv"] == "2609.29973" and item["ext"] == "doi:10.9999|example.2025.7"
+    assert reading.key_of(item) == "Gamma"
+
+
+def test_a_picked_match_with_an_arxiv_id_and_a_doi_links_to_the_note_too(net):
+    write_note("Gamma", "doi: 10.9999/example.2025.7")
+    tracking.capture_pick({"arxiv": "2609.29973", "doi": "10.9999/example.2025.7", "title": "X Paper"}, "x")
+    assert only_item()["paper"] == "Gamma"
+
+
+def test_a_doi_item_and_later_the_same_paper_by_arxiv_and_doi_are_one_item(net):
+    route_preprint_doi(net)
+    net.routes.insert(0, ("api.openalex.org/works/doi:10.9999/example.2025.7", {}, {}, 500))  # no preprint known yet
+    tracking.capture("10.9999/example.2025.7", "first")
+    assert only_item()["ext"] == "doi:10.9999|example.2025.7" and not only_item().get("arxiv")
+    r = tracking.capture_pick({"arxiv": "2609.29973", "doi": "10.9999/example.2025.7", "title": "Same Paper Again"}, "second")
+    assert "already listed" in r["result"] and len(reading.load()) == 1
+
+
+def test_push_keeps_the_ext_key_on_an_existing_arxiv_item():
+    reading.push(arxiv="2609.29973", title="Some Title Long Enough", reason="a")
+    reading.push(arxiv="2609.29973", ext="doi:10.9999|example.2025.7", reason="b")
+    item = only_item()
+    assert item["ext"] == "doi:10.9999|example.2025.7" and reading.key_of(item) == "arxiv:2609.29973"
+
+
+# ---------- a DOI added from a card is classified like a pasted one ----------
+
+def test_a_card_doi_of_an_acl_paper_is_listed_as_the_acl_paper():
+    tracking.capture_pick({"doi": "10.18653/v1/2024.acl-long.1", "title": "Quantized Side Tuning", "url": "https://doi.org/10.18653/v1/2024.acl-long.1"}, "x")
+    assert only_item()["ext"] == "acl:2024.acl-long.1"
+
+
+def test_a_card_doi_of_an_arxiv_doi_is_listed_as_the_arxiv_paper():
+    tracking.capture_pick({"doi": "10.48550/arxiv.2406.12345", "title": "An arXiv Paper"}, "x")
+    item = only_item()
+    assert item["arxiv"] == "2406.12345" and not item.get("ext")
+
+
+def test_a_card_doi_with_a_preprint_copy_is_listed_by_the_arxiv_key(net):
+    net.add("api.openalex.org/works/doi:10.9999/example.2025.7", fixture_json("openalex_doi_arxiv.json"))
+    tracking.capture_pick({"doi": "10.9999/example.2025.7", "title": "A Journal Paper"}, "x")
+    item = only_item()
+    assert item["arxiv"] == "2609.29973" and item["ext"] == "doi:10.9999|example.2025.7"
+
+
+def test_a_card_doi_stays_a_doi_when_openalex_cannot_be_asked(net):
+    tracking.capture_pick({"doi": "10.9999/example.2025.7", "title": "A Journal Paper"}, "x")
+    assert only_item()["ext"] == "doi:10.9999|example.2025.7"

@@ -113,7 +113,7 @@ def test_parse_bib_reads_entries_fields_and_macros():
 
 def test_parse_bib_volume_has_a_proceedings_entry_and_latex_names():
     rec = sources.parse_bib(fixture("acl_volume.bib"))
-    assert [r["_type"] for r in rec] == ["inproceedings", "proceedings", "inproceedings", "inproceedings", "inproceedings"]
+    assert [r["_type"] for r in rec] == ["inproceedings", "proceedings", "inproceedings", "inproceedings", "inproceedings", "inproceedings"]
     assert sources._bib_authors(rec[2]["author"]) == ["Cleo Fixture", "Lluís Màrquez", "Dana Üller"]
     assert sources.unlatex(rec[2]["title"]) == "EcomScriptBench: A Benchmark for E-commerce Script Planning"
 
@@ -128,6 +128,20 @@ def test_has_terms_needs_every_term_and_ignores_case_and_accents():
     assert sources.has_terms("Trustworthy Memory Consolidation for Agents", ["memory", "agents"])
     assert not sources.has_terms("Trustworthy Memory Consolidation", ["memory", "recommendation"])
     assert sources.has_terms("Màrquez on memory", ["marquez"]) and not sources.has_terms("anything", [])
+
+
+@pytest.mark.parametrize("text, wanted, hit", [
+    ("Leveraging Retrieval for QA", ["rag"], False), ("Average Treatment Effects", ["rag"], False), ("Coverage of Benchmarks", ["rag"], False),
+    ("RAG for Question Answering", ["rag"], True), ("Their First Result", ["ir"], False), ("IR Evaluation Revisited", ["ir"], True),
+    ("World Models", ["rl"], False), ("RL for Agents", ["rl"], True), ("Recent Advances", ["rec"], False), ("Rec Sys at Scale", ["rec"], True),
+    ("Agents and their Memories", ["agent", "memory"], True), ("Agent Systems", ["agent", "memory"], False),
+    ("Memory Consolidation for Agents", ["memory consolidation"], True), ("Consolidation of Memory", ["memory consolidation"], False),
+    ("A Memory of Consolidation", ["memory consolidation"], False), ("Multi-Agent Memory", ["multi agent"], True),
+    ("Memory in Agents", sources.terms("agent memory"), True), ("Memory in Agents", sources.terms('"agent memory"'), False),
+    ("Business Process", ["bus"], False), ("Class Imbalance", ["clas"], False),
+])
+def test_has_terms_matches_whole_words_not_substrings(text, wanted, hit):
+    assert sources.has_terms(text, wanted) is hit
 
 
 @pytest.mark.parametrize("followed, author, same", [
@@ -341,3 +355,49 @@ def test_arxiv_requests_share_one_pace(net):
 def test_arxiv_query_still_raises_http_errors(net):
     with pytest.raises(httpx.HTTPError):
         sources.arxiv_query("all:agent", 3)
+
+
+# ---------- links from remote answers ----------
+
+@pytest.mark.parametrize("url, kept", [("https://example.org/p", True), ("http://example.org/p", True), ("javascript:alert(1)", False),
+                                       ("data:text/html,x", False), ("//example.org/p", False), ("", False), (None, False)])
+def test_candidates_only_keep_http_links(url, kept):
+    assert (sources.candidate(title="t", url=url)["url"] != "") is kept
+
+
+def test_a_javascript_landing_page_from_openalex_or_crossref_is_dropped(net):
+    d = fixture_json("openalex_search.json")
+    d["results"][0]["primary_location"]["landing_page_url"] = "javascript:alert(1)"
+    net.add("api.openalex.org/works", d)
+    c = sources.search_openalex("Generative Recommendation with Semantic IDs", 4)[0]
+    assert c["url"] == "https://doi.org/10.1145/3746252.3761612"  # the DOI link stands in
+    cw = fixture_json("crossref_work.json")
+    cw["message"]["URL"] = "javascript:alert(1)"
+    net.add("api.crossref.org/works/10.1145/3626772.3657833", cw)
+    assert sources.crossref_work("10.1145/3626772.3657833")["url"] == "https://doi.org/10.1145/3626772.3657833"
+
+
+# ---------- canonical: one classification for every way in ----------
+
+def test_canonical_turns_an_acl_or_arxiv_doi_into_that_paper():
+    assert sources.canonical({"doi": "10.18653/v1/2024.acl-long.1"})["acl"] == "2024.acl-long.1"
+    assert sources.canonical({"doi": "10.48550/arXiv.2406.12345"})["arxiv"] == "2406.12345"
+
+
+def test_canonical_looks_for_a_preprint_of_any_other_doi(net):
+    net.add("api.openalex.org/works/doi:10.9999/example.2025.7", fixture_json("openalex_doi_arxiv.json"))
+    assert sources.canonical({"doi": "10.9999/example.2025.7"})["arxiv"] == "2609.29973"
+
+
+def test_canonical_keeps_the_doi_when_openalex_is_down_or_the_doi_is_not_one(net):
+    assert sources.canonical({"doi": "10.9999/example.2025.7"}) == {"doi": "10.9999/example.2025.7"}
+    assert sources.canonical({"doi": "../x"}) == {"doi": "../x"}
+
+
+def test_canonical_leaves_a_candidate_that_already_has_a_key():
+    c = {"openreview": "abcdef12", "doi": "10.1145/3626772.3657833"}
+    assert sources.canonical(c) == c
+
+
+def test_backoff_grows_and_stops_at_half_an_hour():
+    assert [sources.backoff(n) for n in (1, 2, 3, 4, 5, 6, 7, 20)] == [60, 120, 240, 480, 960, 1800, 1800, 1800]

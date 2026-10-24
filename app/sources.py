@@ -226,10 +226,16 @@ def looks_like_url(text: str) -> bool:
 
 # ---------- candidates ----------
 
+def _http(url: Any) -> str:
+    """A link from a remote answer is only ever http(s): it ends up in an href."""
+    return str(url) if re.match(r"https?://", str(url or ""), re.I) else ""
+
+
 def candidate(**kw: Any) -> dict[str, Any]:
     c = {"title": "", "authors": [], "year": None, "venue": "", "abstract": "", "url": "", "arxiv": None,
          "doi": None, "openreview": None, "acl": None, "sources": []}
     c.update({k: v for k, v in kw.items() if v not in (None, "")})
+    c["url"] = _http(c["url"])
     c["key"] = key_of(c)
     return c
 
@@ -305,7 +311,7 @@ def _crossref_candidate(it: dict[str, Any]) -> dict[str, Any]:
     venue = (it.get("container-title") or [""])[0] or (it.get("event") or {}).get("name", "")
     doi = norm_doi(it.get("DOI", ""))
     return candidate(title=_clean((it.get("title") or [""])[0]), authors=[a for a in authors if a], year=year,
-                     venue=_clean(venue), abstract=_clean(it.get("abstract")), url=it.get("URL") or f"https://doi.org/{doi}",
+                     venue=_clean(venue), abstract=_clean(it.get("abstract")), url=_http(it.get("URL")) or f"https://doi.org/{doi}",
                      doi=doi, sources=["Crossref"])
 
 
@@ -337,11 +343,12 @@ def doi_meta(doi: str) -> dict[str, Any]:
         cand = cached(f"crossref:{doi}", 30 * DAY, lambda: crossref_work(doi))[0]
     except NotFound:
         cand = cached(f"csl:{doi}", 30 * DAY, lambda: doi_negotiated(doi))[0]
+    cand = {**cand, "doi": doi}  # the DOI that was asked for, not whichever form the registry answers with
     try:  # best effort: a preprint copy means a free PDF and the same key as the arXiv item
         cand = {**cand, **{k: v for k, v in openalex_copies(doi).items() if k == "arxiv" and v}}
-        cand["key"] = key_of(cand)
     except SourceError:
         pass
+    cand["key"] = key_of(cand)
     return cand
 
 
@@ -385,7 +392,7 @@ def _openalex_candidate(w: dict[str, Any]) -> dict[str, Any]:
         venue = "arXiv"
     return candidate(title=_clean(w.get("title")), year=w.get("publication_year"), venue=venue, doi=doi, arxiv=arxiv,
                      authors=[(a.get("author") or {}).get("display_name", "") for a in w.get("authorships", [])][:8],
-                     url=prim.get("landing_page_url") or (f"https://doi.org/{doi}" if doi else ""), sources=["OpenAlex"])
+                     url=_http(prim.get("landing_page_url")) or (f"https://doi.org/{doi}" if doi else ""), sources=["OpenAlex"])
 
 
 def search_openalex(q: str, n: int) -> list[dict[str, Any]]:
@@ -580,6 +587,41 @@ def _volume_ready(vol: str) -> bool:
     return bool(d) and time.time() - d.get("t", 0) < (ACL_MISSING_TTL if d.get("missing") else ACL_VOLUME_TTL)
 
 
+def backoff(fails: int) -> float:
+    """Seconds to leave a failing source alone after its n-th failure in a row: 1, 2, 4 ... 30 minutes."""
+    return min(60 * 2 ** max(fails - 1, 0), 1800)
+
+
+def _fail_file(vol: str) -> Path:
+    return CACHE / "acl" / f"{vol}.fail.json"
+
+
+def _read_fail(vol: str) -> dict[str, Any] | None:
+    try:
+        return json.loads(_fail_file(vol).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _volume_failed(vol: str) -> dict[str, Any] | None:
+    """The failure record of a volume that is still being left alone, else None."""
+    d = _read_fail(vol)
+    return d if d and time.time() - d.get("t", 0) < backoff(d.get("n", 1)) else None
+
+
+def _record_failure(vol: str, error: str) -> None:
+    f = _fail_file(vol)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps({"t": time.time(), "n": (_read_fail(vol) or {}).get("n", 0) + 1, "error": error}, ensure_ascii=False),
+                 encoding="utf-8")
+
+
+def acl_forget_failures() -> None:
+    """A manual refresh tries the failed volumes again at once."""
+    for f in (CACHE / "acl").glob("*.fail.json"):
+        f.unlink(missing_ok=True)
+
+
 def fetch_volume(vol: str) -> None:
     """Download one proceedings volume (its .bib) and keep a compact copy of every paper in it."""
     r = _get(f"{ANTHOLOGY}/volumes/{vol}.bib", "ACL Anthology", pace=ANTHOLOGY_PACE, timeout=120)
@@ -600,15 +642,24 @@ def fetch_volume(vol: str) -> None:
     tmp = f.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     tmp.replace(f)
+    _fail_file(vol).unlink(missing_ok=True)
 
 
 def acl_fill(vols: list[str]) -> None:
-    for v in vols:
-        if not _volume_ready(v):
-            try:
-                fetch_volume(v)
-            except Exception:  # noqa: BLE001 - the next feed call tries again; the others are not held up
-                continue
+    """Download what is missing. The first failure (the Anthology unreachable, rate limited, a bad
+    answer) is recorded for it and every volume still to come, and the run stops: they are left
+    alone for a while (backoff) instead of timing out one by one, and the feed shows the reason."""
+    for i, v in enumerate(vols):
+        if _volume_ready(v) or _volume_failed(v):
+            continue
+        try:
+            fetch_volume(v)
+        except Exception as e:  # noqa: BLE001
+            msg = str(e) if isinstance(e, SourceError) else f"ACL Anthology 下载失败：{e.__class__.__name__}"
+            for rest in vols[i:]:
+                if not _volume_ready(rest):
+                    _record_failure(rest, msg)
+            return
 
 
 def _spawn_fill(vols: list[str]) -> None:
@@ -622,18 +673,16 @@ def _spawn_fill(vols: list[str]) -> None:
         t.start()
 
 
-def acl_progress(today: date | None = None) -> dict[str, int]:
-    vols = [v for v, _ in acl_volumes(today)]
-    return {"done": sum(1 for v in vols if _volume_ready(v)), "total": len(vols)}
-
-
-def acl_papers(today: date | None = None) -> tuple[list[dict[str, Any]], dict[str, int]]:
-    """Every paper of the recent events that is on disk, and how many of the volumes are."""
+def acl_papers(today: date | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Every paper of the recent events that is on disk, and the state of the download: how many
+    volumes are in (`done`), how many are being left alone after a failure (`failed`, with the first
+    `error`); the rest download in the background."""
     today = today or date.today()
     vols = acl_volumes(today)
     missing = [v for v, _ in vols if not _volume_ready(v)]
-    if missing:
-        _spawn_fill(missing)
+    failed = [r for v in missing if (r := _volume_failed(v))]
+    if len(missing) > len(failed):
+        _spawn_fill([v for v in missing if not _volume_failed(v)])
     cutoff = (today - timedelta(days=ACL_WINDOW_DAYS)).isoformat()
     out = []
     for vol, label in vols:
@@ -642,7 +691,8 @@ def acl_papers(today: date | None = None) -> tuple[list[dict[str, Any]], dict[st
             when = f"{p['year']}-{p['month']:02d}-01"
             if when >= cutoff[:8] + "01":
                 out.append({**p, "venue": label, "published": when})
-    return out, {"done": len(vols) - len(missing), "total": len(vols)}
+    return out, {"done": len(vols) - len(missing), "total": len(vols), "failed": len(failed),
+                 "error": failed[0]["error"] if failed else None}
 
 
 # ---------- matching for the feed ----------
@@ -657,9 +707,28 @@ def terms(value: str) -> list[str]:
     return [_fold(ph or w) for ph, w in re.findall(r'"([^"]+)"|(\S+)', value) if _fold(ph or w)]
 
 
+def _stem(tok: str) -> str:
+    """Folds plurals only ("agents" = "agent", "memories" = "memory"); "rag" must not match "leveraging"."""
+    if len(tok) > 3 and tok.endswith("ies"):
+        return tok[:-3] + "y"
+    if len(tok) > 3 and tok.endswith("s") and not tok.endswith("ss"):
+        return tok[:-1]
+    return tok
+
+
+def _tokens(s: str) -> list[str]:
+    return [_stem(t) for t in _fold(s).split()]
+
+
 def has_terms(text: str, wanted: list[str]) -> bool:
-    hay = f" {_fold(text)} "
-    return bool(wanted) and all(f" {t} " in hay or t in hay for t in wanted)
+    """Every term occurs in the text as whole words; a multi-word term ("memory consolidation") as
+    those words next to each other, in that order."""
+    hay = _tokens(text)
+
+    def has(term: str) -> bool:
+        t = _tokens(term)
+        return bool(t) and any(hay[i:i + len(t)] == t for i in range(len(hay) - len(t) + 1))
+    return bool(wanted) and all(has(t) for t in wanted)
 
 
 def same_person(followed: str, author: str) -> bool:
@@ -705,7 +774,7 @@ def feed_openreview(f: dict[str, Any], days: int, today: date | None = None) -> 
     return out
 
 
-def feed_acl(f: dict[str, Any], today: date | None = None) -> tuple[list[dict[str, Any]], dict[str, int]]:
+def feed_acl(f: dict[str, Any], today: date | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """ACL Anthology papers of the recent events whose title matches a followed keyword (volumes
     carry no abstracts) or whose author list holds a followed person; dated by the month of the event."""
     papers, progress = acl_papers(today)
@@ -805,6 +874,35 @@ def with_ids(c: dict[str, Any]) -> dict[str, Any]:
         return {**c, "arxiv": m.group(1)}
     if parts := ext_parts(key):
         return {**c, parts[0]: parts[1]}
+    return c
+
+
+def ext_of(c: dict[str, Any]) -> str | None:
+    """The external key a candidate also carries besides its arXiv id (kept on the reading item so a
+    note found by DOI or an earlier OpenReview/DOI item is still recognised)."""
+    for scheme in ("openreview", "acl", "doi"):
+        if scheme == "doi" and norm_doi(str(c.get("doi") or "")).startswith("10.48550/arxiv."):
+            continue  # arXiv's own DOI says nothing the arXiv id does not
+        if c.get(scheme) and (k := ext_key(scheme, c[scheme])) and ext_parts(k):
+            return k
+    return None
+
+
+def canonical(c: dict[str, Any]) -> dict[str, Any]:
+    """The same classification a pasted DOI gets, for a candidate that arrives with only a DOI (a
+    feed card, a Crossref match): an arXiv DOI is the arXiv paper, an ACL DOI the Anthology paper,
+    any other DOI is checked for a preprint copy (best effort: without OpenAlex it stays a DOI)."""
+    c = with_ids(c)
+    if c.get("arxiv") or c.get("openreview") or c.get("acl") or not c.get("doi") or not doi_ok(norm_doi(str(c["doi"]))):
+        return c
+    hit = classify(f"doi:{c['doi']}")
+    if hit and hit[0] in ("arxiv", "acl"):
+        return {**c, hit[0]: hit[1]}
+    try:
+        if arxiv := openalex_copies(norm_doi(c["doi"])).get("arxiv"):
+            return {**c, "arxiv": arxiv}
+    except SourceError:
+        pass
     return c
 
 

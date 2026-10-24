@@ -244,24 +244,58 @@ def _failure(label: str, e: Exception) -> str:
     return str(e) if isinstance(e, sources.SourceError) else f"{label} 查询失败：{e.__class__.__name__}"
 
 
+def _backoff_left(fail: Path) -> tuple[float, str]:
+    """(seconds left to leave a failing source alone, what it said), from its failure record."""
+    try:
+        d = json.loads(fail.read_text(encoding="utf-8"))
+        return max(0.0, d["t"] + sources.backoff(d["n"]) - time.time()), d["error"]
+    except (OSError, ValueError, KeyError):
+        return 0.0, ""
+
+
+def _record_failure(fail: Path, msg: str) -> None:
+    try:
+        n = json.loads(fail.read_text(encoding="utf-8")).get("n", 0) if fail.exists() else 0
+    except (OSError, ValueError, AttributeError):
+        n = 0
+    fail.write_text(json.dumps({"t": time.time(), "n": n + 1, "error": msg}, ensure_ascii=False), encoding="utf-8")
+
+
 def _source_papers(sid: str, f: dict[str, Any], refresh: bool, today: date) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """One source's papers for one follow, with its status. Never raises: a failing source serves
-    its last cached answer (marked stale) or nothing, and says why."""
+    its last cached answer (marked stale) or nothing, and says why. A failure is remembered, so
+    the page's polling does not ask the same dead source again at once (1, 2, 4 ... 30 minutes;
+    the refresh button asks anyway)."""
     label = dict(FEED_SOURCES)[sid]
     status: dict[str, Any] = {"id": sid, "label": label, "ok": True, "n": 0, "error": None, "stale": False, "loading": False}
     cache = FEED_CACHE / (f"{f['id']}.json" if sid == "arxiv" else f"{f['id']}.{sid}.json")
+    fail = cache.with_name(cache.stem + ".fail.json")
     papers: list[dict[str, Any]] = []
     try:
         if sid == "acl":  # filters volumes already on disk; the missing ones download in the background
+            if refresh:
+                sources.acl_forget_failures()
             papers, progress = sources.feed_acl(f, today)
-            if progress["done"] < progress["total"]:
+            pending = progress["total"] - progress["done"] - progress["failed"]
+            if progress["failed"]:
+                status.update(ok=False, loading=pending > 0, progress=progress,
+                              error=f"{progress['error']}（已载入 {progress['done']}/{progress['total']} 卷，稍后自动重试）")
+            elif pending:
                 status.update(loading=True, progress=progress)
         elif not refresh and cache.exists() and time.time() - cache.stat().st_mtime < CACHE_TTL:
             papers = _read_cache(cache)
+        elif not refresh and (left := _backoff_left(fail))[0] > 0:
+            papers = _read_cache(cache)
+            status.update(ok=False, stale=bool(papers), error=f"{left[1]}（{int(left[0] // 60) + 1} 分钟后自动重试）")
         else:
-            papers = _fetch(_query(f), 25) if sid == "arxiv" else sources.feed_openreview(f, OPENREVIEW_DAYS, today)
+            try:
+                papers = _fetch(_query(f), 25) if sid == "arxiv" else sources.feed_openreview(f, OPENREVIEW_DAYS, today)
+            except Exception as e:  # noqa: BLE001 - whatever one source does, the others must still answer
+                _record_failure(fail, _failure(label, e))
+                raise
             cache.write_text(json.dumps(papers, ensure_ascii=False), encoding="utf-8")
-    except Exception as e:  # noqa: BLE001 - whatever one source does, the others must still answer
+            fail.unlink(missing_ok=True)
+    except Exception as e:  # noqa: BLE001
         status.update(ok=False, error=_failure(label, e))
         papers = _read_cache(cache) if sid != "acl" else []
         status["stale"] = bool(papers)
@@ -300,6 +334,7 @@ def feed(days: int = 30, per_follow: int = 8, refresh: bool = False, today: date
     items = reading.load()
     listed = {i.get("arxiv"): i["status"] for i in items if i.get("arxiv")}
     listed_ext = {i["ext"]: i["status"] for i in items if i.get("ext")}
+    listed_title = {reading.norm_title(i["title"]): i["status"] for i in items if i.get("title")}  # the same paper under another key
     idx, ext_idx = library.arxiv_index(), library.ext_index()
     out = []
     for f in follows():
@@ -316,6 +351,7 @@ def feed(days: int = 30, per_follow: int = 8, refresh: bool = False, today: date
                 p["listed"], p["note"] = listed.get(p["arxiv"]), idx.get(p["arxiv"])
             else:
                 p["listed"], p["note"] = listed_ext.get(p.get("ext")), ext_idx.get(p.get("ext"))
+            p["listed"] = p["listed"] or (listed_title.get(reading.norm_title(p["title"])) if len(reading.norm_title(p["title"])) >= 12 else None)
         statuses = [st for _, st in results]
         out.append({**f, "papers": recent, "sources": statuses,  # every message already names its source
                     "error": "；".join(st["error"] for st in statuses if st["error"]) or None})
@@ -328,13 +364,13 @@ KIND_LABELS = {"openreview": "OpenReview", "acl": "ACL Anthology", "doi": "DOI"}
 
 
 def _push(cand: dict[str, Any], reason: str, tier: str | None, lines: list[str] | None) -> dict[str, Any]:
-    cand = sources.with_ids(cand)
+    cand = sources.canonical(cand)
     key = sources.candidate_key(cand)
     if not key:
         raise ValueError("not a paper this app can list")
     title = (cand.get("title") or "").strip()[:300] or None
-    if cand.get("arxiv"):
-        item, what = reading.push(arxiv=cand["arxiv"], title=title, reason=reason, source="self",
+    if cand.get("arxiv"):  # the DOI / OpenReview / ACL id rides along: a note, or an earlier item, may know the paper by it
+        item, what = reading.push(arxiv=cand["arxiv"], ext=sources.ext_of(cand), title=title, reason=reason, source="self",
                                   pushed_by="追踪 · 捕捉", tier=tier, lines=lines)
     else:
         url = cand.get("url") if str(cand.get("url") or "").startswith("https://") else None

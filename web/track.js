@@ -8,6 +8,8 @@ const LISTED = { inbox: "已在收件箱", queued: "待读", reading: "在读", 
 const WINDOWS = [[30, "30 天"], [90, "90 天"], [365, "1 年"]];
 const dayISO = (n) => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
 const monthLabel = (m) => `${+m.slice(5)}月`;
+// Links that come from outside (OpenAlex, Crossref, OpenReview) only open as http(s): a javascript: URL in an href would run in the app.
+const safeUrl = (u) => (/^https?:\/\//i.test(u || "") ? u : "");
 const SRC = { arxiv: "arXiv", openreview: "OpenReview", acl: "ACL Anthology" };
 // "ICLR 2027 Conference Submission" / "NeurIPS 2025 spotlight" -> the short name for the card's corner
 const venueShort = (v) => { const s = String(v || "").replace(/\s+(?:Conference\s+|Workshop\s+)?Submission$/i, "").replace(/\s+(?:spotlight|oral|poster|regular|notable.*)$/i, ""); return s.length > 24 ? s.slice(0, 23) + "…" : s; };
@@ -41,7 +43,7 @@ function PaperCard({ p, reason, lines, faces, labels, toast, onOpenPaper, onAsk,
       setState(r.item.status); toast(r.result === "added" ? "已加入收件箱" : r.result); onAdded?.();
     } catch (x) { toast(x.message); }
   };
-  const url = p.arxiv ? `https://arxiv.org/abs/${p.arxiv}` : p.url || p.doi;
+  const url = p.arxiv ? `https://arxiv.org/abs/${p.arxiv}` : safeUrl(p.url) || safeUrl(p.doi);
   return html`<article class=${"tk-paper" + (open ? " open" : "") + (rel ? " rel" : "")}>
     <div class="tk-thumb" onClick=${() => setOpen(!open)}>
       <div class="ph"><b>${p.venue && p.venue !== "arXiv" ? p.venue : (date || "").slice(0, 4)}</b><span>${p.venue === "arXiv" || !p.venue ? "arXiv 预印本" : p.venue_full && p.venue_full !== p.venue ? p.venue_full : SRC[p.source] || ""}</span></div>
@@ -407,7 +409,7 @@ function ScholarDetail({ s, onOpenNote, onOnly, filtered }) {
     <div><h4>近一年常合作</h4>
       <div class="tk-chips">${(s.coauthors || []).map(([n, c]) => html`<span class="tk-chip">${n}<b>${c}</b></span>`)}</div>
       <h4 style=${{ marginTop: "12px" }}>链接</h4>
-      <div class="tk-chips">${links.map(([l, u]) => html`<a class="tk-chip" href=${u} target="_blank" rel="noreferrer">${l}</a>`)}
+      <div class="tk-chips">${links.filter(([, u]) => safeUrl(u)).map(([l, u]) => html`<a class="tk-chip" href=${u} target="_blank" rel="noreferrer">${l}</a>`)}
         ${s.tracked_lab && html`<button class="tk-chip" onClick=${() => onOpenNote(s.tracked_lab.path)}>Lab 笔记</button>`}</div></div>
     <div class="full">
       <button class=${"btn" + (filtered ? " primary" : "")} onClick=${onOnly}>${filtered ? "已只看 TA 的论文" : "只看 TA 的论文"}</button>
@@ -586,16 +588,19 @@ function Follows({ toast, onOpenPaper, onAsk, version, onChanged }) {
   const [pick, setPick] = useState(null);
   const load = async (refresh = false) => { setLoading(true); try { const r = await api(`/api/track/follows/feed?refresh=${refresh}`); setFeed(r.feed); setLink(r.linkage); } finally { setLoading(false); } };
   useEffect(() => { load(); }, [version]);
-  // The Anthology volumes download in the background: look again while some are still coming.
+  // The Anthology volumes download in the background: look again while some are still coming. The next
+  // look is scheduled only after the last one answered, so a slow source cannot pile requests up.
   const downloading = !!feed?.some((f) => f.sources?.some((s) => s.loading));
   useEffect(() => {
     if (!downloading) return;
-    let tries = 0;
-    const t = setInterval(async () => {
-      if (++tries > 30) return clearInterval(t);
-      try { const r = await api("/api/track/follows/feed"); setFeed(r.feed); } catch {}
-    }, 6000);
-    return () => clearInterval(t);
+    let alive = true, tries = 0, timer;
+    const look = async () => {
+      if (!alive || ++tries > 30) return;
+      try { const r = await api("/api/track/follows/feed"); if (alive) setFeed(r.feed); } catch {}
+      if (alive) timer = setTimeout(look, 6000);
+    };
+    timer = setTimeout(look, 6000);
+    return () => { alive = false; clearTimeout(timer); };
   }, [downloading]);
   const add = async () => { await api("/api/track/follows", { json: { kind, value } }); setValue(""); toast("已关注，正在查 arXiv / OpenReview / ACL…"); load(); onChanged?.(); };
   const remove = async (f, e) => { e.stopPropagation(); await api(`/api/track/follows/${f.id}`, { method: "DELETE" }); if (pick === f.id) setPick(null); load(); onChanged?.(); };
@@ -764,7 +769,7 @@ function Capture({ onAsk, toast, onChanged }) {
       <div class="tk-pick-main"><div class="t" title=${c.title}>${c.title}</div>
         <div class="muted small">${[c.authors.slice(0, 3).join(", ") + (c.authors.length > 3 ? " 等" : ""), c.year, c.venue].filter(Boolean).join(" · ")}</div>
         <div class="tk-chips">${c.sources.map((x) => html`<span class="tk-chip">${x}</span>`)}${c.arxiv && html`<span class="tk-chip on">有 arXiv 版</span>`}</div></div>
-      ${c.url && html`<a class="abtn" title="打开原文页" href=${c.url} target="_blank" rel="noreferrer"><${Icon} name="external" sm /></a>`}
+      ${safeUrl(c.url) && html`<a class="abtn" title="打开原文页" href=${safeUrl(c.url)} target="_blank" rel="noreferrer"><${Icon} name="external" sm /></a>`}
       <button class="tk-add" onClick=${() => pick(c)}><${Icon} name="plus" sm />清单</button></div>`)}
     <div class="tk-pick-foot"><button class="linkbtn" onClick=${() => { ask(found.text); done(); }}>都不是，交给助手找</button></div>
   </div>`}</div>`;

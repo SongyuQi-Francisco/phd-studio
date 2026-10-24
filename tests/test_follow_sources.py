@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import os
 import re
 from datetime import date, datetime, time as dtime, timedelta, timezone
 
@@ -230,7 +231,8 @@ def test_acl_volumes_download_in_the_background_and_the_feed_says_so(net, monkey
     [f] = feed()
     st = {s["id"]: s for s in f["sources"]}["acl"]
     total = len(sources.acl_volumes(TODAY))
-    assert st["ok"] and st["loading"] and st["progress"] == {"done": 0, "total": total} and "acl" not in by_source(f)
+    assert st["ok"] and st["loading"] and st["progress"] == {"done": 0, "total": total, "failed": 0, "error": None}
+    assert "acl" not in by_source(f)
     assert len(asked[0]) == total and net.calls_to("aclanthology.org") == []
     sources.acl_fill(asked[0])  # the background thread finishes
     [f] = feed()
@@ -250,7 +252,7 @@ def test_volumes_not_yet_published_are_remembered_for_a_few_days(net):
 def test_a_volume_that_changes_on_disk_is_read_again(net):
     net.add(VOL, fixture("acl_volume.bib"))
     sources.fetch_volume("2026.acl-long")
-    assert len(sources._read_volume("2026.acl-long")["papers"]) == 4
+    assert len(sources._read_volume("2026.acl-long")["papers"]) == 5
     net.routes.clear()
     net.add(VOL, "@inproceedings{x,\n    title = \"Only One\",\n    month = jan,\n    year = \"2026\",\n    url = \"https://aclanthology.org/2026.acl-long.1/\"\n}\n")
     sources.fetch_volume("2026.acl-long")
@@ -313,3 +315,147 @@ def test_feed_marks_what_is_already_in_the_reading_list_or_the_vault(net, make_n
 
 def test_without_follows_nothing_is_asked(net):
     assert feed() == [] and net.calls == []
+
+
+# ---------- short keywords are whole words ----------
+
+@pytest.mark.parametrize("word", ["rag", "ir", "rl", "rec"])
+def test_a_short_keyword_does_not_match_inside_other_words(net, word):
+    routes(net)  # the recorded volume holds "Leveraging", "Average", "Coverage", "Their", "First", "World", "Recent"
+    follow("keyword", word)
+    [f] = feed()
+    assert "acl" not in by_source(f)
+
+
+def test_a_short_keyword_still_matches_the_word_itself(net):
+    routes(net)
+    follow("keyword", "benchmark")  # "A Benchmark for ...", "Benchmarks Considered Harmful" (plural folds)
+    [f] = feed()
+    assert {p["ext"] for p in by_source(f)["acl"]} == {"acl:2026.acl-long.8", "acl:2025.emnlp-main.42"}
+
+
+def test_openreview_keywords_are_whole_words_too(net):
+    routes(net, openreview=or_notes(ljXCQmOXqj=10))
+    follow("keyword", "bel")  # a prefix of "Belief"
+    [f] = feed()
+    assert "openreview" not in by_source(f)
+
+
+# ---------- a source that fails says so, and is left alone for a while ----------
+
+def vol_calls(net):
+    return len(net.calls_to("aclanthology.org/volumes/"))
+
+
+def again():
+    """The page's next look (a poll): the first call started the download, this one reports how it went."""
+    return tracking.feed(today=TODAY)
+
+
+def test_acl_download_failure_is_shown_not_swallowed(net):
+    routes(net, acl=False)
+    net.routes = [r for r in net.routes if "aclanthology" not in r[0]] + [("aclanthology.org/volumes/", {}, "oops", 500)]
+    follow()
+    feed()
+    [f] = again()
+    st = {s["id"]: s for s in f["sources"]}["acl"]
+    total = len(sources.acl_volumes(TODAY))
+    assert not st["ok"] and not st["loading"] and "HTTP 500" in st["error"] and "稍后自动重试" in st["error"]
+    assert st["progress"]["failed"] == total and st["progress"]["done"] == 0
+    assert "acl" not in by_source(f) and "ACL Anthology" in f["error"]
+    assert vol_calls(net) == 1  # the first failure stops the run: the rest are not tried one by one
+
+
+def test_acl_failure_by_connection_loss_names_the_cause(net):
+    routes(net, acl=False)
+    net.routes = [r for r in net.routes if "aclanthology" not in r[0]]  # unrouted: connection error
+    follow()
+    feed()
+    [f] = again()
+    assert "连接失败" in {s["id"]: s for s in f["sources"]}["acl"]["error"]
+
+
+def test_failed_volumes_are_left_alone_until_the_backoff_is_over_or_refresh(net):
+    routes(net, acl=False)
+    net.routes = [r for r in net.routes if "aclanthology" not in r[0]] + [("aclanthology.org/volumes/", {}, "oops", 500)]
+    follow()
+    feed()
+    again()
+    n = vol_calls(net)
+    again()  # the polls of the page
+    again()
+    assert vol_calls(net) == n
+    net.routes = [r for r in net.routes if "aclanthology" not in r[0]]
+    net.add(VOL, fixture("acl_volume.bib"))
+    net.add("aclanthology.org/volumes/", "404", status=404)
+    feed()  # the refresh button starts the retry ...
+    [f] = again()
+    st = {s["id"]: s for s in f["sources"]}["acl"]
+    assert st["ok"] and not st["loading"] and len(by_source(f)["acl"]) == 2
+    assert not list((sources.CACHE / "acl").glob("*.fail.json"))
+
+
+def test_acl_partial_download_shows_what_is_in_and_what_failed(net):
+    routes(net)
+    follow()
+    feed()
+    sources._volume_file("2026.findings-eacl").unlink()  # one volume is gone and cannot be fetched again
+    sources._volumes.clear()
+    net.routes.insert(0, ("aclanthology.org/volumes/2026.findings-eacl.bib", {}, "oops", 503))
+    tracking.feed(today=TODAY, refresh=True)
+    [f] = again()
+    st = {s["id"]: s for s in f["sources"]}["acl"]
+    assert not st["ok"] and "503" in st["error"] and st["progress"]["failed"] == 1
+    assert len(by_source(f)["acl"]) == 2  # the volumes that are in still answer
+
+
+def test_a_failed_arxiv_fetch_is_not_repeated_by_every_poll(net):
+    routes(net)
+    net.routes = [r for r in net.routes if "arxiv" not in r[0]]
+    follow()
+    feed()
+    n = len(net.calls_to("export.arxiv.org"))
+    for _ in range(3):
+        [f] = tracking.feed(today=TODAY)
+    assert len(net.calls_to("export.arxiv.org")) == n
+    st = {s["id"]: s for s in f["sources"]}["arxiv"]
+    assert not st["ok"] and "arXiv" in st["error"] and "分钟后自动重试" in st["error"]
+    assert {s["id"]: s for s in f["sources"]}["openreview"]["ok"]  # the others are untouched
+
+
+def test_the_refresh_button_asks_a_failing_source_anyway_and_a_success_clears_the_record(net):
+    routes(net)
+    net.routes = [r for r in net.routes if "arxiv" not in r[0]]
+    f0 = follow()
+    feed()
+    assert (tracking.FEED_CACHE / f"{f0['id']}.fail.json").exists()
+    net.add("export.arxiv.org/api/query", atom(5, 20, 60))
+    [f] = feed()
+    assert {s["id"]: s for s in f["sources"]}["arxiv"]["ok"] and len(by_source(f)["arxiv"]) == 2
+    assert not (tracking.FEED_CACHE / f"{f0['id']}.fail.json").exists()
+
+
+def test_a_failing_source_serves_its_old_cache_while_it_is_left_alone(net):
+    routes(net)
+    follow()
+    feed()
+    net.routes.insert(0, ("api2.openreview.net/notes/search", {}, {}, 500))
+    feed()  # refresh: fails, recorded
+    for cache in tracking.FEED_CACHE.glob("*.openreview.json"):  # the cached answer has meanwhile gone stale
+        os.utime(cache, (1, 1))
+    [f] = tracking.feed(today=TODAY)
+    st = {s["id"]: s for s in f["sources"]}["openreview"]
+    assert not st["ok"] and st["stale"] and "分钟后自动重试" in st["error"]
+    assert [p["ext"] for p in by_source(f)["openreview"]] == ["openreview:ljXCQmOXqj"]
+
+
+def test_the_backoff_ends(net, monkeypatch):
+    routes(net)
+    net.routes = [r for r in net.routes if "arxiv" not in r[0]]
+    follow()
+    feed()
+    n = len(net.calls_to("export.arxiv.org"))
+    real = tracking.time.time
+    monkeypatch.setattr(tracking.time, "time", lambda: real() + 61)  # past the first minute
+    tracking.feed(today=TODAY)
+    assert len(net.calls_to("export.arxiv.org")) == n + 1
