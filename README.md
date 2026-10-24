@@ -75,6 +75,18 @@ Optional: `DEEPSEEK_API_KEY=...` in `~/.config/secrets/deepseek.env` for fast se
 | Downloaded PDFs, bilingual PDFs, text dumps, crops | `~/Library/Application Support/PhD Studio/` or `~/.local/share/phd-studio/` |
 | Secrets | `~/.config/secrets/*.env` |
 
+## Using it on two Macs (Syncthing or similar)
+
+The project folder and the vault can live in synced folders:
+
+- **Chat state is per machine.** Chat logs, Claude session ids and settings go to `state/<hostname>/`, so each Mac only writes its own subfolder. If a session can't be resumed on a machine, a fresh one starts.
+- **The reading list merges itself.** Every item in `reading.yaml` has an `updated_at`. If both Macs edit the list before syncing and the sync tool leaves a `reading.sync-conflict-*.yaml`, the next read merges it (the newest edit per item wins; the same paper pushed on both sides is deduplicated). The conflict copy is then moved to `<data>/sync-conflicts/`.
+- **The summary is its own file.** `Reading List.md` is a separate, generated note, so it never collides with your hand-edited queue note. Conflict copies of it are simply regenerated.
+- **Writes are atomic.** The list is written to a temp file outside the vault and moved into place in one step.
+- **Large files stay local.** Downloaded and translated PDFs live in the per-machine data dir and are never synced.
+- **Don't sync `.git`.** Exclude the project's `.git` from sync, e.g. add `/phd_studio/.git` to `.stignore` on *each* machine (ignore files are not synced), and get code updates from GitHub.
+- **Per-machine setup.** On the second Mac, run `launcher/make_app.sh` to build its own launcher. The `.venv` is created there on first start.
+
 ## Code map
 
 - `app/main.py` routes · `library.py` notes, Zotero, PDFs · `claude_chat.py` Agent SDK sessions and edit approvals

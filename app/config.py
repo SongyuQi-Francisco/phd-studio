@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import socket
 import shutil
 import sys
 import tomllib
@@ -41,15 +43,19 @@ READING_LIST = VAULT_DIR / _paths.get("reading_list", "reading.yaml")
 AGENTS_MD = VAULT_DIR / _paths.get("rules", "AGENTS.md")
 ZOTERO_DIR = _p(_paths.get("zotero", "~/Zotero"))
 SECRETS_DIR = _p(_paths.get("secrets", "~/.config/secrets"))
-CLAUDE_CLI = Path(_paths.get("claude_cli") and os.path.expanduser(_paths["claude_cli"])
-                  or shutil.which("claude") or "claude")
+_cli = os.path.expanduser(_paths.get("claude_cli", ""))
+CLAUDE_CLI = Path(_cli if _cli and Path(_cli).exists() else shutil.which("claude") or "claude")
 # Extra folders Claude may read (code repos, drafts), relative to the vault or absolute.
 EXTRA_READ_DIRS = [str(_p(d) if d.startswith(("/", "~")) else (VAULT_DIR / d).resolve())
                    for d in _paths.get("extra_read_dirs", [])]
 VAULT_NAME = VAULT_DIR.name
 
-# Small, valuable state (chat logs, session ids, settings) stays with the project.
-STATE_DIR = STUDIO_DIR / "state"
+# Small, valuable state (chat logs, session ids, settings) stays with the project, one
+# subfolder per machine: when the project folder is synced between computers, each
+# machine only ever writes its own subfolder, so sync never sees two writers.
+DEVICE = re.sub(r"[^A-Za-z0-9_-]+", "-", os.environ.get("STUDIO_DEVICE") or socket.gethostname()
+                .removesuffix(".local")).strip("-") or "this-mac"
+STATE_DIR = STUDIO_DIR / "state" / DEVICE
 CHATS_DIR = STATE_DIR / "chats"
 SETTINGS_FILE = STATE_DIR / "settings.json"
 
@@ -66,6 +72,20 @@ CROPS_DIR = DATA_DIR / "crops"
 
 for _d in (STATE_DIR, CHATS_DIR, PDF_CACHE_DIR, BILINGUAL_DIR, TEXT_DIR, CROPS_DIR):
     _d.mkdir(parents=True, exist_ok=True)
+
+# One-time move of state written before it became per-device.
+_legacy = STUDIO_DIR / "state"
+for _name in ("chats", "settings.json", "sessions.json"):
+    _old = _legacy / _name
+    if _old.exists() and not (_old.is_dir() and not any(_old.iterdir())):
+        if _old.is_dir():
+            for _f in _old.iterdir():
+                _f.rename(CHATS_DIR / _f.name)
+            _old.rmdir()
+        elif not (STATE_DIR / _name).exists():
+            _old.rename(STATE_DIR / _name)
+    elif _old.is_dir():
+        _old.rmdir()
 
 
 def load_secrets(*names: str) -> dict[str, str]:

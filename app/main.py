@@ -56,7 +56,18 @@ def _stem_or_404(stem: str) -> str:
 
 @app.get("/api/papers")
 def papers() -> dict[str, Any]:
-    return {"papers": library.list_papers()}
+    """Paper notes; queue_rank follows the reading list (reading, T1-T3, then inbox)."""
+    tiers = {"T1": 0, "T2": 1, "T3": 2}
+    items = [i for i in reading.load() if i.get("paper")]
+    ranked = ([i for i in items if i["status"] == "reading"]
+              + sorted((i for i in items if i["status"] == "queued"), key=lambda i: tiers.get(i.get("tier"), 3))
+              + sorted((i for i in items if i["status"] == "inbox"), key=lambda i: i.get("pushed_at", ""),
+                       reverse=True))
+    rank = {i["paper"]: n for n, i in enumerate(ranked)}
+    out = library.list_papers()
+    for p in out:
+        p["queue_rank"] = rank.get(p["stem"])
+    return {"papers": out}
 
 
 @app.get("/api/papers/{stem}")

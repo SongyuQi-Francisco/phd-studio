@@ -66,6 +66,8 @@ svg.i.sm { width: 15px; height: 15px; }
 
 /* ---------- rail ---------- */
 .rail { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 14px 0; border-right: 1px solid var(--line); background: var(--surface-2); }
+.logo-img { width: 38px; height: 38px; margin: -4px 0 10px; }
+.logo-img.big { width: 96px; height: 96px; margin: 0 auto; display: block; }
 .logo { width: 30px; height: 30px; border-radius: 9px; background: var(--text); margin-bottom: 14px; display: grid; place-items: center; }
 .logo::after { content: ""; width: 13px; height: 11px; background: var(--surface); border-radius: 0 6px 0 6px; }
 .rail-btn { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; color: var(--text-2); position: relative; }

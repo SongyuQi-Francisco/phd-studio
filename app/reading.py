@@ -3,7 +3,12 @@
 States: inbox -> queued (tier T1/T2/T3) -> reading -> done, with side exits
 snoozed (until a date, then back to inbox) and dismissed (kept, so it is never
 pushed again). Urgency (tier) is set before reading; depth/verdict/takeaway after.
-Every save also regenerates a read-only view block in the Reading Queue note.
+Every save also regenerates a read-only summary note next to the YAML file.
+
+The vault may be synced between computers (Syncthing). Each item carries an
+updated_at stamp, so when both machines edit the list before syncing, the
+resulting sync-conflict copy is merged back automatically (newest edit per item
+wins) and moved out of the vault.
 """
 from __future__ import annotations
 
@@ -11,8 +16,9 @@ import fcntl
 import os
 import re
 import secrets
+import shutil
 from contextlib import contextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -31,16 +37,19 @@ CAPS = {"T1": 5, "queued": 12}
 STALE_DAYS = 21
 FIELDS = ("id", "paper", "arxiv", "title", "url", "status", "tier", "lines", "source", "pushed_by",
           "pushed_at", "reason", "due", "snooze_until", "opened_at", "read_at", "depth", "verdict",
-          "takeaway")
+          "takeaway", "updated_at")
 
 HEADER = """# Reading list, managed by PhD Studio. Edit through the app or the CLI:
 #   studio push --paper "Note Name" --tier T1 --line "Project A" --reason "why" --by "who"
 #   studio push --arxiv 2606.17328 --reason "why" --by "who"
 # status: inbox | queued | reading | done | snoozed | dismissed   tier: T1 (this week) | T2 | T3
 """
-VIEW_BEGIN = "<!-- BEGIN STUDIO_READING_LIST -->"
+VIEW_BEGIN = "<!-- BEGIN STUDIO_READING_LIST -->"  # legacy block in the Reading Queue note
 VIEW_END = "<!-- END STUDIO_READING_LIST -->"
+READING_VIEW = READING_LIST.with_name("Reading List.md")
 _LOCK = DATA_DIR / "reading.lock"
+_TMP = DATA_DIR / "reading.yaml.tmp"  # outside the synced vault; os.replace moves it in atomically
+CONFLICTS_DIR = DATA_DIR / "sync-conflicts"
 _ARXIV_RE = re.compile(r"(?:arxiv\.org/(?:abs|pdf)/|arXiv[: ]\s*)(\d{4}\.\d{4,5})", re.I)
 
 
@@ -86,10 +95,54 @@ def _save_raw(items: list[dict[str, Any]]) -> None:
             d.pop("lines")
         clean.append(d)
     body = yaml.safe_dump({"items": clean}, allow_unicode=True, sort_keys=False, width=1000)
-    tmp = READING_LIST.with_suffix(".tmp")
-    tmp.write_text(HEADER + body, encoding="utf-8")
-    os.replace(tmp, READING_LIST)
+    _TMP.write_text(HEADER + body, encoding="utf-8")
+    os.replace(_TMP, READING_LIST)
     _write_view(clean)
+
+
+def _now() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def _stamp_changed(before: dict[str, dict[str, Any]], items: list[dict[str, Any]]) -> bool:
+    """Set updated_at on items that are new or changed since `before`; True if any."""
+    changed = len(before) != len(items)
+    for i in items:
+        old = before.get(i["id"])
+        cur = {k: v for k, v in _norm(i).items() if k != "updated_at"}
+        if old is None or {k: v for k, v in old.items() if k != "updated_at"} != cur:
+            i["updated_at"] = _now()
+            changed = True
+    return changed
+
+
+def _conflict_copies(path: Path) -> list[Path]:
+    return sorted(path.parent.glob(f"{path.stem}.sync-conflict-*{path.suffix}"))
+
+
+def _park(conflict: Path) -> None:
+    CONFLICTS_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(conflict), CONFLICTS_DIR / conflict.name)
+
+
+def _merge_conflicts(items: list[dict[str, Any]]) -> bool:
+    """Fold Syncthing conflict copies of the list back in: newest edit per item wins."""
+    copies = _conflict_copies(READING_LIST)
+    for copy in copies:
+        try:
+            other = [_norm(i) for i in (yaml.safe_load(copy.read_text(encoding="utf-8")) or {}).get("items", [])]
+        except yaml.YAMLError:
+            other = []
+        for theirs in other:
+            mine = find(items, theirs["id"]) or find(items, key_of(theirs))
+            if mine is None:
+                items.append(theirs)
+            elif theirs.get("updated_at", "") > mine.get("updated_at", ""):
+                lines = sorted(set(mine.get("lines", [])) | set(theirs.get("lines", [])))
+                mine.clear()
+                mine.update(theirs, lines=lines)
+        _park(copy)
+    return bool(copies)
 
 
 def _wake_snoozed(items: list[dict[str, Any]]) -> bool:
@@ -123,7 +176,13 @@ def load() -> list[dict[str, Any]]:
             _save_raw(items)
             return items
         items = _load_raw()
-        if _wake_snoozed(items) | _link_notes(items):
+        before = {i["id"]: dict(i) for i in items}
+        merged = _merge_conflicts(items)
+        _wake_snoozed(items)
+        _link_notes(items)
+        stale_view = (not READING_VIEW.exists() or bool(_conflict_copies(READING_VIEW))
+                      or (READING_QUEUE.exists() and VIEW_BEGIN in READING_QUEUE.read_text(encoding="utf-8")))
+        if _stamp_changed(before, items) or merged or stale_view:
             _save_raw(items)
         return items
 
@@ -132,7 +191,10 @@ def load() -> list[dict[str, Any]]:
 def editing() -> Iterator[list[dict[str, Any]]]:
     with _locked():
         items = _load_raw()
+        before = {i["id"]: dict(i) for i in items}
+        _merge_conflicts(items)
         yield items
+        _stamp_changed(before, items)
         _save_raw(items)
 
 
@@ -284,9 +346,7 @@ def _link(i: dict[str, Any]) -> str:
 
 
 def _write_view(items: list[dict[str, Any]]) -> None:
-    """Regenerate the read-only summary block at the top of the Reading Queue note."""
-    if not READING_QUEUE.exists():
-        return
+    """Regenerate the read-only summary note (a separate file, so hand edits never collide)."""
     def rows(sel: list[dict[str, Any]]) -> list[str]:
         return [f"- {_link(i)}" + (f" · {', '.join(i['lines'])}" if i.get("lines") else "")
                 + (f" — {i['reason']}" if i.get("reason") else "") for i in sel]
@@ -296,28 +356,28 @@ def _write_view(items: list[dict[str, Any]]) -> None:
     reading = [i for i in items if i["status"] == "reading"]
     cutoff = (date.today() - timedelta(days=STALE_DAYS)).isoformat()
     inbox = [i for i in items if i["status"] == "inbox" and i.get("pushed_at", "") >= cutoff]
-    parts = [VIEW_BEGIN, "## Now (generated from reading.yaml by PhD Studio; do not edit here)", ""]
+    parts = ["---", "type: reading-list", "generated: true", "---", "", "# Reading List", "",
+             f"> Generated by PhD Studio from `{READING_LIST.name}`; edits here are overwritten.", ""]
     if reading:
-        parts += ["**Reading**", *rows(reading), ""]
+        parts += ["## Reading", *rows(reading), ""]
     for t in TIERS:
         sel = [i for i in queued if i.get("tier") == t]
         if sel:
-            parts += [f"**{t}**", *rows(sel), ""]
+            parts += [f"## {t}", *rows(sel), ""]
     if inbox:
-        parts += [f"**Inbox ({len(inbox)} to triage)**", *rows(inbox), ""]
-    parts.append(VIEW_END)
-    block = "\n".join(parts)
-    text = READING_QUEUE.read_text(encoding="utf-8")
-    if VIEW_BEGIN in text and VIEW_END in text:
-        a, rest = text.split(VIEW_BEGIN, 1)
-        _, b = rest.split(VIEW_END, 1)
-        new = a + block + b
-    else:
-        m = re.search(r"^# .+\n", text, re.M)
-        at = m.end() if m else 0
-        new = text[:at] + "\n" + block + "\n" + text[at:]
-    if new != text:
-        READING_QUEUE.write_text(new, encoding="utf-8")
+        parts += [f"## Inbox ({len(inbox)} to triage)", *rows(inbox), ""]
+    text = "\n".join(parts)
+    for copy in _conflict_copies(READING_VIEW):
+        _park(copy)  # generated file: just regenerate
+    if not READING_VIEW.exists() or READING_VIEW.read_text(encoding="utf-8") != text:
+        READING_VIEW.write_text(text, encoding="utf-8")
+    # Earlier versions wrote a block into the hand-written queue note; take it out once.
+    if READING_QUEUE.exists():
+        q = READING_QUEUE.read_text(encoding="utf-8")
+        if VIEW_BEGIN in q and VIEW_END in q:
+            a, rest = q.split(VIEW_BEGIN, 1)
+            _, b = rest.split(VIEW_END, 1)
+            READING_QUEUE.write_text(a.rstrip("\n") + "\n\n" + b.lstrip("\n"), encoding="utf-8")
 
 
 def fetch_arxiv_title(arxiv: str | None) -> str | None:

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024"><defs><filter id="d"><feDropShadow dx="0" dy="14" stdDeviation="18" flood-opacity=".22"/></filter></defs>
+<g filter="url(#d)"><rect x="100" y="100" width="824" height="824" rx="186" fill="#f5f7fb"/></g>
+<rect x="101" y="101" width="822" height="822" rx="185" fill="none" stroke="#2445d614" stroke-width="2"/>
+<g transform="translate(0 -26)"><g fill="none" stroke="#2445d6" stroke-width="20" stroke-linecap="round" stroke-linejoin="round">
+<path d="M512 660 C456 624 374 614 300 626 L300 806 C374 794 456 804 512 840 C568 804 650 794 724 806 L724 626 C650 614 568 624 512 660 Z M512 660 L512 840"/><path d="M436 646 V572 H372 V512 M588 646 V572 H652 V512 M512 654 V480"/><path d="M512 236 L618 297 L618 419 L512 480 L406 419 L406 297 Z"/></g>
+<path d="M512 300 C517 340 528 351 568 358 C528 365 517 376 512 416 C507 376 496 365 456 358 C496 351 507 340 512 300 Z" fill="#2445d6"/>
+<g fill="#f5f7fb" stroke="#2445d6" stroke-width="16"><circle cx="372" cy="512" r="15"/><circle cx="652" cy="512" r="15"/></g>
+</g></svg>

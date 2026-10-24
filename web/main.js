@@ -385,7 +385,7 @@ function App() {
   const reading = view === "reader" && stem;
   return html`<div class=${"shell" + (reading ? "" : " no-side")}>
     <nav class="rail">
-      <div class="logo" title="PhD Studio" />
+      <img class="logo-img" src="/icon.svg" alt="PhD Studio" title="PhD Studio" />
       <button class=${"rail-btn" + (view === "list" && !drawer ? " on" : "")} title="阅读清单" onClick=${() => { setView("list"); setDrawer(false); setListVersion((n) => n + 1); }}><${Icon} name="inbox" /></button>
       <button class=${"rail-btn" + (drawer ? " on" : "")} title="论文库 (⌘K)" onClick=${() => setDrawer(!drawer)}><${Icon} name="library" /></button>
       ${stem && view === "list" && html`<button class="rail-btn" title="回到正在读的论文" onClick=${() => setView("reader")}><${Icon} name="book" /></button>`}
@@ -431,7 +431,7 @@ function App() {
         <div class="row-end"><button class="btn ghost" onClick=${() => setQuitState("")}>取消</button>
           <button class="btn danger" onClick=${async () => { try { await api("/api/shutdown", { method: "POST" }); } catch {} setQuitState("done"); setTimeout(() => window.close(), 600); }}>关闭</button></div>
       </div></div>`}
-    ${quitState === "done" && html`<div class="quit-screen"><div><div class="logo big" /><h2>工作台已关闭</h2><p>可以关掉这个窗口了。下次双击桌面上的 PhD Studio 图标启动。</p></div></div>`}
+    ${quitState === "done" && html`<div class="quit-screen"><div><img class="logo-img big" src="/icon.svg" alt="" /><h2>工作台已关闭</h2><p>可以关掉这个窗口了。下次双击桌面上的 PhD Studio 图标启动。</p></div></div>`}
   </div>`;
 }
 

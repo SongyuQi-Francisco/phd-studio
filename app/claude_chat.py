@@ -245,7 +245,16 @@ class PaperChat:
             cli_path=str(CLAUDE_CLI) if CLAUDE_CLI.exists() else None,
         )
         client = ClaudeSDKClient(options=opts)
-        await client.connect()
+        try:
+            await client.connect()
+        except Exception:
+            if not opts.resume:
+                raise
+            # The saved session is not on this machine (or expired): start a fresh one.
+            _save_session(self.stem, None)
+            opts.resume = None
+            client = ClaudeSDKClient(options=opts)
+            await client.connect()
         self.client = client
         return client
 
