@@ -17,6 +17,7 @@ import os
 import random
 import threading
 import time
+from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
 
@@ -92,8 +93,25 @@ def _window() -> Any:
         if w is None or w not in webview.windows:
             w = webview.create_window("Google Scholar · PhD Studio", BASE, width=1100, height=820, hidden=True)
             _win["w"] = w
+            # The app ends only when every window is closed: when a main window closes (its close
+            # button, the power button / app.state.quit), take the Scholar window with it.
+            for other in list(webview.windows):
+                if other is not w and not getattr(other, "_scholar_hooked", False):
+                    other.events.closed += close
+                    other._scholar_hooked = True
             w.events.loaded.wait(40)
         return w
+
+
+def close() -> None:
+    """Destroy the Scholar window (its cookies stay in the app's data store)."""
+    with _lock:
+        w, _win["w"] = _win["w"], None
+    if w is not None:
+        try:
+            w.destroy()
+        except Exception:  # already gone
+            pass
 
 
 def _load(w: Any, url: str) -> None:
@@ -113,43 +131,80 @@ def _read(w: Any) -> dict[str, Any]:
 
 
 def _page(w: Any, url: str, show_on_block: bool, progress: Callable[..., None]) -> dict[str, Any]:
+    """Open `url` and read it. On a sign-in page or CAPTCHA (also one that comes back after a
+    reload, or an in-between page while the user is busy) wait for the user until the target
+    page reads normally; nothing here touches those pages."""
     time.sleep(random.uniform(*PACE))
     _load(w, url)
     r = _read(w)
-    if r.get("state") in ("login", "captcha"):
-        if not show_on_block:
-            raise NeedsUser(r["state"])
-        progress(needs_user=r["state"])
-        w.show()  # the user signs in / solves it themselves; nothing here touches the page
-        deadline = time.time() + USER_WAIT
-        while r.get("state") in ("login", "captcha"):
+    deadline = None
+    while True:
+        state = r.get("state")
+        if state == "ok" and deadline is None:
+            return r
+        if state == "ok":  # the user is done: back to the page we wanted
+            progress(needs_user=None)
+            deadline = None
+            _load(w, url)
+            r = _read(w)
+            continue
+        if state in ("login", "captcha") or deadline is not None:
+            if not show_on_block:
+                raise NeedsUser(state if state in ("login", "captcha") else "captcha")
+            if deadline is None:
+                deadline = time.time() + USER_WAIT
+                progress(needs_user=state)
+                w.show()
             if time.time() > deadline:
-                raise NeedsUser(r["state"])
+                raise NeedsUser(state if state in ("login", "captcha") else "captcha")
             time.sleep(3)
             r = _read(w)
-        progress(needs_user=None)
-        _load(w, url)  # back to the page we wanted
-        r = _read(w)
-    if r.get("state") != "ok":
+            continue
         raise CaptureError("页面结构不认识（Scholar 可能改版了）")
-    return r
 
 
 def capture(labels: list[str], pages: int, profiles: list[str], *, show_on_block: bool,
-            progress: Callable[..., None] = lambda **kw: None) -> list[dict[str, Any]]:
+            progress: Callable[..., None] = lambda **kw: None, cache: Path | None = None) -> list[dict[str, Any]]:
     """Every label search (up to `pages` pages of 10) plus the given profile ids, one row per
-    person with its labels. Raises NeedsUser / CaptureError."""
-    w = _window()
-    rows: dict[str, dict[str, Any]] = {}
+    person with its labels. Pages read today are kept in `cache`, so a retry after a sign-in
+    stop, a CAPTCHA or a crash continues instead of reading everything again.
+    Raises NeedsUser / CaptureError. The window is destroyed when this returns."""
+    today = time.strftime("%Y-%m-%d")
+    state: dict[str, Any] = {"date": today, "rows": {}, "done": []}
+    if cache and cache.exists():
+        try:
+            old = json.loads(cache.read_text(encoding="utf-8"))
+            if old.get("date") == today:
+                state = old
+        except (OSError, ValueError):
+            pass
+    rows: dict[str, dict[str, Any]] = state["rows"]
+    done_keys = set(state["done"])
+
+    def save(key: str) -> None:
+        done_keys.add(key)
+        if cache:
+            tmp = cache.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"date": today, "rows": rows, "done": sorted(done_keys)}, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(cache)
+
     total = len(labels) * pages + len(profiles)
     done = 0
+    w = None
     try:
         for q in labels:
             url: str | None = f"{BASE}/citations?view_op=search_authors&hl=en&mauthors={quote(q)}"
             for n in range(pages):
                 if not url:
                     break
+                key = f"{q}#{n}"
+                if key in done_keys and not state.get("next", {}).get(key):
+                    break  # read earlier today, and it was the last page
+                if key in done_keys:
+                    url, done = state["next"][key], done + 1
+                    continue
                 progress(current=f"{q}（第 {n + 1} 页）", done=done, total=total)
+                w = w or _window()
                 r = _page(w, url, show_on_block, progress)
                 for i, row in enumerate(r.get("rows") or []):
                     e = rows.setdefault(row["scholar_id"], {**row, "labels": [], "via": "label"})
@@ -157,25 +212,26 @@ def capture(labels: list[str], pages: int, profiles: list[str], *, show_on_block
                     e["labels"] = sorted(set(e["labels"]) | {q})
                     e.setdefault("scholar_rank", n * 10 + i + 1)
                 url = r.get("next")
+                state.setdefault("next", {})[key] = url
+                save(key)
                 done += 1
         for sid in profiles:
-            if sid in rows:
+            if sid in rows or f"user:{sid}" in done_keys:
                 continue
             progress(current=f"个人主页 {sid}", done=done, total=total)
+            w = w or _window()
             r = _page(w, f"{BASE}/citations?user={quote(sid)}&hl=en", show_on_block, progress)
             if r.get("profile"):
                 rows[sid] = {**r["profile"], "labels": [], "via": "profile"}
+            save(f"user:{sid}")
             done += 1
     finally:
-        try:
-            w.hide()
-        except Exception:  # the window may already be gone
-            pass
+        close()
     return sorted(rows.values(), key=lambda e: -(e.get("citations") or 0))
 
 
 def show() -> bool:
-    """Bring the Scholar window up so the user can sign in ahead of a run."""
+    """Bring the Scholar window up so the user can sign in ahead of a run (closing it is fine)."""
     if not available():
         return False
     w = _window()

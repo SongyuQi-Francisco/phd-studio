@@ -21,7 +21,11 @@ NOT_PAPER = re.compile(r"workshop|tutorial|proceedings|preface|\bsummary of\b|pa
 
 
 class CheckUnavailable(RuntimeError):
-    """The data needed to judge a candidate could not be fetched (offline, out of quota)."""
+    """The data needed to judge any candidate cannot be fetched (offline, out of quota): stop."""
+
+
+class Unresolved(RuntimeError):
+    """This one candidate cannot be identified (no or ambiguous OpenAlex author): skip them."""
 
 
 # ---------- names and keys ----------
@@ -205,7 +209,11 @@ def rank(candidates: list[dict[str, Any]], check: Callable[[dict[str, Any]], dic
         if one_per_lab and c.get("lab") in lab_of:
             skipped.append(dict(c, reason=f"同实验室已有 {lab_of[c['lab']]}", same_lab=lab_of[c["lab"]]))
             continue
-        v = check(c)
+        try:
+            v = check(c)
+        except Unresolved as e:
+            skipped.append(dict(c, reason=f"无法核实：{e}", unchecked=True))
+            continue
         reason = v.get("noise") or v.get("inactive")
         if not reason and (v.get("field_papers") or 0) < min_papers:
             reason = f"近期领域论文 {v.get('field_papers') or 0} 篇（需 ≥{min_papers}）"
@@ -226,7 +234,7 @@ def rank(candidates: list[dict[str, Any]], check: Callable[[dict[str, Any]], dic
 def _safe_check(check: Callable[[dict[str, Any]], dict[str, Any]], c: dict[str, Any]) -> dict[str, Any] | None:
     try:
         return check(c)
-    except CheckUnavailable:
+    except (CheckUnavailable, Unresolved):
         return None
 
 
@@ -240,3 +248,86 @@ def diff(current: list[dict[str, Any]], proposed: list[dict[str, Any]]) -> dict[
         if c is not None:
             moves.append({"name": p.get("name"), "from": c.get("rank"), "to": p.get("rank")})
     return {"enter": enter, "leave": leave, "moves": moves}
+
+
+# ---------- identity, retries, applying ----------
+
+_STOP = {"university", "of", "the", "and", "institute", "school", "college", "department", "technology", "science",
+         "research", "national", "professor", "lab", "laboratory", "center", "centre", "computer", "univ"}
+
+
+def pick_author(results: list[dict[str, Any]], name: str, affiliation: str | None,
+                field_topics: Iterable[str] = ()) -> tuple[dict[str, Any] | None, str]:
+    """The OpenAlex author behind a Scholar name: (author, "high" | "low"), or (None, "none").
+    Same surname required. High confidence needs the Scholar affiliation to show up in the
+    author's institutions, or — without a usable affiliation — the field topic on exactly one
+    namesake. A common name with no such evidence is "low": never trusted for the list."""
+    want = {w for w in re.findall(r"[a-z]{4,}", (affiliation or "").lower()) if w not in _STOP}
+    field_topics = set(field_topics)
+    rows = []
+    for a in results:
+        if norm_name(a.get("display_name", "")).split()[-1:] != norm_name(name).split()[-1:]:
+            continue
+        insts = " ".join(i.get("display_name", "") for i in a.get("last_known_institutions") or [])
+        insts += " " + " ".join((x.get("institution") or {}).get("display_name", "") for x in (a.get("affiliations") or [])[:15])
+        overlap = len([w for w in want if w in insts.lower()]) / len(want) if want else 0.0
+        topics = {(t.get("id") or "").rsplit("/", 1)[-1] for t in a.get("topics") or []}
+        rows.append((a, overlap, bool(topics & field_topics)))
+    if not rows:
+        return None, "none"
+    score = lambda r: (r[0].get("cited_by_count") or 0) * (1 + 3 * r[1]) * (2 if r[2] else 1)  # noqa: E731
+    best = max(rows, key=score)
+    if best[1] > 0:
+        return best[0], "high"
+    in_field = [r for r in rows if r[2]]
+    if in_field:  # no usable affiliation: the field topic decides, if it singles one out
+        return max(in_field, key=score)[0], "high" if len(in_field) == 1 else "low"
+    return best[0], "low"
+
+
+def backoff_seconds(failures: int, base: float = 6 * 3600, cap: float = 7 * 86400) -> float:
+    """Wait before the next automatic attempt after `failures` failures in a row: 6 h, 12 h, … ≤ 7 days."""
+    if failures <= 0:
+        return 0.0
+    return min(cap, base * 2 ** (failures - 1))
+
+
+def plan_apply(current: list[dict[str, Any]], run: dict[str, Any], excluded: Iterable[dict[str, Any]] = ()) -> dict[str, Any]:
+    """Exactly the change the user saw, re-checked now: add the shown entrants (unless excluded
+    since or already there), remove the shown leavers (unless pinned since), update ranks of the
+    people in the shown ranking. Anyone else on the list (added by hand or synced in after the
+    suggestion) is left alone. Final order: the suggestion's ranking, then untouched people by
+    their old rank, then pinned people."""
+    excluded = list(excluded)
+    on_list = lambda p: next((c for c in current if same_person(p, c)), None)  # noqa: E731
+    add, notes = [], []
+    for p in run.get("enter") or []:
+        if any(same_person(p, x) for x in excluded):
+            notes.append(f"{p.get('name')}：已在排除名单里，没有加入")
+        elif on_list(p):
+            notes.append(f"{p.get('name')}：已经在名单里")
+        else:
+            add.append(p)
+    remove = []
+    for p in run.get("leave") or []:
+        c = on_list(p)
+        if c is None:
+            continue
+        if c.get("pinned"):
+            notes.append(f"{c.get('name')}：已固定，没有移出")
+        else:
+            remove.append(c)
+    removed = {id(c) for c in remove}
+    stay = [c for c in current if id(c) not in removed]
+    ranking = run.get("ranking") or []
+    pos = lambda c: next((i for i, p in enumerate(ranking) if same_person(p, c)), None)  # noqa: E731
+    final: list[tuple[int, int, float, dict[str, Any]]] = []
+    for c in stay:
+        i = pos(c)
+        group = 2 if c.get("pinned") else (0 if i is not None else 1)
+        final.append((group, i if i is not None else 10_000, c.get("rank") or 999, c))
+    for p in add:
+        final.append((2 if p.get("pinned") else 0, pos(p) if pos(p) is not None else 10_000, 999, p))
+    final.sort(key=lambda t: (t[0], t[1], t[2]))
+    order = [(n, t[3]) for n, t in enumerate(final, 1)]
+    return {"add": add, "remove": remove, "order": order, "notes": notes}

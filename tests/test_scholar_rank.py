@@ -206,3 +206,68 @@ def test_diff_enter_leave_moves_and_pins_never_leave():
     assert [c["name"] for c in d["enter"]] == ["C"]
     assert [c["name"] for c in d["leave"]] == ["B"]
     assert d["moves"] == [{"name": "A", "from": 1, "to": 2}]
+
+
+# ---------- identity, retries, applying ----------
+
+def test_unresolved_candidate_is_skipped_not_fatal():
+    def check(c):
+        if c["name"] == "Zhang Wei":
+            raise R.Unresolved("同名多人")
+        return {"field_papers": 9}
+    out = R.rank([person("Zhang Wei", 900), person("Ada Example", 800)], check, top_n=2, alternates=0)
+    assert [c["name"] for c in out["list"]] == ["Ada Example"]
+    assert out["skipped"][0]["unchecked"] and "同名多人" in out["skipped"][0]["reason"]
+
+
+def author(aid, name, cites, insts=(), topics=()):
+    return {"id": f"https://openalex.org/{aid}", "display_name": name, "cited_by_count": cites,
+            "last_known_institutions": [{"display_name": i} for i in insts],
+            "topics": [{"id": f"https://openalex.org/{t}"} for t in topics]}
+
+
+def test_pick_author_uses_affiliation_and_field_topic():
+    results = [author("A1", "Wei Wang", 90_000, ["Some Medical School"]),
+               author("A2", "Wei Wang", 20_000, ["Example University"], ["T10203"]),
+               author("A3", "Wei Wong", 99_000, ["Example University"])]
+    best, conf = R.pick_author(results, "Wei Wang", "Professor, Example University", ["T10203"])
+    assert best["id"].endswith("A2") and conf == "high"
+    # no affiliation: one namesake with the field topic is enough
+    best, conf = R.pick_author(results, "Wei Wang", "", ["T10203"])
+    assert best["id"].endswith("A2") and conf == "high"
+    # no affiliation and no field topic anywhere: low confidence, never trusted
+    best, conf = R.pick_author(results[:1], "Wei Wang", "—", ["T10203"])
+    assert conf == "low"
+    assert R.pick_author([], "Wei Wang", "", ["T10203"]) == (None, "none")
+
+
+def test_backoff_doubles_and_is_capped():
+    assert R.backoff_seconds(0) == 0
+    assert R.backoff_seconds(1) == 6 * 3600
+    assert R.backoff_seconds(2) == 12 * 3600
+    assert R.backoff_seconds(10) == 7 * 86400
+
+
+def rec(name, rank, sid=None, **kw):
+    return {"id": f"id-{name}", "name": name, "rank": rank, "scholar_id": sid or name[0] * 12, **kw}
+
+
+def test_plan_apply_follows_the_shown_diff_only():
+    current = [rec("Ada", 1), rec("Bob", 2), rec("Cat", 3), rec("Late", 4)]  # Late was added after the suggestion
+    run = {"ranking": [{"name": "Dan", "scholar_id": "D" * 12, "rank": 1}, {"name": "Ada", "scholar_id": "A" * 12, "rank": 2},
+                       {"name": "Cat", "scholar_id": "C" * 12, "rank": 3}],
+           "enter": [{"name": "Dan", "scholar_id": "D" * 12}], "leave": [{"name": "Bob", "scholar_id": "B" * 12}]}
+    plan = R.plan_apply(current, run)
+    assert [p["name"] for p in plan["add"]] == ["Dan"]
+    assert [c["name"] for c in plan["remove"]] == ["Bob"]
+    assert [(n, c["name"]) for n, c in plan["order"]] == [(1, "Dan"), (2, "Ada"), (3, "Cat"), (4, "Late")]
+
+
+def test_plan_apply_rechecks_excludes_and_pins():
+    current = [rec("Ada", 1), rec("Bob", 2, pinned=True)]
+    run = {"ranking": [{"name": "Ada", "scholar_id": "A" * 12, "rank": 1}, {"name": "Dan", "scholar_id": "D" * 12, "rank": 2}],
+           "enter": [{"name": "Dan", "scholar_id": "D" * 12}], "leave": [{"name": "Bob", "scholar_id": "B" * 12}]}
+    plan = R.plan_apply(current, run, excluded=[{"name": "Dan", "scholar_id": "D" * 12}])
+    assert plan["add"] == [] and plan["remove"] == []  # excluded after the suggestion; pinned after it
+    assert [(n, c["name"]) for n, c in plan["order"]] == [(1, "Ada"), (2, "Bob")]
+    assert any("排除" in n for n in plan["notes"]) and any("固定" in n for n in plan["notes"])

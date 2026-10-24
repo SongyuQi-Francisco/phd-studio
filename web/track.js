@@ -176,7 +176,10 @@ function useListRefresh(toast, onApplied) {
     }, 2000);
   }, [rf]);
   const start = async () => { try { setRf(await api("/api/track/scholars/refresh", { method: "POST" })); toast("开始重算名单"); } catch (e) { toast(e.message); } };
-  const apply = async (id) => { try { setRf(await api(`/api/track/scholars/refresh/${id}/apply`, { method: "POST" })); toast("名单已更新"); onApplied(); } catch (e) { toast(e.message); } };
+  const apply = async (id) => {
+    try { const r = await api(`/api/track/scholars/refresh/${id}/apply`, { method: "POST" }); setRf(r); toast(r.notes?.length ? `名单已更新（${r.notes.join("；")}）` : "名单已更新"); onApplied(); }
+    catch (e) { toast(e.message); }
+  };
   const dismiss = async (id) => { try { setRf(await api(`/api/track/scholars/refresh/${id}/dismiss`, { method: "POST" })); toast("已忽略这次建议"); } catch (e) { toast(e.message); } };
   const openScholar = async () => { try { await api("/api/track/scholars/scholar-window", { method: "POST" }); } catch (e) { toast(e.message); } };
   return { rf, load, start, apply, dismiss, openScholar };
@@ -194,6 +197,8 @@ function RefreshBanner({ R, onOpen }) {
     ${j.needs_user && html`<div class="tk-banner bad"><span>${NEED_TXT[j.needs_user] || "Google Scholar 需要你处理"}${j.running ? "：已打开 Scholar 窗口，请在那里完成" : "：自动更新先用了快照或 OpenAlex"}</span>
       <span class="spacer" />${rf.capture && html`<button class="chip" onClick=${R.openScholar}>打开 Scholar 窗口</button>`}</div>`}
     ${!j.running && j.error && html`<div class="tk-banner bad"><span>${j.error}</span></div>`}
+    ${!j.running && !j.error && rf.attempts?.failures > 0 && html`<div class="tk-banner bad"><span>自动重算已连续失败 ${rf.attempts.failures} 次${rf.attempts.error ? `（${rf.attempts.error}）` : ""}，下次自动尝试：${rf.attempts.next_try?.replace("T", " ")}</span>
+      <span class="spacer" /><button class="chip" onClick=${R.start}>现在重试</button></div>`}
     ${p && html`<div class="tk-banner ok"><${Icon} name="sparkle" sm />
       <span>名单更新建议：进 ${p.enter.length} 人 · 出 ${p.leave.length} 人 · 名次变化 ${p.moves.filter((m) => m.from !== m.to).length} 处 <span class="muted">（${p.source}）</span></span>
       <span class="spacer" /><button class="btn primary" onClick=${onOpen}>查看并确认</button></div>`}`;
@@ -280,6 +285,8 @@ function ListRules({ R, toast }) {
       <label class="tk-rule wide">领域关键词（OpenAlex 检索，逗号分隔）<input value=${form.keywords} onInput=${(e) => setForm({ ...form, keywords: e.target.value })} /></label>
       <label class="tk-rule wide">Scholar 标签检索（每行一个 mauthors）<textarea rows="3" value=${form.labels} onInput=${(e) => setForm({ ...form, labels: e.target.value })} /></label>
       <div class="tk-rule wide muted small">主题要求：${(rf.rules.topic_groups || []).map((g) => g.join(" 或 ")).join(" 且 ")}（每周巡检的主题模型）· 下次自动：${rf.next_auto || "—"}</div>
+      <div class="tk-rule wide muted small">自动重算只在一台电脑上跑：${rf.rules.runner ? (rf.rules.runner === rf.device ? `本机（${rf.device}）` : rf.rules.runner) : "第一次重算的那台"}
+        ${rf.rules.runner && rf.rules.runner !== rf.device && html` <button class="linkbtn" onClick=${async () => { await api("/api/track/scholars/rules", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ runner: rf.device }) }); toast("自动重算改由本机负责"); R.load(); }}>改为本机</button>`}</div>
       <button class="btn" onClick=${save}>保存规则</button>
       ${rf.capture ? html`<button class="btn" onClick=${R.openScholar}>打开 Scholar 窗口（登录）</button>` : html`<span class="muted small">Scholar 窗口只在桌面 App 里可用</span>`}
     </div>
@@ -412,7 +419,7 @@ function ScholarsTab({ toast, onOpenPaper, onOpenNote, onAsk, onChanged, version
   const R = useListRefresh(toast, () => load());
   const load = async (refresh = false) => {
     setBusy(true);
-    try { setD(await api(`/api/track/scholars/activity${refresh ? "?refresh=true" : ""}`)); } catch (e) { toast(e.message); } finally { setBusy(false); }
+    try { setD(await api(`/api/track/scholars/activity${refresh ? "?refresh=true" : ""}`)); R.load(); } catch (e) { toast(e.message); } finally { setBusy(false); }
   };
   useEffect(() => { load(); return () => clearTimeout(timer.current); }, [version]);
   useEffect(() => { clearTimeout(timer.current); if (d?.job?.running) timer.current = setTimeout(() => load(), 2500); }, [d]);

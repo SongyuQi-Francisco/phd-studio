@@ -26,7 +26,7 @@ from typing import Any
 import httpx
 
 from . import notes, scholar_capture, scholar_rank as R, scholars
-from .config import DATA_DIR, LAB_TRACKER_DIR
+from .config import DATA_DIR, DEVICE, LAB_TRACKER_DIR
 from .store import Store
 
 RANKING_FILE = LAB_TRACKER_DIR / "scholar-ranking.yaml"
@@ -50,7 +50,9 @@ DEFAULT_RULES: dict[str, Any] = {
     "topic_groups": [["recsys"], ["llm", "agent"]],
     "min_papers": 3, "months": 24, "top_n": 10, "alternates": 5,
     "one_per_lab": True,  # keep only the best-cited scholar of each lab
+    "openalex_topics": ["T10203"],  # field topic used to tell namesakes apart (Recommender Systems)
     "cadence_days": 30, "auto": True,
+    "runner": "",  # the one machine that runs automatic recomputes (set by the first run)
 }
 
 for _d in (DIR, SNAPS):
@@ -69,6 +71,8 @@ def set_rules(patch: dict[str, Any]) -> dict[str, Any]:
     for k in ("one_per_lab", "auto"):
         if k in clean:
             clean[k] = bool(clean[k])
+    if "runner" in clean:
+        clean["runner"] = str(clean["runner"] or "")[:64]
     for k in ("min_papers", "months", "top_n", "alternates", "cadence_days", "pages_per_label"):
         if k in clean:
             clean[k] = max(1, int(clean[k]))
@@ -149,7 +153,7 @@ def import_snapshot(text: str) -> dict[str, Any]:
 
 
 def latest_snapshot() -> dict[str, Any] | None:
-    files = sorted(SNAPS.glob("*.json"))
+    files = sorted(SNAPS.glob("*.json"), key=lambda f: f.stat().st_mtime)
     for f in reversed(files):
         try:
             return {**json.loads(f.read_text(encoding="utf-8")), "file": f.name}
@@ -192,40 +196,35 @@ def _oa(path: str, **params: Any) -> dict[str, Any]:
         raise R.CheckUnavailable(scholars.redact(str(e))) from None
 
 
-_STOP = {"university", "of", "the", "and", "institute", "school", "college", "department", "technology", "science",
-         "research", "national", "professor", "lab", "laboratory", "center", "centre", "computer", "univ"}
-
-
-def resolve(c: dict[str, Any]) -> dict[str, Any]:
-    """OpenAlex author for a Scholar candidate: name search, weighed by affiliation overlap."""
+def resolve(c: dict[str, Any], r: dict[str, Any] | None = None) -> dict[str, Any]:
+    """OpenAlex author for a Scholar candidate. Someone already on the list keeps their id; for
+    others the match must be confident (affiliation, or the field topic on a single namesake),
+    otherwise this candidate is skipped (Unresolved) rather than judged by a namesake's papers."""
     if c.get("openalex"):
         return {"openalex": c["openalex"]}
     key = _person_key(c)
     with _cache_lock:
         hit = _load("ids.json").get(key)
-    if hit:
+    if hit and hit.get("unresolved") and time.time() - hit.get("ts", 0) < CHECK_TTL:
+        raise R.Unresolved(hit["unresolved"])
+    if hit and not hit.get("unresolved"):
         return hit
-    d = _oa("authors", search=c["name"], per_page=8,
-            select="id,display_name,cited_by_count,last_known_institutions,affiliations")
-    want = {w for w in re.findall(r"[a-z]{4,}", (c.get("affiliation") or "").lower()) if w not in _STOP}
-    best, best_score = None, -1.0
-    for a in d.get("results", []):
-        if R.norm_name(a["display_name"]).split()[-1:] != R.norm_name(c["name"]).split()[-1:]:
-            continue  # surname must agree
-        insts = " ".join(i.get("display_name", "") for i in a.get("last_known_institutions") or [])
-        insts += " " + " ".join(x["institution"].get("display_name", "") for x in (a.get("affiliations") or [])[:15])
-        overlap = len([w for w in want if w in insts.lower()]) / max(1, len(want))
-        score = (a.get("cited_by_count") or 0) * (1 + 3 * overlap)
-        if score > best_score:
-            best, best_score = a, score
-    if best is None:
-        raise R.CheckUnavailable(f"OpenAlex 里找不到 {c['name']}")
-    out = {"openalex": best["id"].rsplit("/", 1)[-1], "oa_name": best["display_name"],
-           "oa_cites": best.get("cited_by_count"), "at": _now()}
+    d = _oa("authors", search=c["name"], per_page=10,
+            select="id,display_name,cited_by_count,last_known_institutions,affiliations,topics")
+    best, conf = R.pick_author(d.get("results", []), c["name"], c.get("affiliation"),
+                               (r or rules()).get("openalex_topics") or [])
+    if best is None or conf != "high":
+        why = "OpenAlex 里找不到这个人" if best is None else "同名多人、机构对不上，身份不确定（需要时在管理名单里手动加入）"
+        out = {"unresolved": why, "ts": time.time()}
+    else:
+        out = {"openalex": best["id"].rsplit("/", 1)[-1], "oa_name": best["display_name"],
+               "oa_cites": best.get("cited_by_count"), "at": _now()}
     with _cache_lock:
         ids = _load("ids.json")
         ids[key] = out
         _atomic_json(DIR / "ids.json", ids)
+    if out.get("unresolved"):
+        raise R.Unresolved(out["unresolved"])
     return out
 
 
@@ -235,12 +234,19 @@ def _rules_hash(r: dict[str, Any]) -> str:
 
 def check(c: dict[str, Any], r: dict[str, Any]) -> dict[str, Any]:
     """Field papers in the window (+ noise for those who pass), cached per OpenAlex id and rules."""
-    oa = resolve(c)["openalex"]
+    oa = resolve(c, r)["openalex"]
     since = (date.today() - timedelta(days=int(r["months"] * 30.44))).isoformat()
     key = f"{oa}|{since[:7]}|{_rules_hash(r)}"
     with _cache_lock:
         hit = _load("checks.json").get(key)
     if hit and time.time() - hit.get("at", 0) < CHECK_TTL:
+        if hit["field_papers"] >= r["min_papers"] and not hit.get("noise_checked"):
+            # cached under a higher threshold, before noise mattered: check it now
+            hit = {**hit, "noise": _noise(oa, R.compile_model(scholars.topic_model())), "noise_checked": True}
+            with _cache_lock:
+                cache = _load("checks.json")
+                cache[key] = hit
+                _atomic_json(DIR / "checks.json", cache)
         return hit
     compiled = R.compile_model(scholars.topic_model())
     search = " OR ".join(f'"{k}"' if " " in k else k for k in r["keywords"])
@@ -254,9 +260,10 @@ def check(c: dict[str, Any], r: dict[str, Any]) -> dict[str, Any]:
             break
     titles = R.field_papers(works, compiled, r["topic_groups"], since)
     out = {"openalex": oa, "field_papers": len(titles), "titles": titles[:8], "since": since,
-           "last": max((w["date"] for w in works), default=None), "noise": None, "at": time.time()}
+           "last": max((w["date"] for w in works), default=None), "noise": None, "noise_checked": False,
+           "at": time.time()}
     if len(titles) >= r["min_papers"]:
-        out["noise"] = _noise(oa, compiled)
+        out["noise"], out["noise_checked"] = _noise(oa, compiled), True
     with _cache_lock:
         cache = _load("checks.json")
         cache[key] = out
@@ -274,6 +281,18 @@ def _noise(oa: str, compiled: dict[str, Any]) -> str | None:
 
 # ---------- the recompute job ----------
 
+def _attempts() -> dict[str, Any]:
+    """This machine's automatic-run attempts (failures in a row, next allowed try): survives restarts."""
+    return _load("attempts.json")
+
+
+def _record_attempt(ok: bool, error: str | None = None) -> None:
+    a = _attempts()
+    n = 0 if ok else int(a.get("failures") or 0) + 1
+    _atomic_json(DIR / "attempts.json", {"failures": n, "last": _now(), "error": error,
+                                         "next_try": time.time() + R.backoff_seconds(n)})
+
+
 _job: dict[str, Any] = {"running": False}
 _lock = threading.Lock()
 
@@ -290,29 +309,39 @@ def status() -> dict[str, Any]:
     pending = next((x for x in runs if x.get("status") == "proposed"), None)
     if pending:  # the Store drops empty lists on write
         pending = {**pending, **{k: pending.get(k) or [] for k in ("ranking", "alternates", "skipped", "enter", "leave", "moves")}}
+    att = _attempts()
     return {"job": dict(_job), "rules": r, "excluded": excluded(), "pending": pending, "lab_hints": lab_hints(),
+            "device": DEVICE, "attempts": {"failures": att.get("failures") or 0, "error": att.get("error"),
+                                           "next_try": datetime.fromtimestamp(att["next_try"]).isoformat(timespec="minutes")
+                                           if att.get("failures") else None},
             "history": [{k: x.get(k) for k in ("id", "created", "source", "status", "applied_at")} for x in runs[:12]],
             "snapshot": {k: snap.get(k) for k in ("date", "source", "file")} | {"count": len(snap.get("entries", []))} if snap else None,
             "capture": scholar_capture.available(), "next_auto": nxt}
 
 
 def maybe_schedule() -> None:
-    """Monthly by default: start an automatic recompute when the last one is older than the cadence."""
+    """Monthly by default: start an automatic recompute when the last one is older than the
+    cadence, on the one machine chosen to run them, not sooner than the failure backoff allows."""
     r = rules()
     if not r["auto"] or _job.get("running"):
         return
-    if _job.get("finished_at") and time.time() - _job["finished_at"] < 6 * 3600:
-        return  # a failed automatic attempt waits a few hours
+    if r["runner"] and r["runner"] != DEVICE:
+        return  # the other machine runs the automatic recomputes
+    if time.time() < (_attempts().get("next_try") or 0):
+        return  # failed recently: 6 h, 12 h, … up to a week
     runs = store.load()["runs"]
-    month_id = f"run-{date.today():%Y-%m}"
-    if any(x["id"] == month_id for x in runs):
-        return  # this month's automatic run exists (maybe from the other machine)
+    month = f"{date.today():%Y-%m}"
+    if any(not x.get("manual") and (x.get("created") or "")[:7] == month for x in runs):
+        return  # this month's automatic run exists
     last = max((x.get("created", "") for x in runs), default="")
     if not last:  # never recomputed: count from when the list was last edited
         last = max((s.get("updated_at", "") for s in scholars.scholars()), default="")
     if last and (datetime.now() - datetime.fromisoformat(last)).days < r["cadence_days"]:
         return
-    start(manual=False)
+    try:
+        start(manual=False)
+    except RuntimeError:  # a manual run started in between
+        pass
 
 
 def start(manual: bool = True) -> dict[str, Any]:
@@ -332,12 +361,17 @@ def _progress(**kw: Any) -> None:
 
 def _scholar_entries(manual: bool, r: dict[str, Any], current: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str, str]:
     """(entries, source label, citation source) from the best available Scholar data."""
+    snap = latest_snapshot()
+    if snap and "App" in snap.get("source", "") and snap.get("saved"):
+        age_h = (datetime.now() - datetime.fromisoformat(snap["saved"])).total_seconds() / 3600
+        if age_h <= (12 if manual else 72):  # a retry never reads Scholar again for a recent capture
+            return snap["entries"], f"{snap['source']}（{snap['date']} 读取）", f"Google Scholar label ranking, {snap['date']}"
     if scholar_capture.available():
         _progress(stage="scholar")
         try:
             extra = [c["scholar_id"] for c in current if c.get("scholar_id")]
             entries = scholar_capture.capture(r["labels"], r["pages_per_label"], extra, show_on_block=manual,
-                                              progress=lambda **kw: _progress(**kw))
+                                              progress=lambda **kw: _progress(**kw), cache=DIR / "capture-today.json")
             if entries:
                 save_snapshot(entries, "Google Scholar（App 窗口）")
                 return entries, "Google Scholar（App 内窗口读取）", f"Google Scholar label ranking, {date.today()}"
@@ -345,7 +379,6 @@ def _scholar_entries(manual: bool, r: dict[str, Any], current: list[dict[str, An
             _progress(needs_user=e.state)  # automatic runs never pop the window: fall through
         except scholar_capture.CaptureError as e:
             _progress(error=f"Scholar 读取失败：{e}")
-    snap = latest_snapshot()
     if snap and (date.today() - date.fromisoformat(snap["date"])).days <= 2 * r["cadence_days"]:
         return snap["entries"], f"{snap['source']}（快照 {snap['date']}）", f"Google Scholar label ranking, {snap['date']}"
     return [], "", ""
@@ -378,9 +411,11 @@ def _current() -> list[dict[str, Any]]:
 
 
 def _run(manual: bool) -> None:
-    run_id = f"run-{date.today():%Y-%m}" if not manual else f"run-{datetime.now():%Y-%m-%d-%H%M}"
+    run_id = (f"run-{date.today():%Y-%m}" if not manual else f"run-{datetime.now():%Y-%m-%d-%H%M}") + f"-{DEVICE}"
     try:
         r = rules()
+        if not r["runner"]:
+            set_rules({"runner": DEVICE})  # the first machine to recompute runs the automatic ones
         current = _current()
         entries, source, cite_src = _scholar_entries(manual, r, current)
         if entries:
@@ -420,52 +455,59 @@ def _run(manual: bool) -> None:
             for old in data["runs"]:  # one open suggestion at a time
                 if old.get("status") == "proposed" and not old.get("deleted"):
                     old.update(status="superseded", updated_at=_now())
+            while any(x["id"] == run_id and x.get("status") != "proposed" for x in data["runs"]):
+                run_id += "-b"  # never overwrite a run that was applied or dismissed (e.g. synced in)
             data["runs"] = [x for x in data["runs"] if x["id"] != run_id]
             data["runs"].append({"id": run_id, **run, "updated_at": _now()})
         _progress(stage="done", run_id=run_id)
+        _record_attempt(True)
     except R.CheckUnavailable as e:
         _progress(stage="failed", error=f"OpenAlex 暂时不可用：{e}（已查过的结果已缓存，稍后再试会接着算）")
+        _record_attempt(False, str(e))
     except Exception as e:  # keep the page usable whatever happens
         _progress(stage="failed", error=scholars.redact(f"{e.__class__.__name__}: {e}"))
+        _record_attempt(False, _job["error"])
     finally:
         _progress(running=False, finished=_now(), finished_at=time.time())
 
 
 def apply(run_id: str) -> dict[str, Any]:
-    """Make the suggestion the list: update ranks/citations, add who enters, remove who leaves
-    (never pinned ones). Each record remembers its previous rank for the ▲/▼ on the cards."""
+    """Apply exactly what the suggestion showed, re-checked against today's pins and excludes
+    (scholar_rank.plan_apply): add the shown entrants, remove the shown leavers, update the
+    ranks; people added since are left alone. Records keep their previous rank for ▲/▼."""
     run = next((x for x in store.load()["runs"] if x["id"] == run_id), None)
     if not run or run.get("status") != "proposed":
         raise ValueError("这条建议已经处理过了")
     today = date.today().isoformat()
-    current = {s["id"]: s for s in scholars.scholars()}
+    current = scholars.scholars()
+    plan = R.plan_apply(current, run, excluded())
+    shown = {R.norm_name(p["name"]): p for p in run.get("ranking") or []}
+    from_scholar = "Scholar" in (run.get("citation_source") or "")
+    for c in plan["remove"]:
+        scholars.store.delete("scholars", c["id"])
     keep: set[str] = set()
-    for p in run["ranking"]:
-        rec = next((s for s in current.values() if R.same_person(p, s)), None)
-        patch = {"rank": p["rank"], "prev_rank": rec.get("rank") if rec else None, "rank_changed": today,
-                 "rank_by": run["citation_source"],
-                 "field_papers": {"count": p.get("field_papers"), "since": (run.get("rules") or {}).get("months")}}
-        if p.get("scholar_id") and "Scholar" in (run.get("citation_source") or ""):
-            patch["scholar_citations"] = {"value": p["citations"], "as_of": run["created"][:10], "source": run["citation_source"]}
-        if rec:
-            scholars.store.update("scholars", rec["id"], patch)
-            keep.add(rec["id"])
+    for n, c in plan["order"]:
+        p = shown.get(R.norm_name(c["name"])) or {}
+        patch: dict[str, Any] = {"rank": n, "prev_rank": c.get("rank") if c.get("id") else None, "rank_changed": today}
+        if p:
+            patch.update(rank_by=run["citation_source"],
+                         field_papers={"count": p.get("field_papers"), "since": (run.get("rules") or {}).get("months")})
+            if p.get("scholar_id") and from_scholar:
+                patch["scholar_citations"] = {"value": p["citations"], "as_of": run["created"][:10], "source": run["citation_source"]}
+        if c.get("id"):  # already on the list
+            scholars.store.update("scholars", c["id"], patch)
+            keep.add(c["id"])
             continue
-        sid = p.get("scholar_id")
-        lab_id, lab = _lab_for(p["name"])
-        lab = lab or p.get("lab_name")
-        new = {"name": p["name"], "openalex": p.get("openalex"), "scholar_id": sid, "affiliation": p.get("affiliation"),
-               "lab_id": lab_id, "lab": lab,
+        sid = c.get("scholar_id")
+        lab_id, lab = _lab_for(c["name"])
+        new = {"name": c["name"], "openalex": c.get("openalex"), "scholar_id": sid, "affiliation": c.get("affiliation"),
+               "lab_id": lab_id, "lab": lab or c.get("lab_name"),
                "photo": f"https://scholar.googleusercontent.com/citations?view_op=view_photo&user={sid}&citpid=2" if sid else None,
-               "added": run["id"],
-               "sources": {"rank": run["source"], "added": f"{run['id']} 建议，{today} 确认"}, **patch, "prev_rank": None}
+               "added": run["id"], "sources": {"rank": run["source"], "added": f"{run['id']} 建议，{today} 确认"}, **patch}
         keep.add(scholars.store.add("scholars", {k: v for k, v in new.items() if v is not None}, "s")["id"])
-    for sid, s in current.items():
-        if sid not in keep and not s.get("pinned"):
-            scholars.store.delete("scholars", sid)
-    store.update("runs", run_id, {"status": "applied", "applied_at": _now()})
+    store.update("runs", run_id, {"status": "applied", "applied_at": _now(), "apply_notes": plan["notes"] or None})
     scholars.refresh_in_background(ids=keep)
-    return status()
+    return {**status(), "notes": plan["notes"]}
 
 
 def _lab_index() -> dict[str, tuple[str, str]]:
