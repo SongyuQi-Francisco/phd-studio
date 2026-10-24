@@ -234,8 +234,42 @@ def test_find_by_name_accepts_folder_qualified_links(write_vault_file):
     assert notes.find_by_name("Ideas/Research Line - X") == p
 
 
-@pytest.mark.xfail(strict=True, reason="find_by_name lets '..' in the link target walk out of the vault (rglob joins it); "
-                                       "/api/note/find then fails in rel() with a 500 instead of a 404")
+def test_find_by_name_folder_path_link_resolves_from_the_vault_root(write_vault_file):
+    p = write_vault_file("02 Ideas/Idea A.md")
+    write_vault_file("Archive/02 Ideas/Idea A.md")
+    assert notes.find_by_name("02 Ideas/Idea A") == p
+
+
+def test_find_by_name_keeps_dots_in_the_name(write_vault_file):
+    p = write_vault_file("Papers/Smith et al. 2024.md")
+    v = write_vault_file("Notes/v1.2.md")
+    u = write_vault_file("Ideas/注意力 v2.0.md")
+    assert notes.find_by_name("Smith et al. 2024") == p
+    assert notes.find_by_name("v1.2") == v
+    assert notes.find_by_name("注意力 v2.0") == u
+
+
 def test_find_by_name_never_leaves_the_vault():
     (ROOT / "outside.md").write_text("secret", encoding="utf-8")
     assert notes.find_by_name("../outside") is None
+
+
+@pytest.mark.parametrize("name", ["Atlas/../../outside", "../../outside", "..", "Atlas/.."])
+def test_find_by_name_refuses_dotdot_segments(write_vault_file, name):
+    (ROOT / "outside.md").write_text("secret", encoding="utf-8")
+    write_vault_file("Atlas/Roadmap.md")
+    assert notes.find_by_name(name) is None
+
+
+def test_find_by_name_refuses_absolute_paths(write_vault_file):
+    outside = ROOT / "outside.md"
+    outside.write_text("secret", encoding="utf-8")
+    inside = write_vault_file("Atlas/Roadmap.md")
+    assert notes.find_by_name(str(outside.with_suffix(""))) is None
+    assert notes.find_by_name(str(inside.with_suffix(""))) is None
+
+
+def test_find_by_name_skips_a_symlink_that_leads_out_of_the_vault(write_vault_file):
+    (ROOT / "outside.md").write_text("secret", encoding="utf-8")
+    (config.VAULT_DIR / "Leak.md").symlink_to(ROOT / "outside.md")
+    assert notes.find_by_name("Leak") is None
