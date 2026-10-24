@@ -35,7 +35,7 @@ SNAPS = DIR / "snapshots"
 CHECK_TTL = 30 * 86400
 NOISE_TTL = 180 * 86400
 
-store = Store(RANKING_FILE, ("settings", "excluded", "runs"),
+store = Store(RANKING_FILE, ("settings", "excluded", "runs", "labs"),
               "# How the top-scholar list is recomputed, who is excluded, and every recompute's result.\n"
               "# Managed by PhD Studio (追踪 → 学者动态 → 立即更新). Personal: lives in the vault, not in the repo.\n")
 
@@ -49,6 +49,7 @@ DEFAULT_RULES: dict[str, Any] = {
     "keywords": ["recommendation", "recommender"],
     "topic_groups": [["recsys"], ["llm", "agent"]],
     "min_papers": 3, "months": 24, "top_n": 10, "alternates": 5,
+    "one_per_lab": True,  # keep only the best-cited scholar of each lab
     "cadence_days": 30, "auto": True,
 }
 
@@ -65,6 +66,9 @@ def rules() -> dict[str, Any]:
 
 def set_rules(patch: dict[str, Any]) -> dict[str, Any]:
     clean = {k: v for k, v in patch.items() if k in DEFAULT_RULES}
+    for k in ("one_per_lab", "auto"):
+        if k in clean:
+            clean[k] = bool(clean[k])
     for k in ("min_papers", "months", "top_n", "alternates", "cadence_days", "pages_per_label"):
         if k in clean:
             clean[k] = max(1, int(clean[k]))
@@ -93,6 +97,24 @@ def exclude(person: dict[str, Any], reason: str) -> dict[str, Any]:
 
 def unexclude(xid: str) -> None:
     store.delete("excluded", xid)
+
+
+def lab_hints() -> list[dict[str, Any]]:
+    """People's labs that neither the list nor the Lab Tracker notes know (for one-per-lab)."""
+    return store.load()["labs"]
+
+
+def set_lab_hint(person: dict[str, Any], lab_id: str | None, lab_name: str | None) -> dict[str, Any]:
+    rec = {k: person.get(k) for k in ("name", "scholar_id", "openalex") if person.get(k)}
+    if not rec.get("name"):
+        raise ValueError("需要姓名")
+    old = next((h for h in lab_hints() if R.same_person(h, rec)), None)
+    if not lab_id and not lab_name:  # "no lab": forget the hint
+        if old:
+            store.delete("labs", old["id"])
+        return {**rec, "lab_id": None}
+    patch = {**rec, "lab_id": lab_id, "lab_name": lab_name or lab_id}
+    return store.update("labs", old["id"], patch) if old else store.add("labs", patch, "l")
 
 
 def set_pin(sid: str, on: bool) -> dict[str, Any]:
@@ -268,7 +290,7 @@ def status() -> dict[str, Any]:
     pending = next((x for x in runs if x.get("status") == "proposed"), None)
     if pending:  # the Store drops empty lists on write
         pending = {**pending, **{k: pending.get(k) or [] for k in ("ranking", "alternates", "skipped", "enter", "leave", "moves")}}
-    return {"job": dict(_job), "rules": r, "excluded": excluded(), "pending": pending,
+    return {"job": dict(_job), "rules": r, "excluded": excluded(), "pending": pending, "lab_hints": lab_hints(),
             "history": [{k: x.get(k) for k in ("id", "created", "source", "status", "applied_at")} for x in runs[:12]],
             "snapshot": {k: snap.get(k) for k in ("date", "source", "file")} | {"count": len(snap.get("entries", []))} if snap else None,
             "capture": scholar_capture.available(), "next_auto": nxt}
@@ -351,7 +373,8 @@ def _openalex_candidates(current: list[dict[str, Any]], r: dict[str, Any]) -> li
 def _current() -> list[dict[str, Any]]:
     return [{"name": s["name"], "scholar_id": s.get("scholar_id"), "openalex": s.get("openalex"), "rank": s.get("rank"),
              "pinned": bool(s.get("pinned")), "citations": (s.get("scholar_citations") or {}).get("value") or 0,
-             "affiliation": s.get("affiliation"), "id": s["id"]} for s in scholars.scholars()]
+             "affiliation": s.get("affiliation"), "lab_id": s.get("lab_id"), "lab_name": s.get("lab"), "id": s["id"]}
+            for s in scholars.scholars()]
 
 
 def _run(manual: bool) -> None:
@@ -363,7 +386,7 @@ def _run(manual: bool) -> None:
         if entries:
             # the current list joins the candidates (and lends its known OpenAlex ids); citations
             # come from this ranking when the person is in it
-            known = [{k: v for k, v in c.items() if k not in ("rank", "id")} for c in current]
+            known = [{k: v for k, v in c.items() if k not in ("rank", "id", "lab_id", "lab_name")} for c in current]
             for c in known:
                 if any(R.same_person(c, e) for e in entries):
                     c.pop("citations", None)
@@ -372,6 +395,7 @@ def _run(manual: bool) -> None:
             _progress(stage="openalex")
             source, cite_src = "OpenAlex（Scholar 不可用，按 OpenAlex 被引排序）", f"OpenAlex, {date.today()}"
             candidates = _openalex_candidates(current, r)
+        candidates = _with_labs(candidates, current)
         _progress(stage="check", source=source, total=len(candidates))
         counter = {"n": 0}
 
@@ -381,14 +405,14 @@ def _run(manual: bool) -> None:
             return check(c, r)
         pins = [c for c in current if c["pinned"]]
         result = R.rank(candidates, judge, top_n=r["top_n"], alternates=r["alternates"], min_papers=r["min_papers"],
-                        pinned=pins, excluded=excluded())
+                        pinned=pins, excluded=excluded(), one_per_lab=r["one_per_lab"])
         d = R.diff(current, result["list"])
         slim = lambda c: {k: c.get(k) for k in ("name", "scholar_id", "openalex", "citations", "affiliation", "rank",  # noqa: E731
-                                                "pinned", "reason", "scholar_rank", "via")} | (
+                                                "pinned", "reason", "scholar_rank", "via", "lab_name", "same_lab")} | (
             {"field_papers": c["verdict"].get("field_papers"), "titles": c["verdict"].get("titles", [])[:3],
              "openalex": c["verdict"].get("openalex") or c.get("openalex")} if c.get("verdict") else {})
         run = {"created": _now(), "source": source, "citation_source": cite_src, "status": "proposed", "manual": manual,
-               "rules": {k: r[k] for k in ("min_papers", "months", "top_n", "keywords", "topic_groups")},
+               "rules": {k: r[k] for k in ("min_papers", "months", "top_n", "keywords", "topic_groups", "one_per_lab")},
                "ranking": [slim(c) for c in result["list"]], "alternates": [slim(c) for c in result["alternates"]],
                "skipped": [slim(c) for c in result["skipped"][:40]],
                "enter": [slim(c) for c in d["enter"]], "leave": [slim(c) for c in d["leave"]], "moves": d["moves"]}
@@ -429,6 +453,7 @@ def apply(run_id: str) -> dict[str, Any]:
             continue
         sid = p.get("scholar_id")
         lab_id, lab = _lab_for(p["name"])
+        lab = lab or p.get("lab_name")
         new = {"name": p["name"], "openalex": p.get("openalex"), "scholar_id": sid, "affiliation": p.get("affiliation"),
                "lab_id": lab_id, "lab": lab,
                "photo": f"https://scholar.googleusercontent.com/citations?view_op=view_photo&user={sid}&citpid=2" if sid else None,
@@ -443,15 +468,36 @@ def apply(run_id: str) -> dict[str, Any]:
     return status()
 
 
-def _lab_for(name: str) -> tuple[str | None, str | None]:
-    """(lab_id, lab name) of the Lab Tracker lab that lists this person, if any."""
-    want = R.norm_name(name)
+def _lab_index() -> dict[str, tuple[str, str]]:
+    """Person (normalised name) -> (lab_id, lab note name) from the Lab Tracker lab notes."""
+    out: dict[str, tuple[str, str]] = {}
     labs_dir = LAB_TRACKER_DIR / "Labs"
     for f in sorted(labs_dir.glob("*.md")) if labs_dir.exists() else []:
         fm = notes.read(f)["frontmatter"]
-        if any(R.norm_name(n) == want for n in fm.get("arxiv_names") or []):
-            return fm.get("lab_id"), f.stem
-    return None, None
+        for n in fm.get("arxiv_names") or []:
+            if fm.get("lab_id"):
+                out.setdefault(R.norm_name(n), (fm["lab_id"], f.stem))
+    return out
+
+
+def _lab_for(name: str) -> tuple[str | None, str | None]:
+    """(lab_id, lab name) of the Lab Tracker lab that lists this person, if any."""
+    return _lab_index().get(R.norm_name(name), (None, None))
+
+
+def _with_labs(candidates: list[dict[str, Any]], current: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Give every candidate a lab key (list record's lab, else the Lab Tracker notes) for one-per-lab."""
+    idx = _lab_index()
+    hints = lab_hints()
+    out = []
+    for c in candidates:
+        rec = next((x for x in current if R.same_person(c, x)), None) \
+            or next(({"lab_id": h.get("lab_id"), "lab_name": h.get("lab_name")} for h in hints if R.same_person(c, h)), None)
+        lab_id = (rec or {}).get("lab_id") or idx.get(R.norm_name(c.get("name", "")), (None, None))[0]
+        lab_name = (rec or {}).get("lab_name") or idx.get(R.norm_name(c.get("name", "")), (None, None))[1]
+        key = lab_id or (f"name:{lab_name.lower()}" if lab_name else None)
+        out.append(dict(c, lab=key, lab_name=lab_name or lab_id))
+    return out
 
 
 def dismiss(run_id: str) -> dict[str, Any]:

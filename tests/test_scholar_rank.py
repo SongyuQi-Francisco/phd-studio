@@ -136,13 +136,49 @@ def test_rank_is_lazy_and_fills_alternates():
     assert calls == ["A", "B", "C", "D"]  # E and F are never looked up
 
 
-def test_pinned_stays_even_when_failing_and_takes_a_slot():
+def test_pinned_stays_even_when_failing_and_comes_on_top_of_the_ranked_list():
     cands = [person("A", 900, "A" * 12), person("B", 800, "B" * 12), person("P", 10, "P" * 12)]
     check, _ = checks({"A": 9, "B": 9, "P": 0})
     out = R.rank(cands, check, top_n=2, alternates=1, min_papers=3, pinned=[{"name": "P", "scholar_id": "P" * 12}])
-    assert [c["name"] for c in out["list"]] == ["A", "P"]
-    assert out["list"][1]["pinned"] is True
-    assert [c["name"] for c in out["alternates"]] == ["B"]
+    assert [(c["name"], c["rank"]) for c in out["list"]] == [("A", 1), ("B", 2), ("P", 3)]
+    assert out["list"][2]["pinned"] is True and "pinned" not in out["list"][0]
+    assert out["alternates"] == []
+
+
+# ---------- one per lab ----------
+
+LABS = [person("Head", 900, "H" * 12, lab="lab-x"), person("Student", 800, "S" * 12, lab="lab-x"),
+        person("Other", 700, "O" * 12, lab="lab-y"), person("Loner", 600, "L" * 12), person("Twin", 500, "T" * 12, lab="lab-y")]
+
+
+def test_one_per_lab_keeps_the_best_cited_and_says_who_holds_the_lab():
+    check, calls = checks({n: 9 for n in ("Head", "Student", "Other", "Loner", "Twin")})
+    out = R.rank(LABS, check, top_n=3, alternates=1, min_papers=3)
+    assert [c["name"] for c in out["list"]] == ["Head", "Other", "Loner"]
+    assert out["alternates"] == []  # Twin shares lab-y with Other
+    reasons = {c["name"]: c["reason"] for c in out["skipped"]}
+    assert reasons == {"Student": "同实验室已有 Head", "Twin": "同实验室已有 Other"}
+    assert "Student" not in calls and "Twin" not in calls  # no lookup spent on them
+
+
+def test_one_per_lab_can_be_turned_off():
+    check, _ = checks({n: 9 for n in ("Head", "Student", "Other", "Loner", "Twin")})
+    out = R.rank(LABS, check, top_n=3, alternates=1, min_papers=3, one_per_lab=False)
+    assert [c["name"] for c in out["list"]] == ["Head", "Student", "Other"]
+    assert [c["name"] for c in out["alternates"]] == ["Loner"]
+
+
+def test_a_lab_member_who_fails_does_not_block_the_next_one():
+    check, _ = checks({"Head": 0, "Student": 5, "Other": 5, "Loner": 5, "Twin": 5})
+    out = R.rank(LABS, check, top_n=2, alternates=0, min_papers=3)
+    assert [c["name"] for c in out["list"]] == ["Student", "Other"]
+
+
+def test_pinned_scholar_holds_their_lab():
+    check, calls = checks({n: 9 for n in ("Head", "Student", "Other", "Loner", "Twin")})
+    out = R.rank(LABS, check, top_n=2, alternates=0, min_papers=3, pinned=[{"name": "Twin", "scholar_id": "T" * 12}])
+    assert [c["name"] for c in out["list"]] == ["Head", "Loner", "Twin"]
+    assert {c["name"]: c["reason"] for c in out["skipped"]}["Other"] == "同实验室已有 Twin"
 
 
 def test_excluded_matches_by_name_when_ids_differ():

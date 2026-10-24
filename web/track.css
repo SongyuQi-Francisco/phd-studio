@@ -279,3 +279,4 @@ button.tk-chip:hover { background: var(--hover); color: var(--text); }
 .tk-sheet-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; position: sticky; bottom: -18px; background: var(--surface); padding: 10px 0; }
 .tk-skipped summary { cursor: pointer; }
 .tk-skipped .m, .tk-hist { font-size: 11.5px; color: var(--text-2); padding: 2px 4px; }
+.tk-labpick { border: 1px solid var(--line); border-radius: 7px; background: var(--surface-2); font-size: 11.5px; padding: 2px 4px; max-width: 170px; color: var(--text-2); }

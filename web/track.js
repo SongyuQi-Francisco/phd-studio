@@ -199,6 +199,21 @@ function RefreshBanner({ R, onOpen }) {
       <span class="spacer" /><button class="btn primary" onClick=${onOpen}>查看并确认</button></div>`}`;
 }
 
+// "Same lab as …" for a candidate the app cannot place; saved as a hint, used from the next recompute.
+function LabPick({ c, list, R, toast }) {
+  const labs = [...new Map(list.filter((s) => s.lab_id || s.lab).map((s) => [s.lab_id || s.lab, s])).values()];
+  const save = async (e) => {
+    const s = labs.find((x) => (x.lab_id || x.lab) === e.target.value);
+    try {
+      await api("/api/track/scholars/lab-hint", { json: { name: c.name, scholar_id: c.scholar_id, openalex: c.openalex, lab_id: s?.lab_id || null, lab_name: s?.lab || null } });
+      toast(s ? `已记下：${c.name} 与 ${s.name} 同实验室，重算后生效` : `已取消 ${c.name} 的实验室归属`); R.load();
+    } catch (x) { toast(x.message); }
+  };
+  return html`<select class="tk-labpick" title="和名单里谁同一个实验室？（每个实验室只留一人）" onChange=${save}>
+    <option value="">${c.lab_name ? c.lab_name : "实验室：未知"}</option>
+    ${labs.map((s) => html`<option value=${s.lab_id || s.lab}>同实验室：${s.name}</option>`)}</select>`;
+}
+
 function ProposalSheet({ R, list, onClose, toast }) {
   const p = R.rf?.pending;
   if (!p) return null;
@@ -212,13 +227,13 @@ function ProposalSheet({ R, list, onClose, toast }) {
   const r = p.rules || {};
   return html`<div class="tk-sheet-bg" onClick=${(e) => e.target === e.currentTarget && onClose()}><div class="tk-sheet">
     <div class="head"><h2>名单更新建议</h2><span class="spacer" /><button class="abtn" onClick=${onClose}><${Icon} name="x" sm /></button></div>
-    <div class="muted small">${p.source} · ${p.created?.slice(0, 16).replace("T", " ")} · 规则：近 ${r.months} 个月 ≥${r.min_papers} 篇领域论文，取前 ${r.top_n}</div>
+    <div class="muted small">${p.source} · ${p.created?.slice(0, 16).replace("T", " ")} · 规则：近 ${r.months} 个月 ≥${r.min_papers} 篇领域论文，取前 ${r.top_n}${r.one_per_lab ? "，每个实验室只留被引最高的一人（同实验室的其他人见「被跳过」）" : ""}；固定的学者另外保留，不占名额</div>
     ${p.enter.length > 0 && html`<div class="label">新进入（${p.enter.length}）</div>
       ${p.enter.map((c) => html`<div class="tk-erow" style=${{ gridTemplateColumns: "26px 1fr auto auto" }}>
         <span class="n">#${p.ranking.find((x) => x.name === c.name)?.rank ?? ""}</span>
-        <div><b>${c.name}</b><div class="m">${c.affiliation || ""} · 被引 ${fmtN(c.citations)} · 近期领域论文 ${c.field_papers ?? "—"} 篇</div>
+        <div><b>${c.name}</b><div class="m">${c.lab_name || c.affiliation || ""} · 被引 ${fmtN(c.citations)} · 近期领域论文 ${c.field_papers ?? "—"} 篇</div>
           ${(c.titles || []).slice(0, 2).map((t) => html`<div class="m">· ${t}</div>`)}</div>
-        <span class="tk-mv new">新</span><button class="linkbtn" onClick=${() => ex(c)}>排除</button></div>`)}`}
+        <span class="tk-mv new">新</span><span><${LabPick} c=${c} list=${list} R=${R} toast=${toast} /> <button class="linkbtn" onClick=${() => ex(c)}>排除</button></span></div>`)}`}
     ${p.leave.length > 0 && html`<div class="label">将移出（${p.leave.length}）</div>
       ${p.leave.map((c) => html`<div class="tk-erow" style=${{ gridTemplateColumns: "26px 1fr auto" }}>
         <span class="n">#${c.rank ?? ""}</span><div><b>${c.name}</b><div class="m">${reasonOf(c)}</div></div>
@@ -226,10 +241,13 @@ function ProposalSheet({ R, list, onClose, toast }) {
     ${!p.enter.length && !p.leave.length && html`<div class="muted pad">没有人进出，只有名次和被引数更新。</div>`}
     <div class="label">新名单</div>
     ${p.ranking.map((c) => html`<div class="tk-erow" style=${{ gridTemplateColumns: "26px 1fr auto auto" }}>
-      <span class="n">${c.rank}</span><div><b>${c.name}</b> ${c.pinned && html`<span class="tk-badge">固定</span>`}
-        <div class="m">被引 ${fmtN(c.citations)} · 近期领域论文 ${c.field_papers ?? "—"} 篇</div></div>
+      <span class="n">${c.rank}</span><div><b>${c.name}</b> ${c.pinned && html`<span class="tk-badge" title="固定：不占前 ${r.top_n} 名额，永不自动移除">固定</span>`}
+        <div class="m">${c.lab_name ? `${c.lab_name} · ` : ""}被引 ${fmtN(c.citations)} · 近期领域论文 ${c.field_papers ?? "—"} 篇</div></div>
       ${move(c)}<span /></div>`)}
-    ${p.alternates.length > 0 && html`<div class="label">候补</div><div class="muted small">${p.alternates.map((c) => `${c.name}（${fmtN(c.citations)}，${c.field_papers} 篇）`).join("、")}</div>`}
+    ${p.alternates.length > 0 && html`<div class="label">候补</div>
+      ${p.alternates.map((c) => html`<div class="tk-erow" style=${{ gridTemplateColumns: "1fr auto" }}>
+        <div><b>${c.name}</b><div class="m">${c.lab_name ? `${c.lab_name} · ` : ""}被引 ${fmtN(c.citations)} · 近期领域论文 ${c.field_papers} 篇</div></div>
+        <${LabPick} c=${c} list=${list} R=${R} toast=${toast} /></div>`)}`}
     ${p.skipped.length > 0 && html`<details class="tk-skipped"><summary class="label">被跳过的候选（${p.skipped.length}）</summary>
       ${p.skipped.map((c) => html`<div class="m">${c.name} · ${fmtN(c.citations)} · ${c.reason}</div>`)}</details>`}
     <div class="tk-sheet-actions"><button class="btn" onClick=${() => { R.dismiss(p.id); onClose(); }}>忽略</button>
@@ -258,6 +276,7 @@ function ListRules({ R, toast }) {
     <div class="tk-rules">
       <label class="tk-rule"><input type="checkbox" checked=${form.auto} onChange=${(e) => setForm({ ...form, auto: e.target.checked })} /> 每 ${num("cadence_days", "", 48)} 天自动重算</label>
       ${num("top_n", "名单人数")}${num("min_papers", "近期论文至少")}${num("months", "近期 = 最近（月）")}
+      <label class="tk-rule" title="同一实验室只保留被引最高的一人；实验室来自名单记录或 Lab Tracker 笔记"><input type="checkbox" checked=${form.one_per_lab} onChange=${(e) => setForm({ ...form, one_per_lab: e.target.checked })} /> 每个实验室只留一人</label>
       <label class="tk-rule wide">领域关键词（OpenAlex 检索，逗号分隔）<input value=${form.keywords} onInput=${(e) => setForm({ ...form, keywords: e.target.value })} /></label>
       <label class="tk-rule wide">Scholar 标签检索（每行一个 mauthors）<textarea rows="3" value=${form.labels} onInput=${(e) => setForm({ ...form, labels: e.target.value })} /></label>
       <div class="tk-rule wide muted small">主题要求：${(rf.rules.topic_groups || []).map((g) => g.join(" 或 ")).join(" 且 ")}（每周巡检的主题模型）· 下次自动：${rf.next_auto || "—"}</div>

@@ -7,7 +7,8 @@ unit-tested; app/scholar_refresh.py feeds them Scholar rankings and OpenAlex dat
   (title/abstract topics must hit every topic group, e.g. RecSys AND (LLM or Agent); workshop
   and tutorial items do not count), is not citation noise (most citations from non-field work or
   from mega-collaborations), is still publishing, and is not on the exclude list.
-- Pinned scholars always stay; the remaining slots go to the best-cited candidates that pass.
+- The list is the best-cited candidates that pass (by default one per lab), plus pinned
+  scholars on top; pinned scholars never take a ranked slot and are never removed.
 """
 from __future__ import annotations
 
@@ -161,23 +162,34 @@ def inactive_verdict(last_work: str | None, today: date, years: int = 3) -> str 
 
 def rank(candidates: list[dict[str, Any]], check: Callable[[dict[str, Any]], dict[str, Any]], *, top_n: int = 10,
          alternates: int = 5, min_papers: int = 3, pinned: Iterable[dict[str, Any]] = (),
-         excluded: Iterable[dict[str, Any]] = ()) -> dict[str, Any]:
+         excluded: Iterable[dict[str, Any]] = (), one_per_lab: bool = True) -> dict[str, Any]:
     """Walk candidates by citations; `check(c)` (called lazily, only as far as needed) returns
-    {field_papers, noise, inactive, ...}. Pinned people always stay; excluded people are never used.
-    People are matched by Scholar id, else OpenAlex id, else name."""
+    {field_papers, noise, inactive, ...}.
+
+    - The list is the `top_n` best-cited candidates that pass, plus every pinned person on top
+      (pins never take a ranked slot and are never dropped).
+    - Excluded people are never used. People are matched by Scholar id, else OpenAlex id, else name.
+    - one_per_lab: a candidate whose `lab` already has someone on the list, among the alternates
+      or pinned, is skipped ("同实验室已有 X"); a lab's first member who fails the filter does not
+      block the next one. Candidates without a known lab are never grouped.
+    """
     pinned, excluded = list(pinned), list(excluded)
     ordered = sorted(candidates, key=lambda c: -(c.get("citations") or 0))
     is_pin = [any(same_person(c, p) for p in pinned) for c in ordered]
-    slots = max(0, top_n - sum(is_pin))
-    chosen: list[dict[str, Any]] = []
+    ranked: list[dict[str, Any]] = []
+    pins: list[dict[str, Any]] = []
     alts: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
-    open_slots = lambda: slots - sum(1 for x in chosen if not x.get("pinned"))  # noqa: E731
+    lab_of: dict[str, str] = {}  # lab -> who holds it
+    if one_per_lab:
+        for c, pin in zip(ordered, is_pin):
+            if pin and c.get("lab"):
+                lab_of.setdefault(c["lab"], c.get("name", ""))
     for i, c in enumerate(ordered):
         if is_pin[i]:
-            chosen.append(dict(c, pinned=True, verdict=_safe_check(check, c)))
+            pins.append(dict(c, pinned=True, verdict=_safe_check(check, c)))
             continue
-        if open_slots() <= 0 and len(alts) >= alternates:
+        if len(ranked) >= top_n and len(alts) >= alternates:
             if not any(is_pin[i:]):
                 break
             continue
@@ -190,17 +202,22 @@ def rank(candidates: list[dict[str, Any]], check: Callable[[dict[str, Any]], dic
         if c.get("noise"):
             skipped.append(dict(c, reason="快照标注：被引来自领域外的大合作"))
             continue
+        if one_per_lab and c.get("lab") in lab_of:
+            skipped.append(dict(c, reason=f"同实验室已有 {lab_of[c['lab']]}", same_lab=lab_of[c["lab"]]))
+            continue
         v = check(c)
         reason = v.get("noise") or v.get("inactive")
         if not reason and (v.get("field_papers") or 0) < min_papers:
             reason = f"近期领域论文 {v.get('field_papers') or 0} 篇（需 ≥{min_papers}）"
         if reason:
             skipped.append(dict(c, reason=reason, verdict=v))
-        elif open_slots() > 0:
-            chosen.append(dict(c, verdict=v))
-        else:
-            alts.append(dict(c, verdict=v))
-    chosen.sort(key=lambda c: -(c.get("citations") or 0))
+            continue
+        (ranked if len(ranked) < top_n else alts).append(dict(c, verdict=v))
+        if one_per_lab and c.get("lab"):
+            lab_of[c["lab"]] = c.get("name", "")
+    ranked.sort(key=lambda c: -(c.get("citations") or 0))
+    pins.sort(key=lambda c: -(c.get("citations") or 0))
+    chosen = ranked + pins  # pinned people rank after the ranked ones
     for n, c in enumerate(chosen, 1):
         c["rank"] = n
     return {"list": chosen, "alternates": alts, "skipped": skipped}

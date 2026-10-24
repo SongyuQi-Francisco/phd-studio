@@ -88,6 +88,15 @@ def list_unexclude(xid: str) -> dict[str, bool]:
     return {"ok": True}
 
 
+@router.post("/scholars/lab-hint")
+def list_lab_hint(body: dict[str, Any]) -> dict[str, Any]:
+    """Which lab a candidate belongs to (for one-per-lab), when the list and Lab Tracker do not know."""
+    try:
+        return scholar_refresh.set_lab_hint(body, body.get("lab_id") or None, body.get("lab_name") or None)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @router.post("/scholars/{sid}/pin")
 def scholar_pin(sid: str, body: dict[str, Any]) -> dict[str, Any]:
     try:
