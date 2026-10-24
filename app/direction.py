@@ -17,7 +17,8 @@ _KILL_HIT_REV = re.compile(r"(partially triggered|部分触发|triggered|已触�
 def _line_for(name: str, fm: dict[str, Any]) -> str | None:
     """Which configured research line ('Project A', 'Project B') a note belongs to."""
     hay = (name + " " + " ".join(map(str, fm.get("tags") or []))).lower().replace(" ", "")
-    for ln in PROFILE.get("lines", []):
+    # longest first: a note on "Project AB" must not count as "Project A"
+    for ln in sorted(PROFILE.get("lines", []), key=lambda x: -len(x.replace(" ", ""))):
         if ln.lower().replace(" ", "") in hay:
             return ln
     return None

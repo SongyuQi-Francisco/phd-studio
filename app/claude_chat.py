@@ -462,16 +462,22 @@ class StudioChat(PaperChat):
 class LineChat(StudioChat):
     """A research line's own long-running conversation: the studio tools plus the line's context."""
 
-    def __init__(self, stem: str, line: dict[str, Any]):
+    def __init__(self, stem: str):
         super().__init__(stem)
-        self.line = line
+        self.line_prompt = ""
+
+    def _line_prompt(self) -> str:
+        return line_chat.system_prompt(line_chat.resolve(self.stem))
+
+    async def _ensure_client(self) -> ClaudeSDKClient:
+        if self.client is None:
+            # Fresh paths, kill states and deadlines on every (re)connect; reading them is file work,
+            # so it runs off the event loop and other chats keep streaming.
+            self.line_prompt = await asyncio.to_thread(self._line_prompt)
+        return await super()._ensure_client()
 
     def _prompt(self) -> str:
-        try:  # fresh paths, kill states and deadlines each time the session (re)connects
-            self.line = line_chat.resolve(self.stem)
-        except FileNotFoundError:
-            pass
-        return line_chat.system_prompt(self.line)
+        return self.line_prompt or self._line_prompt()
 
 
 class ChatRegistry:
@@ -484,8 +490,10 @@ class ChatRegistry:
                 self.chats[stem] = StudioChat(stem)
             return self.chats[stem]
         if line_chat.is_line_key(stem):
+            if not line_chat.known(stem):
+                raise FileNotFoundError(stem)
             if stem not in self.chats:
-                self.chats[stem] = LineChat(stem, line_chat.resolve(stem))
+                self.chats[stem] = LineChat(stem)
             return self.chats[stem]
         library.validate(stem)
         if stem not in self.chats:

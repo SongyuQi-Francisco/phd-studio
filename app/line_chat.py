@@ -1,22 +1,27 @@
 """Research-line chats: one long-running Claude conversation per research line, and the
 advisor review packet (导师汇报包) drafted from it.
 
-A line's chat key comes from its name, so it survives restarts and is the same on every
-machine; the session id and the chat log stay per device, like paper chats. The system
-prompt names the line's note and the folders around it (roadmap, idea radar, plan,
-evidence, review packets); Claude reads them with tools when it needs them.
+A line's chat key comes from its note's file name (or, for a configured line without a
+note, from that name), never from the page's sort order, so it survives restarts and edits.
+The session id and the chat log stay per device, like paper chats. The system prompt names
+the line's note and the folders around it (roadmap, idea radar, plan, evidence, review
+packets); Claude reads them with tools when it needs them.
 """
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 import re
+import tempfile
 import unicodedata
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
 from . import config, library, notes
-from .config import AGENTS_MD, CHATS_DIR, IDEA_RADAR, IDEA_TEMPLATE, PLAN_FILE, PROFILE, ROADMAP, VAULT_DIR
+from .config import (AGENTS_MD, CHATS_DIR, IDEA_RADAR, IDEA_TEMPLATE, IDEAS_DIR, PLAN_FILE, PROFILE, ROADMAP,
+                     STATE_DIR, VAULT_DIR)
 
 PREFIX = "line:"
 _KEY = re.compile(r"^line:(?:[a-z0-9]+(?:-[a-z0-9]+)*-)?[0-9a-f]{12}$")
@@ -26,6 +31,9 @@ DEFAULT_TEMPLATE = Path(__file__).with_name("templates") / "review_packet.md"
 TEMPLATE_NAMES = ("review packet template", "advisor packet template", "advisor review packet template",
                   "导师汇报包模板", "汇报包模板")
 KILL_LABELS = {"clear": "未触发", "partial": "部分触发", "triggered": "已触发"}
+# Chats a note took over from its configured line (see keys()); per device, like the chats themselves.
+ALIASES_FILE = STATE_DIR / "line_keys.json"
+_cache: dict[tuple[str, Path], tuple[tuple[int, int, int], Any]] = {}  # (kind, file) -> (stat stamp, value)
 
 
 def _norm(name: str) -> str:
@@ -36,11 +44,12 @@ def _squash(name: str) -> str:
     return re.sub(r"[\s_\-–—·.]+", "", _norm(name))
 
 
-def line_key(name: str) -> str:
-    """Chat key for a line name. Ignores case, spacing and Unicode normalization; safe in URLs and file names."""
-    n = _norm(name)
-    digest = hashlib.sha1(n.encode("utf-8")).hexdigest()[:12]
-    slug = "-".join(re.findall(r"[a-z0-9]+", re.sub(r"^research line\s*-\s*", "", n)))[:32].strip("-")
+def line_key(identity: str, label: str | None = None) -> str:
+    """Chat key: a hash of `identity` (case, spacing and Unicode form ignored) after an ASCII slug of
+    `label` for people reading the state folder. Safe in URLs and file names."""
+    digest = hashlib.sha1(_norm(identity).encode("utf-8")).hexdigest()[:12]
+    words = re.sub(r"^research line\s*-\s*", "", _norm(identity if label is None else label))
+    slug = "-".join(re.findall(r"[a-z0-9]+", words))[:32].strip("-")
     return f"{PREFIX}{slug}-{digest}" if slug else f"{PREFIX}{digest}"
 
 
@@ -56,26 +65,120 @@ def label(line: dict[str, Any]) -> str:
     return short(line["name"])
 
 
-def assign_keys(items: list[dict[str, Any]]) -> None:
-    """Give every research line a chat key: its configured line name, else its note name.
+def _cached(kind: str, p: Path, compute):
+    """compute(p), redone only when the file changes (size, mtime or inode)."""
+    st = p.stat()
+    stamp = (st.st_mtime_ns, st.st_size, st.st_ino)
+    hit = _cache.get((kind, p))
+    if hit and hit[0] == stamp:
+        return hit[1]
+    value = compute(p)
+    _cache[(kind, p)] = (stamp, value)
+    return value
 
-    Two notes on the same configured line keep apart: the later one is keyed by its note name.
-    """
-    seen: set[str] = set()
-    for item in items:
-        if item.get("kind") != "research-line":
+
+def _read_frontmatter(p: Path) -> dict[str, Any]:
+    with p.open("rb") as f:
+        head = f.read(16384)
+        if head.startswith(b"---") and b"\n---" not in head[3:]:
+            head += f.read()  # frontmatter longer than the first block
+    return notes.split(head.decode("utf-8", errors="replace"))[0]
+
+
+def _frontmatter(p: Path) -> dict[str, Any]:
+    try:
+        return _cached("fm", p, _read_frontmatter)
+    except OSError:
+        return {}
+
+
+def identity(item: dict[str, Any]) -> str:
+    """What a research line is: its note (by file name; one folder, so names are unique), or a configured line."""
+    return f"note:{item['name']}" if item.get("path") else f"config:{item.get('line') or item['name']}"
+
+
+def _lines_index() -> list[dict[str, Any]]:
+    """Research lines as the 方向 page lists them, from frontmatter only (cheap enough for the event loop)."""
+    from .direction import _line_for  # direction imports this module
+
+    found, covered = [], set()
+    for p in sorted(IDEAS_DIR.glob("*.md")):
+        fm = _frontmatter(p)
+        if fm.get("type") not in ("research-line", "idea"):
             continue
-        key = line_key(item.get("line") or item["name"])
-        if key in seen:
-            key = line_key(item["name"])
-        seen.add(key)
-        item["chat_key"] = key
+        line = _line_for(p.stem, fm)
+        covered.add(line)
+        if fm.get("type") == "research-line":
+            found.append({"name": p.stem, "path": p.name, "line": line})
+    return found + [{"name": ln, "path": None, "line": ln} for ln in PROFILE.get("lines", []) if ln not in covered]
+
+
+def _load_aliases() -> dict[str, str]:
+    try:
+        data = json.loads(ALIASES_FILE.read_text(encoding="utf-8"))
+        return {k: v for k, v in data.items() if is_line_key(v)} if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_aliases(aliases: dict[str, str]) -> None:
+    fd, tmp = tempfile.mkstemp(dir=ALIASES_FILE.parent, prefix=".line_keys.", suffix=".tmp")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(aliases, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, ALIASES_FILE)
+
+
+def _has_chat(key: str) -> bool:
+    return (CHATS_DIR / f"{library.safe_name(key)}.jsonl").exists()
+
+
+def keys() -> dict[str, str]:
+    """identity -> chat key for every research line on the 方向 page.
+
+    Keys come from the identity alone, so sorting, pausing or re-prioritising lines never moves a
+    chat. One exception, decided once and saved: when a configured line that already has a chat gets
+    its first research-line note, that note takes the chat over (the first note by name, if several).
+    """
+    items = _lines_index()
+    derived = {identity(x): line_key(identity(x), short(x["name"])) for x in items}
+    live_config = {derived[identity(x)] for x in items if not x["path"]}
+    aliases = _load_aliases()
+    taken = set(aliases.values())
+    changed = False
+    for x in items:
+        ident = identity(x)
+        if not x["path"] or not x["line"] or ident in aliases:
+            continue
+        inherited = line_key(f"config:{x['line']}", x["line"])
+        if inherited not in taken and inherited not in live_config and _has_chat(inherited):
+            aliases[ident] = inherited
+            taken.add(inherited)
+            changed = True
+    if changed:
+        _save_aliases(aliases)
+    # An alias yields to its configured line when that line is back on the page without a note.
+    return {ident: aliases[ident] if aliases.get(ident) not in (None, *live_config) else key
+            for ident, key in derived.items()}
+
+
+def known(key: str) -> bool:
+    """Whether a chat key belongs to a research line now on the 方向 page (cheap)."""
+    return is_line_key(key) and key in keys().values()
+
+
+def assign_keys(items: list[dict[str, Any]]) -> None:
+    """Give every research line on the 方向 page its chat key."""
+    by_identity = keys()
+    for item in items:
+        if item.get("kind") == "research-line":
+            item["chat_key"] = by_identity.get(identity(item)) or line_key(identity(item), short(item["name"]))
 
 
 def resolve(key: str) -> dict[str, Any]:
-    """The research line (as on the 方向 page) a chat key belongs to."""
-    if not is_line_key(key):
-        raise FileNotFoundError(key)
+    """The research line (as on the 方向 page) a chat key belongs to. Reads plan, notes and packets:
+    call it off the event loop."""
+    if not known(key):
+        raise FileNotFoundError(f"没有这条研究线：{key}")
     from . import direction  # direction imports this module
 
     for item in direction.lines():
@@ -84,11 +187,15 @@ def resolve(key: str) -> dict[str, Any]:
     raise FileNotFoundError(f"没有这条研究线：{key}")
 
 
+def _count_turns(p: Path) -> int:
+    return p.read_bytes().count(b'"role": "user"')
+
+
 def chat_stats(key: str) -> dict[str, Any]:
-    """Turns in a line's current chat log and when it was last written."""
+    """Turns in a line's current chat log and when it was last written (re-counted only when it changes)."""
     p = CHATS_DIR / f"{library.safe_name(key)}.jsonl"
     try:
-        return {"turns": p.read_text(encoding="utf-8").count('"role": "user"'), "last": p.stat().st_mtime}
+        return {"turns": _cached("turns", p, _count_turns), "last": p.stat().st_mtime}
     except OSError:
         return {"turns": 0, "last": None}
 
@@ -138,13 +245,6 @@ def _md_count(d: Path) -> int:
 # ---------------- review packets ----------------
 
 
-def _frontmatter(p: Path) -> dict[str, Any]:
-    try:
-        return notes.split(p.read_text(encoding="utf-8", errors="replace"))[0]
-    except OSError:
-        return {}
-
-
 def _packet_date(p: Path, fm: dict[str, Any]) -> str:
     for k in ("created", "date"):
         v = fm.get(k)
@@ -177,13 +277,23 @@ def _values(v: Any) -> list[str]:
     return [notes.WIKILINK.sub(lambda m: m.group(1), str(x)).strip() for x in vals if x]
 
 
+def _stem_core(stem: str) -> str:
+    """'Advisor Packet - Project A 2026-10-12 (2)' -> 'Project A'."""
+    s = re.sub(r"\s*\(\d+\)$", "", stem)
+    s = re.sub(r"[\s_-]*20\d\d-\d\d-\d\d$", "", s)
+    return re.sub(r"^.*?(?:packet|汇报包)\s*[-–—:：]\s*", "", s, flags=re.I)
+
+
 def _about(packet: dict[str, Any], names: set[str]) -> bool:
+    """Whether a packet is about this line: what its frontmatter says when it names a line, else a tag
+    or a file name that is exactly the line's name (with an optional "... Packet - " and date)."""
     fm = packet["fm"]
-    for k in ("line", "lines", "research_line", "tags"):
-        if any(_squash(v) in names for v in _values(fm.get(k))):
-            return True
-    stem = _squash(packet["name"])
-    return any(n in stem for n in names)
+    declared = [v for k in ("line", "lines", "research_line") for v in _values(fm.get(k))]
+    if declared:
+        return any(_squash(v) in names for v in declared)
+    if any(_squash(v) in names for v in _values(fm.get("tags"))):
+        return True
+    return _squash(_stem_core(packet["name"])) in names
 
 
 def _is_advisor(packet: dict[str, Any]) -> bool:

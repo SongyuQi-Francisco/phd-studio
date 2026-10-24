@@ -1,6 +1,6 @@
 // Direction: roadmap phases, research-line cards (gates, kill criteria, targets), idea radar, reading courses,
 // and each research line's own long-running chat (LinePanel, shown in the side panel).
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { html, Icon, api } from "/lib.js";
 import { C, Ring, Progress } from "/charts.js";
 import { daysTo, Skeleton, Empty, Collapse } from "/ui.js";
@@ -16,7 +16,12 @@ const LINE_ASKS = {
   kills: "逐条对照研究线笔记里的 Kill criteria：每条现在是未触发、部分触发还是已触发？依据是什么（链接到笔记或证据）？哪条最需要尽快验证，怎么验证？",
   plan: "根据研究线笔记、timeline 里的里程碑和投稿截稿，排接下来两周的计划：按周列可检查的交付物。需要新加的里程碑先列给我确认，再用 milestone_add。",
 };
-const ago = (day) => { const d = -daysTo(day + "T23:59:59"); return d <= 0 ? "今天" : `${d} 天前`; };
+// Calendar days since a YYYY-MM-DD date, in local time.
+export const ago = (day) => {
+  const [y, m, d] = day.split("-").map(Number), now = new Date();
+  const n = Math.round((new Date(now.getFullYear(), now.getMonth(), now.getDate()) - new Date(y, m - 1, d)) / 86400000);
+  return n <= 0 ? "今天" : n === 1 ? "昨天" : `${n} 天前`;
+};
 
 // Days-left ring; an overdue date shows a full ring in the alert color. Without onClick it is not a button.
 function MiniRing({ d, color, label, sub, onClick }) {
@@ -160,6 +165,15 @@ function LineContext({ ctx, onOpenNote }) {
   </div>`;
 }
 
+// Which line panels stay mounted after opening `key`: at most `max`, unloading the least recently opened
+// first, and never one that is answering or waiting on an approval (unloading closes its socket, and the
+// server then denies the pending edit).
+export function keepLines(lines, key, used, busy, max = 4) {
+  const idle = lines.filter((x) => x.key !== key && !busy(x.key)).sort((a, b) => (used[a.key] || 0) - (used[b.key] || 0));
+  const drop = new Set(idle.slice(0, Math.max(0, lines.length - max)).map((x) => x.key));
+  return lines.filter((x) => !drop.has(x.key));
+}
+
 // One research line's own conversation (resumed across days and restarts) in the side panel.
 // registerSend gets {send, focus, kickoff, packet} so the 方向 page can hand it work.
 export function LinePanel({ line, claudeOk, registerSend, onBack, onStudioChanged, onOpenNote, toast }) {
@@ -170,11 +184,14 @@ export function LinePanel({ line, claudeOk, registerSend, onBack, onStudioChange
   const loadCtx = () => api(`/api/lines/${enc}`).then((r) => setCtx(r.context)).catch(() => setCtx(null));
   useEffect(() => { setCtx(null); loadCtx(); }, [line.key]);
   const opts = (label) => ({ selection: null, images: [], label });
+  const drafting = useRef(false); // the request is fetched first: a second click must not send twice
   const draft = async (send) => {
+    if (drafting.current) return;
+    drafting.current = true;
     try {
       const p = await api(`/api/lines/${enc}/packet`);
       send(p.prompt, opts(`起草导师汇报包 → ${p.path.split("/").pop()}`));
-    } catch (e) { toast?.(e.message); }
+    } catch (e) { toast?.(e.message); } finally { drafting.current = false; }
   };
   const chips = [
     { label: "现状与下一步", prompt: LINE_ASKS.kickoff }, { label: "Kill criteria 体检", prompt: LINE_ASKS.kills },

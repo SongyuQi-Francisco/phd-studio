@@ -170,7 +170,8 @@ export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, r
     }
   }, [busy, attachments, connect, getPage]);
 
-  useEffect(() => { registerSend?.({ send, focus: () => taRef.current?.focus() }); }, [send]);
+  // busy: answering or waiting on an approval (send changes with it, so this re-registers)
+  useEffect(() => { registerSend?.({ send, focus: () => taRef.current?.focus(), busy }); }, [send]);
 
   const answer = (id, allow) => wsRef.current?.send(JSON.stringify({ type: "permission", id, allow }));
   const stop = () => wsRef.current?.send(JSON.stringify({ type: "stop" }));

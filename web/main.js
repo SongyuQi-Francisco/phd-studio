@@ -8,7 +8,7 @@ import { ReadingPage, DoneDialog } from "/reading.js";
 import { OverviewPage, TimelinePage, VenueSheet, IdeaCapture } from "/plan.js";
 import { IdeasPage } from "/ideas.js";
 import { TrackPage } from "/track.js";
-import { DirectionPage, LinePanel } from "/direction.js";
+import { DirectionPage, LinePanel, keepLines } from "/direction.js";
 import { NoteSheet } from "/note.js";
 
 // ---------------- library ----------------
@@ -404,6 +404,7 @@ function App() {
   const [lineChats, setLineChats] = useState([]);
   const [sideLine, setSideLine] = useState(null); // chat key; null = 工作台助手
   const lineRefs = useRef({});
+  const lineUsed = useRef({}); // chat key -> when it was last opened
   const kicked = useRef(new Set());
 
   const toast = useCallback((text, { action } = {}) => {
@@ -506,10 +507,12 @@ function App() {
   // Show a research line's own chat in the side panel; "discuss" starts it if it is new, "packet" drafts an advisor packet.
   const openLine = (l, action) => {
     const line = { key: l.chat_key, name: l.name };
+    lineUsed.current[line.key] = Date.now();
     setLineChats((ls) => {
       if (ls.some((x) => x.key === line.key)) return ls;
-      ls.slice(0, -3).forEach((x) => delete lineRefs.current[x.key]); // unmounted: never hand it work
-      return [...ls.slice(-3), line];
+      const kept = keepLines([...ls, line], line.key, lineUsed.current, (k) => !!lineRefs.current[k]?.busy);
+      ls.filter((x) => !kept.includes(x)).forEach((x) => { delete lineRefs.current[x.key]; delete lineUsed.current[x.key]; });
+      return kept;
     });
     setSideLine(line.key);
     setAssistant(true);

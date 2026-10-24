@@ -55,9 +55,7 @@ def _stem_or_404(stem: str) -> str:
     if stem == "studio":  # the workbench-wide assistant
         return stem
     if line_chat.is_line_key(stem):  # a research line's own chat
-        try:
-            line_chat.resolve(stem)
-        except FileNotFoundError:
+        if not line_chat.known(stem):
             raise HTTPException(404, "没有这条研究线")
         return stem
     try:
