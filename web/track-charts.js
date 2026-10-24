@@ -55,7 +55,7 @@ export function Heatmap({ rows, cols, colTitles, onCell, onRow, active, unit = "
   const [ref, w] = useWidth(320);
   const [tip, setTip] = useState(null);
   const max = Math.max(1, ...rows.flatMap((r) => r.values));
-  const cell = Math.max(14, Math.min(cols.length <= 8 ? 72 : 34, Math.floor((w - labelW - 8) / Math.max(1, cols.length))));
+  const cell = Math.max(14, Math.min(cols.length <= 8 ? 120 : 34, Math.floor((w - labelW - 8) / Math.max(1, cols.length))));
   const ch = Math.min(22, Math.round(cell * 0.72));
   const gap = 2, top = 22, H = top + rows.length * (ch + gap) + 4;
   return html`<div class="tk-heat" ref=${ref}>
