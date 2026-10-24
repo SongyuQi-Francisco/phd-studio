@@ -1,16 +1,27 @@
-// Direction: roadmap phases, research-line cards (gates, kill criteria, targets), idea radar, reading courses.
-import { useEffect, useState } from "preact/hooks";
+// Direction: roadmap phases, research-line cards (gates, kill criteria, targets), idea radar, reading courses,
+// and each research line's own long-running chat (LinePanel, shown in the side panel).
+import { useEffect, useRef, useState } from "preact/hooks";
 import { html, Icon, api } from "/lib.js";
 import { C, Ring, Progress } from "/charts.js";
 import { daysTo, Skeleton, Empty, Collapse } from "/ui.js";
+import { ChatPanel } from "/chat.js";
 
 const KILL = { clear: ["未触发", "ok"], partial: ["部分触发", "warn"], triggered: ["已触发", "bad"] };
 const CONF = { high: 4, "medium-high": 3, medium: 2, "medium-low": 1, low: 1 };
 const short = (name) => name.replace(/^Research Line - /, "").replace(/^Idea ([A-Z]) - /, "Idea $1 · ");
 
-export const discussPrompt = (l) => l.path
-  ? `我们来讨论研究线「${short(l.name)}」（笔记：${l.path}）。先读这篇笔记，以及 Roadmap、Idea Radar 和相关的规划（timeline），然后告诉我：现在处于什么状态、最大的风险是什么（对照 Kill criteria）、接下来两周最该做的 3 件事。`
-  : `我们来讨论研究线「${l.name}」。它没有单独的研究线笔记；先看它的投稿目标、里程碑和阅读清单里标了这条线的论文（timeline、reading_list），再找 vault 里相关的笔记，然后告诉我：现在的状态、最大的风险、接下来两周最该做的 3 件事。`;
+// Asks in a line's own chat; the session already knows which line and where its notes are.
+const LINE_ASKS = {
+  kickoff: "先读研究线笔记的最新版本，再用 timeline 看里程碑和投稿截稿，然后告诉我：现在处于什么状态、最大的风险是什么（对照 Kill criteria）、接下来两周最该做的 3 件事。",
+  kills: "逐条对照研究线笔记里的 Kill criteria：每条现在是未触发、部分触发还是已触发？依据是什么（链接到笔记或证据）？哪条最需要尽快验证，怎么验证？",
+  plan: "根据研究线笔记、timeline 里的里程碑和投稿截稿，排接下来两周的计划：按周列可检查的交付物。需要新加的里程碑先列给我确认，再用 milestone_add。",
+};
+// Calendar days since a YYYY-MM-DD date, in local time.
+export const ago = (day) => {
+  const [y, m, d] = day.split("-").map(Number), now = new Date();
+  const n = Math.round((new Date(now.getFullYear(), now.getMonth(), now.getDate()) - new Date(y, m - 1, d)) / 86400000);
+  return n <= 0 ? "今天" : n === 1 ? "昨天" : `${n} 天前`;
+};
 
 // Days-left ring; an overdue date shows a full ring in the alert color. Without onClick it is not a button.
 function MiniRing({ d, color, label, sub, onClick }) {
@@ -22,14 +33,16 @@ function MiniRing({ d, color, label, sub, onClick }) {
   return onClick ? html`<button class="mring" onClick=${onClick} title=${title}>${body}</button>` : html`<div class="mring static" title=${title}>${body}</div>`;
 }
 
-function LineCard({ l, onOpenNote, onAsk, onOpenVenue, i }) {
+function LineCard({ l, onOpenNote, onLine, onOpenVenue, i, active }) {
   const [more, setMore] = useState(false);
   const ms = l.milestones.filter((m) => m.status !== "done").slice(0, 2);
   const hit = l.kills.filter((k) => k.state !== "clear").length;
-  return html`<section class=${"card line" + (l.status === "paused" ? " paused" : "")} style=${{ "--i": i }}>
+  const turns = l.chat?.turns || 0;
+  return html`<section class=${"card line" + (l.status === "paused" ? " paused" : "") + (active ? " talking" : "")} style=${{ "--i": i }}>
     <div class="line-head">
-      <div class="lh-main"><h2>${short(l.name)}</h2>
+      <div class="lh-main"><h2><button class="lh-title" title="打开这条线的专属对话" onClick=${() => onLine(l, "open")}>${short(l.name)}</button></h2>
         <div class="row-wrap tight">
+          ${active && html`<span class="tag talk"><${Icon} name="chat" sm />对话中</span>`}
           ${l.line && html`<span class="tag">${l.line}</span>`}
           ${l.status && html`<span class=${"tag st-" + l.status}>${l.status === "active" ? "进行中" : l.status === "paused" ? "暂停" : l.status}</span>`}
           ${l.priority != null && html`<span class="tag">P${l.priority}</span>`}
@@ -59,7 +72,9 @@ function LineCard({ l, onOpenNote, onAsk, onOpenVenue, i }) {
     <div class="row-wrap line-actions">
       ${(l.pitch || l.latest_status || l.kills.length > 0) && html`<button class="chip" onClick=${() => setMore(!more)}><${Icon} name=${more ? "up" : "down"} sm />${more ? "收起" : "详情"}</button>`}
       ${l.path && html`<button class="chip" onClick=${() => onOpenNote(l.path)}><${Icon} name="note" sm />笔记</button>`}
-      <button class="chip" onClick=${() => onAsk(discussPrompt(l), `讨论 ${short(l.name)}`)}><${Icon} name="sparkle" sm />和助手讨论</button>
+      <button class="chip" onClick=${() => onLine(l, "discuss")} title="这条线的专属对话，跨天保留上下文"><${Icon} name="sparkle" sm />${turns ? html`继续讨论<b class="chip-n">${turns}</b>` : "和助手讨论"}</button>
+      <button class="chip" onClick=${() => onLine(l, "packet")} title="按模板起草一份导师汇报包，写入 Review Packets 前先给你看差异"><${Icon} name="file" sm />起草导师汇报包</button>
+      ${l.packet && html`<button class="chip quiet" onClick=${() => onOpenNote(l.packet.path)} title=${l.packet.path}>上次汇报 ${ago(l.packet.date)}</button>`}
     </div>
   </section>`;
 }
@@ -92,7 +107,7 @@ function Roadmap({ r, onOpenNote }) {
   </section>`;
 }
 
-export function DirectionPage({ version, onOpenNote, onAsk, onOpenVenue }) {
+export function DirectionPage({ version, onOpenNote, onLine, activeLine, onOpenVenue }) {
   const [d, setD] = useState(null);
   useEffect(() => { api("/api/direction").then(setD); }, [version]);
   if (!d) return html`<${Skeleton} tiles=${0} rows=${3} />`;
@@ -106,7 +121,8 @@ export function DirectionPage({ version, onOpenNote, onAsk, onOpenVenue }) {
     ${d.roadmap.phases.length > 0 && html`<${Roadmap} r=${d.roadmap} onOpenNote=${onOpenNote} />`}
     <h3 class="sec">研究线</h3>
     ${lines.length === 0 && html`<div class="card"><${Empty} icon="compass" title="还没有研究线" hint="在 vault 的 Ideas 文件夹里建 type: research-line 的笔记，这里会出现它的阶段、目标倒计时和 Kill criteria。" /></div>`}
-    <div class="lines stagger">${lines.map((l, i) => html`<${LineCard} l=${l} i=${i} onOpenNote=${onOpenNote} onAsk=${onAsk} onOpenVenue=${onOpenVenue} />`)}</div>
+    <div class="lines stagger">${lines.map((l, i) => html`<${LineCard} l=${l} i=${i} onOpenNote=${onOpenNote} onLine=${onLine} onOpenVenue=${onOpenVenue}
+      active=${activeLine === l.chat_key} />`)}</div>
     <div class="two-col">
       <section class="card">
         <div class="card-head"><h2>Idea 池</h2><span class="muted small">按 Idea Radar 排序 · 信心</span></div>
@@ -130,4 +146,62 @@ export function DirectionPage({ version, onOpenNote, onAsk, onOpenVenue }) {
       </section>
     </div>
   </div></div>`;
+}
+
+// What a line's chat is pointed at; Claude reads these with tools when it needs them.
+function LineContext({ ctx, onOpenNote }) {
+  const items = [
+    ["研究线笔记", ctx.note, ctx.note], ["路线图", ctx.roadmap, ctx.roadmap], ["Idea Radar", ctx.idea_radar, ctx.idea_radar],
+    ["规划", ctx.plan, null], [`证据 ${ctx.evidence_notes}`, ctx.evidence, null], [`评审材料 ${ctx.packet_notes}`, ctx.packets, null],
+  ];
+  const prev = ctx.previous_packet;
+  return html`<div class="line-ctx">
+    ${items.map(([label, have, path]) => html`<button class=${"lc" + (have ? "" : " off")} disabled=${!path}
+      title=${have ? `${have}${path ? " · 点击查看" : ""}` : "vault 里没找到"} onClick=${() => onOpenNote(path)}><i />${label}</button>`)}
+    <span class="lc-more">${prev
+      ? html`<button class="lc" onClick=${() => onOpenNote(prev.path)} title=${prev.path}>上次汇报 ${ago(prev.date)}</button>`
+      : html`<span class="muted">还没有汇报包</span>`}
+      <span class="muted" title=${ctx.template.path || "仓库里的通用模板"}>· 模板${ctx.template.source === "vault" ? "来自 vault" : "：默认"}</span></span>
+  </div>`;
+}
+
+// Which line panels stay mounted after opening `key`: at most `max`, unloading the least recently opened
+// first, and never one that is answering or waiting on an approval (unloading closes its socket, and the
+// server then denies the pending edit).
+export function keepLines(lines, key, used, busy, max = 4) {
+  const idle = lines.filter((x) => x.key !== key && !busy(x.key)).sort((a, b) => (used[a.key] || 0) - (used[b.key] || 0));
+  const drop = new Set(idle.slice(0, Math.max(0, lines.length - max)).map((x) => x.key));
+  return lines.filter((x) => !drop.has(x.key));
+}
+
+// One research line's own conversation (resumed across days and restarts) in the side panel.
+// registerSend gets {send, focus, kickoff, packet} so the 方向 page can hand it work.
+export function LinePanel({ line, claudeOk, registerSend, onBack, onStudioChanged, onOpenNote, toast }) {
+  const [att, setAtt] = useState({ selection: null, images: [] });
+  const [ctx, setCtx] = useState(null);
+  const name = short(line.name);
+  const enc = encodeURIComponent(line.key);
+  const loadCtx = () => api(`/api/lines/${enc}`).then((r) => setCtx(r.context)).catch(() => setCtx(null));
+  useEffect(() => { setCtx(null); loadCtx(); }, [line.key]);
+  const opts = (label) => ({ selection: null, images: [], label });
+  const drafting = useRef(false); // the request is fetched first: a second click must not send twice
+  const draft = async (send) => {
+    if (drafting.current) return;
+    drafting.current = true;
+    try {
+      const p = await api(`/api/lines/${enc}/packet`);
+      send(p.prompt, opts(`起草导师汇报包 → ${p.path.split("/").pop()}`));
+    } catch (e) { toast?.(e.message); } finally { drafting.current = false; }
+  };
+  const chips = [
+    { label: "现状与下一步", prompt: LINE_ASKS.kickoff }, { label: "Kill criteria 体检", prompt: LINE_ASKS.kills },
+    { label: "两周计划", prompt: LINE_ASKS.plan }, { label: "起草导师汇报包", run: draft },
+    { label: "记想法", prompt: "给这条线记一个想法：", fill: true },
+  ];
+  const register = (a) => registerSend?.({ ...a, kickoff: () => a.send(LINE_ASKS.kickoff, opts("现状与下一步")), packet: () => draft(a.send) });
+  return html`<${ChatPanel} stem=${line.key} paper=${null} attachments=${att} setAttachments=${setAtt} registerSend=${register}
+    claudeOk=${claudeOk} title=${"研究线 · " + name} chips=${chips} onBack=${onBack} backLabel="工作台助手"
+    banner=${ctx && html`<${LineContext} ctx=${ctx} onOpenNote=${onOpenNote} />`}
+    emptyHint=${`「${name}」的专属对话：跨天、跨重启都记得之前聊过的。问现状、风险、下一步，或起草导师汇报包。`}
+    onStudioChanged=${onStudioChanged} onNoteChanged=${loadCtx} />`;
 }

@@ -35,7 +35,7 @@ from claude_agent_sdk import (
 )
 from fastapi import WebSocket
 
-from . import library
+from . import library, line_chat
 from .config import (
     AGENTS_MD,
     CHATS_DIR,
@@ -459,6 +459,27 @@ class StudioChat(PaperChat):
         return opts
 
 
+class LineChat(StudioChat):
+    """A research line's own long-running conversation: the studio tools plus the line's context."""
+
+    def __init__(self, stem: str):
+        super().__init__(stem)
+        self.line_prompt = ""
+
+    def _line_prompt(self) -> str:
+        return line_chat.system_prompt(line_chat.resolve(self.stem))
+
+    async def _ensure_client(self) -> ClaudeSDKClient:
+        if self.client is None:
+            # Fresh paths, kill states and deadlines on every (re)connect; reading them is file work,
+            # so it runs off the event loop and other chats keep streaming.
+            self.line_prompt = await asyncio.to_thread(self._line_prompt)
+        return await super()._ensure_client()
+
+    def _prompt(self) -> str:
+        return self.line_prompt or self._line_prompt()
+
+
 class ChatRegistry:
     def __init__(self) -> None:
         self.chats: dict[str, PaperChat] = {}
@@ -467,6 +488,12 @@ class ChatRegistry:
         if stem == STUDIO_KEY:
             if stem not in self.chats:
                 self.chats[stem] = StudioChat(stem)
+            return self.chats[stem]
+        if line_chat.is_line_key(stem):
+            if not line_chat.known(stem):
+                raise FileNotFoundError(stem)
+            if stem not in self.chats:
+                self.chats[stem] = LineChat(stem)
             return self.chats[stem]
         library.validate(stem)
         if stem not in self.chats:
