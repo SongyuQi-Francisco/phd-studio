@@ -84,7 +84,8 @@ export function Bars({ labels, series, height = 132, format = nice, every, legen
   const L = 26, B = 20, T = 8;
   const n = labels.length, k = series.length;
   const max = Math.max(1, ...series.flatMap((s) => s.values));
-  const frac = series.every((s) => s.values.every((v) => v <= 1 && Math.round(v) !== v || v === 0));
+  const all = series.flatMap((s) => s.values);
+  const frac = all.some((v) => v !== Math.round(v)) && all.every((v) => v <= 1);
   const fmax = Math.max(...series.flatMap((s) => s.values));
   const top = frac ? Math.min(1, Math.ceil((fmax * 10) / 0.98) / 10 || 1) : max <= 2 ? max : Math.ceil(max / 2) * 2;
   const ticks = top <= 2 && !frac ? [0, top] : [0, top / 2, top];

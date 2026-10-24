@@ -12,12 +12,14 @@ export const discussPrompt = (l) => l.path
   ? `我们来讨论研究线「${short(l.name)}」（笔记：${l.path}）。先读这篇笔记，以及 Roadmap、Idea Radar 和相关的规划（timeline），然后告诉我：现在处于什么状态、最大的风险是什么（对照 Kill criteria）、接下来两周最该做的 3 件事。`
   : `我们来讨论研究线「${l.name}」。它没有单独的研究线笔记；先看它的投稿目标、里程碑和阅读清单里标了这条线的论文（timeline、reading_list），再找 vault 里相关的笔记，然后告诉我：现在的状态、最大的风险、接下来两周最该做的 3 件事。`;
 
+// Days-left ring; an overdue date shows a full ring in the alert color. Without onClick it is not a button.
 function MiniRing({ d, color, label, sub, onClick }) {
-  return html`<button class="mring" onClick=${onClick} title=${d == null ? "日期未公布" : `还剩 ${d} 天`}>
-    <${Ring} value=${d == null ? 0 : Math.max(0, Math.min(d, 180))} max=${180} size=${52} stroke=${5} color=${color}>
-      <b class=${d != null && d <= 14 ? "hot" : ""}>${d == null ? "—" : d}</b><small>${d == null ? "" : "天"}</small></${Ring}>
-    <span><b>${label}</b><span class="muted small">${sub}</span></span>
-  </button>`;
+  const late = d != null && d < 0;
+  const body = html`<${Ring} value=${d == null ? 0 : late ? 1 : Math.min(d, 180)} max=${late ? 1 : 180} size=${52} stroke=${5} color=${late ? "var(--red)" : color}>
+      ${late ? html`<b class="hot late">逾期</b><small>${-d} 天</small>` : html`<b class=${d != null && d <= 14 ? "hot" : ""}>${d == null ? "—" : d}</b><small>${d == null ? "" : "天"}</small>`}</${Ring}>
+    <span><b>${label}</b><span class="muted small">${sub}</span></span>`;
+  const title = d == null ? "日期未公布" : late ? `已逾期 ${-d} 天` : `还剩 ${d} 天`;
+  return onClick ? html`<button class="mring" onClick=${onClick} title=${title}>${body}</button>` : html`<div class="mring static" title=${title}>${body}</div>`;
 }
 
 function LineCard({ l, onOpenNote, onAsk, onOpenVenue, i }) {
@@ -65,10 +67,11 @@ function LineCard({ l, onOpenNote, onAsk, onOpenVenue, i }) {
 function Roadmap({ r, onOpenNote }) {
   const [open, setOpen] = useState(null);
   const n = r.phases.length;
-  const start = r.start ? new Date(r.start + "T00:00:00") : null;
-  const pos = start ? Math.max(0, Math.min(1, (Date.now() - start) / (n * 365.25 * 86400000))) : null;
+  const ymd = /^(\d{4})-(\d{2})-(\d{2})/.exec(r.start || "");
+  const start = ymd ? new Date(+ymd[1], +ymd[2] - 1, +ymd[3]) : null;
+  const pos = start && !isNaN(start) ? Math.max(0, Math.min(1, (Date.now() - start) / (n * 365.25 * 86400000))) : null;
   const yearIdx = pos == null ? -1 : Math.min(n - 1, Math.floor(pos * n));
-  const week = start ? Math.floor(((Date.now() - start) / 86400000 - yearIdx * 365.25) / 7) + 1 : null;
+  const week = pos != null ? Math.floor(((Date.now() - start) / 86400000 - yearIdx * 365.25) / 7) + 1 : null;
   return html`<section class="card roadmap">
     <div class="card-head"><h2>PhD 路线图</h2>
       ${pos != null && html`<span class="muted small">第 ${yearIdx + 1} 年 · 第 ${week} 周 · 全程 ${Math.round(pos * 100)}%</span>`}

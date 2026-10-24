@@ -34,10 +34,12 @@ function Mark({ type }) {
 }
 
 // Days-left ring: a full ring is `max` days or more away; it drains as the date gets close.
+// An overdue date shows a full ring in the alert color.
 function DaysRing({ d, max = HORIZON, size = 64, stroke = 6, color }) {
-  return html`<${Ring} value=${d == null ? 0 : Math.max(0, Math.min(d, max))} max=${max} size=${size} stroke=${stroke} color=${color}
-    title=${d == null ? "日期未公布" : `还剩 ${d} 天（满环 = ${max} 天）`}>
-    <b class=${d != null && d <= 14 ? "hot" : ""}>${d == null ? "—" : d < 0 ? "过" : d}</b><small>${d == null ? "未公布" : d < 0 ? `${-d} 天前` : "天"}</small>
+  const late = d != null && d < 0;
+  return html`<${Ring} value=${d == null ? 0 : late ? max : Math.min(d, max)} max=${max} size=${size} stroke=${stroke} color=${late ? "var(--red)" : color}
+    title=${d == null ? "日期未公布" : late ? `已逾期 ${-d} 天` : `还剩 ${d} 天（满环 = ${max} 天）`}>
+    <b class=${d != null && d <= 14 ? "hot" + (late ? " late" : "") : ""}>${d == null ? "—" : late ? "逾期" : d}</b><small>${d == null ? "未公布" : late ? `${-d} 天` : "天"}</small>
   </${Ring}>`;
 }
 

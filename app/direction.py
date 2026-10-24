@@ -125,7 +125,7 @@ def roadmap() -> dict[str, Any]:
                            text.split("Deliverables:", 1)[1].split("Success criteria:", 1)[0])][:5] if "Deliverables:" in text else []})
     positioning = notes.strip_links(notes.first_paragraph(notes.find_section(n["sections"], "One-Sentence Positioning")))
     fm = n["frontmatter"]  # Year 1 starts at phd_start (or start / created) for the "you are here" marker
-    start = str(fm.get("phd_start") or fm.get("start") or fm.get("created") or "")
+    start = str(fm.get("phd_start") or fm.get("start") or fm.get("created") or "")[:10]  # date part of a date or datetime
     return {"positioning": positioning, "phases": phases, "path": n["path"], "obsidian_url": n["obsidian_url"], "start": start}
 
 

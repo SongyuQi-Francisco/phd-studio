@@ -229,6 +229,9 @@ def pdf_urls(info: dict[str, Any]) -> list[str]:
 
 # ---------- PDFs ----------
 
+# PyMuPDF is not thread-safe: every open / render / text extraction, from any module, holds this lock.
+PDF_LOCK = threading.RLock()
+
 
 def local_pdf(stem: str) -> Path | None:
     for p in (VAULT_PDFS_DIR / f"{stem}.pdf", PDF_CACHE_DIR / f"{safe_name(stem)}.pdf"):
@@ -264,7 +267,7 @@ def text_file(stem: str) -> Path:
     out = TEXT_DIR / f"{safe_name(stem)}.md"
     if out.exists() and out.stat().st_mtime >= pdf.stat().st_mtime:
         return out
-    with fitz.open(pdf) as doc:
+    with PDF_LOCK, fitz.open(pdf) as doc:
         parts = [f"# {stem} (full text, {len(doc)} pages)\n"]
         for i, page in enumerate(doc, 1):
             parts.append(f"\n<!-- page {i} -->\n## Page {i}\n\n{page.get_text().strip()}\n")
@@ -273,7 +276,8 @@ def text_file(stem: str) -> Path:
 
 
 def page_text(stem: str, page: int) -> str:
-    with fitz.open(ensure_pdf(stem)) as doc:
+    pdf = ensure_pdf(stem)  # may download; not under the lock
+    with PDF_LOCK, fitz.open(pdf) as doc:
         if not 1 <= page <= len(doc):
             return ""
         return doc[page - 1].get_text().strip()

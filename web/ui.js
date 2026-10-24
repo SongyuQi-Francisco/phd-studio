@@ -74,5 +74,5 @@ export function Empty({ icon = "check", title, hint, children, compact }) {
 export function Collapse({ open, children }) {
   const [seen, setSeen] = useState(open);
   useEffect(() => { if (open) setSeen(true); }, [open]);
-  return html`<div class=${"collapse" + (open ? " open" : "")}><div class="collapse-in">${(open || seen) && children}</div></div>`;
+  return html`<div class=${"collapse" + (open ? " open" : "")}><div class="collapse-in" inert=${!open}>${(open || seen) && children}</div></div>`;
 }

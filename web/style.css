@@ -883,6 +883,8 @@ rect.heat-4, i.heat-4 { fill: var(--heat-4); background: var(--heat-4); }
 .line-rings { display: flex; gap: 10px 18px; flex-wrap: wrap; margin: 12px 0 4px; }
 .mring { display: flex; gap: 10px; align-items: center; text-align: left; padding: 4px 8px 4px 4px; border-radius: 12px; min-width: 0; transition: background .15s; }
 .mring:hover { background: var(--hover); }
+.mring.static, .mring.static:hover { background: none; cursor: default; }
+.ring-c b.late { font-size: 13px; letter-spacing: 0; }
 .mring > span { display: flex; flex-direction: column; min-width: 0; }
 .mring > span b { font-size: 13px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px; }
 .mring .ring-c b { font-size: 15px; }

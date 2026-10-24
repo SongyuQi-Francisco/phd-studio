@@ -3,15 +3,19 @@
 Renders page 1 of the paper's local or already-cached PDF (never downloads one) and caches
 the PNG in DATA_DIR/thumbs, re-rendering when the PDF is newer. 404 means "no PDF yet";
 the front end then draws its own placeholder.
+
+Rendering runs on its own single-thread executor, not the shared request threadpool, so a
+long list of first-time thumbnails can never starve the other handlers. PyMuPDF calls hold
+library.PDF_LOCK like every other PyMuPDF use in the app.
 """
 from __future__ import annotations
 
-import threading
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pymupdf
 from fastapi import APIRouter, HTTPException
-from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -20,30 +24,48 @@ from .config import DATA_DIR
 
 THUMBS_DIR = DATA_DIR / "thumbs"
 WIDTH = 360  # px; shown at <= 180 CSS px, so sharp on Retina
-_lock = threading.Lock()
+_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="thumbs")
+_inflight: dict[str, asyncio.Future] = {}
 
 router = APIRouter()
 
 
-def render(key: str) -> Path | None:
+def _paths(key: str) -> tuple[Path, Path] | None:
     pdf = library.local_pdf(key)
-    if pdf is None:
+    return (pdf, THUMBS_DIR / f"{library.safe_name(key)}.png") if pdf else None
+
+
+def _fresh(pdf: Path, out: Path) -> bool:
+    return out.exists() and out.stat().st_mtime >= pdf.stat().st_mtime
+
+
+def render(key: str) -> Path | None:
+    paths = _paths(key)
+    if paths is None:
         return None
-    out = THUMBS_DIR / f"{library.safe_name(key)}.png"
-    if out.exists() and out.stat().st_mtime >= pdf.stat().st_mtime:
+    pdf, out = paths
+    if _fresh(pdf, out):
         return out
-    with _lock:  # MuPDF is not thread-safe across documents rendered at once
-        THUMBS_DIR.mkdir(parents=True, exist_ok=True)
-        try:
-            with pymupdf.open(pdf) as doc:
-                page = doc[0]
-                pix = page.get_pixmap(matrix=pymupdf.Matrix(WIDTH / page.rect.width, WIDTH / page.rect.width), alpha=False)
-                tmp = out.with_suffix(".tmp")
-                tmp.write_bytes(pix.tobytes("png"))
-                tmp.replace(out)
-        except Exception:  # noqa: BLE001 - a broken PDF just gets the placeholder
-            return None
+    THUMBS_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        with library.PDF_LOCK, pymupdf.open(pdf) as doc:
+            page = doc[0]
+            zoom = WIDTH / page.rect.width
+            png = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False).tobytes("png")
+    except Exception:  # noqa: BLE001 - a broken PDF just gets the placeholder
+        return None
+    tmp = out.with_suffix(".tmp")
+    tmp.write_bytes(png)
+    tmp.replace(out)
     return out
+
+
+def _known(key: str) -> bool:
+    try:
+        library.validate(key)  # a paper note or an arxiv:<id> key; nothing path-like
+    except (FileNotFoundError, ValueError):
+        return False
+    return True
 
 
 class KeysReq(BaseModel):
@@ -56,19 +78,20 @@ def available(req: KeysReq) -> dict[str, list[str]]:
     return {"have": [k for k in req.keys[:500] if _known(k) and library.local_pdf(k)]}
 
 
-def _known(key: str) -> bool:
-    try:
-        library.validate(key)  # a paper note or an arxiv:<id> key; nothing path-like
-    except (FileNotFoundError, ValueError):
-        return False
-    return True
-
-
 @router.get("/api/thumb/{key:path}")
 async def thumb(key: str) -> FileResponse:
     if not _known(key):
         raise HTTPException(404, "没有这篇论文")
-    path = await run_in_threadpool(render, key)
-    if path is None:
+    paths = _paths(key)
+    if paths is None:
         raise HTTPException(404, "还没有本地 PDF")
-    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "max-age=86400"})
+    if not _fresh(*paths):
+        # One render per key at a time; concurrent requests for it share the result.
+        fut = _inflight.get(key)
+        if fut is None:
+            fut = asyncio.get_running_loop().run_in_executor(_pool, render, key)
+            _inflight[key] = fut
+            fut.add_done_callback(lambda _f: _inflight.pop(key, None))
+        if await asyncio.shield(fut) is None:  # a client that goes away must not cancel the shared render
+            raise HTTPException(404, "PDF 打不开")
+    return FileResponse(paths[1], media_type="image/png", headers={"Cache-Control": "max-age=86400"})

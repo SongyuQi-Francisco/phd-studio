@@ -80,7 +80,7 @@ function Row({ i, selected, onSelect, onOpen, act, ready }) {
     : i.status === "done" ? html`<span class=${"tier D " + (i.verdict || "")}>${VERDICT[i.verdict] || "✓"}</span>`
     : i.status === "inbox" ? html`<span class="newdot" title="收件箱" />` : null;
   const stop = (fn) => (e) => { e.stopPropagation(); fn(); };
-  return html`<div class=${"rl-row" + (selected ? " sel" : "")} onMouseMove=${(e) => !selected && pointerMoved(e) && onSelect()} onClick=${() => onOpen(i)}>
+  return html`<div class=${"rl-row" + (selected ? " sel" : "")} onMouseMove=${(e) => pointerMoved(e) && !selected && onSelect()} onClick=${() => onOpen(i)}>
     <${Thumb} k=${i.key} title=${i.title} size="sm" ready=${ready} badge=${badge && html`<span class="badge">${badge}</span>`} />
     <div class="rl-main">
       <div class="rl-title">${i.title}${i.paper ? "" : html` <span class="muted">arXiv</span>`}</div>
