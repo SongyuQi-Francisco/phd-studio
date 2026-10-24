@@ -20,6 +20,7 @@ from . import bilingual, direction, library, notes, plan, reading, tracking, ven
 from .claude_chat import claude_status, draft_takeaway, history, registry
 from .config import CROPS_DIR, IDEA_RADAR, PROFILE, STUDIO_DIR, load_settings, save_settings
 from .translate import translate
+from .thumbs import router as thumbs_router
 
 WEB_DIR = STUDIO_DIR / "web"
 
@@ -35,6 +36,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="PhD Studio", lifespan=lifespan)
+app.include_router(thumbs_router)
 
 
 @app.middleware("http")
