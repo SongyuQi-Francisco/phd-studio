@@ -263,3 +263,20 @@ button.tk-chip:hover { background: var(--hover); color: var(--text); }
   .tk-detail { grid-template-columns: 1fr; }
   .tk-paper.open { grid-column: auto; }
 }
+
+/* list refresh */
+.tk-mv { font-size: 11px; font-weight: 650; margin-left: 4px; }
+.tk-mv.up { color: var(--green); }
+.tk-mv.down { color: var(--red); }
+.tk-mv.new { color: var(--accent); }
+.tk-pin { font-size: 11.5px; padding: 2px 8px; border-radius: 99px; border: 1px solid var(--line); color: var(--text-2); margin-right: 4px; }
+.tk-pin.on { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+.tk-rules { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
+.tk-rule { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-2); }
+.tk-rule input[type=number], .tk-rule input:not([type]), .tk-rule textarea { border: 1px solid var(--line); border-radius: 7px; padding: 4px 7px; background: var(--surface-2); font-size: 12.5px; color: var(--text); }
+.tk-rule.wide { flex-basis: 100%; flex-direction: column; align-items: stretch; }
+.tk-rule textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; resize: vertical; }
+.tk-sheet-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; position: sticky; bottom: -18px; background: var(--surface); padding: 10px 0; }
+.tk-skipped summary { cursor: pointer; }
+.tk-skipped .m, .tk-hist { font-size: 11.5px; color: var(--text-2); padding: 2px 4px; }
+.tk-labpick { border: 1px solid var(--line); border-radius: 7px; background: var(--surface-2); font-size: 11.5px; padding: 2px 4px; max-width: 170px; color: var(--text-2); }

@@ -158,13 +158,157 @@ function LineKeywords({ toast, onChanged }) {
       <button class="btn" onClick=${() => save(l, lines[i][1])}>保存</button></div>`)}`;
 }
 
-function ScholarEditor({ list, onClose, toast, onChanged }) {
+// ---------------- list refresh: monthly / 立即更新 → suggestion → apply ----------------
+
+const STAGE_TXT = { prepare: "准备", scholar: "读取 Google Scholar", openalex: "Scholar 不可用，改用 OpenAlex", check: "核对近期论文", done: "完成", failed: "失败" };
+const NEED_TXT = { login: "Google Scholar 需要登录", captcha: "Google Scholar 要求人机验证" };
+
+function useListRefresh(toast, onApplied) {
+  const [rf, setRf] = useState(null);
+  const timer = useRef();
+  const load = async () => { try { const r = await api("/api/track/scholars/refresh"); setRf(r); return r; } catch { return null; } };
+  useEffect(() => { load(); return () => clearTimeout(timer.current); }, []);
+  useEffect(() => {
+    clearTimeout(timer.current);
+    if (rf?.job?.running) timer.current = setTimeout(async () => {
+      const r = await load();
+      if (r && !r.job.running) toast(r.job.error ? `名单重算没完成：${r.job.error}` : r.pending ? "名单重算完成：有更新建议" : "名单重算完成：没有变化");
+    }, 2000);
+  }, [rf]);
+  const start = async () => { try { setRf(await api("/api/track/scholars/refresh", { method: "POST" })); toast("开始重算名单"); } catch (e) { toast(e.message); } };
+  const apply = async (id) => {
+    try { const r = await api(`/api/track/scholars/refresh/${id}/apply`, { method: "POST" }); setRf(r); toast(r.notes?.length ? `名单已更新（${r.notes.join("；")}）` : "名单已更新"); onApplied(); }
+    catch (e) { toast(e.message); }
+  };
+  const dismiss = async (id) => { try { setRf(await api(`/api/track/scholars/refresh/${id}/dismiss`, { method: "POST" })); toast("已忽略这次建议"); } catch (e) { toast(e.message); } };
+  const openScholar = async () => { try { await api("/api/track/scholars/scholar-window", { method: "POST" }); } catch (e) { toast(e.message); } };
+  return { rf, load, start, apply, dismiss, openScholar };
+}
+
+function RefreshBanner({ R, onOpen }) {
+  const rf = R.rf;
+  if (!rf) return null;
+  const j = rf.job || {};
+  const p = rf.pending;
+  return html`
+    ${j.running && html`<div class="tk-banner"><${Icon} name="refresh" sm />
+      <span>正在重算名单：${STAGE_TXT[j.stage] || j.stage}${j.current ? ` · ${j.current}` : ""}${j.total ? `（${j.done}/${j.total}）` : ""}</span>
+      <span class="tk-prog" style=${{ flex: 1 }}><span class=${"tk-prog-bar" + (j.total ? "" : " indet")}><i style=${{ width: (j.total ? (j.done / j.total) * 100 : 30) + "%" }} /></span></span></div>`}
+    ${j.needs_user && html`<div class="tk-banner bad"><span>${NEED_TXT[j.needs_user] || "Google Scholar 需要你处理"}${j.running ? "：已打开 Scholar 窗口，请在那里完成" : "：自动更新先用了快照或 OpenAlex"}</span>
+      <span class="spacer" />${rf.capture && html`<button class="chip" onClick=${R.openScholar}>打开 Scholar 窗口</button>`}</div>`}
+    ${!j.running && j.error && html`<div class="tk-banner bad"><span>${j.error}</span></div>`}
+    ${!j.running && !j.error && rf.attempts?.failures > 0 && html`<div class="tk-banner bad"><span>自动重算已连续失败 ${rf.attempts.failures} 次${rf.attempts.error ? `（${rf.attempts.error}）` : ""}，下次自动尝试：${rf.attempts.next_try?.replace("T", " ")}</span>
+      <span class="spacer" /><button class="chip" onClick=${R.start}>现在重试</button></div>`}
+    ${p && html`<div class="tk-banner ok"><${Icon} name="sparkle" sm />
+      <span>名单更新建议：进 ${p.enter.length} 人 · 出 ${p.leave.length} 人 · 名次变化 ${p.moves.filter((m) => m.from !== m.to).length} 处 <span class="muted">（${p.source}）</span></span>
+      <span class="spacer" /><button class="btn primary" onClick=${onOpen}>查看并确认</button></div>`}`;
+}
+
+// "Same lab as …" for a candidate the app cannot place; saved as a hint, used from the next recompute.
+function LabPick({ c, list, R, toast }) {
+  const labs = [...new Map(list.filter((s) => s.lab_id || s.lab).map((s) => [s.lab_id || s.lab, s])).values()];
+  const save = async (e) => {
+    const s = labs.find((x) => (x.lab_id || x.lab) === e.target.value);
+    try {
+      await api("/api/track/scholars/lab-hint", { json: { name: c.name, scholar_id: c.scholar_id, openalex: c.openalex, lab_id: s?.lab_id || null, lab_name: s?.lab || null } });
+      toast(s ? `已记下：${c.name} 与 ${s.name} 同实验室，重算后生效` : `已取消 ${c.name} 的实验室归属`); R.load();
+    } catch (x) { toast(x.message); }
+  };
+  return html`<select class="tk-labpick" title="和名单里谁同一个实验室？（每个实验室只留一人）" onChange=${save}>
+    <option value="">${c.lab_name ? c.lab_name : "实验室：未知"}</option>
+    ${labs.map((s) => html`<option value=${s.lab_id || s.lab}>同实验室：${s.name}</option>`)}</select>`;
+}
+
+function ProposalSheet({ R, list, onClose, toast }) {
+  const p = R.rf?.pending;
+  if (!p) return null;
+  const reasonOf = (c) => p.skipped.find((x) => x.name === c.name)?.reason || "被引低于新入选者";
+  const ex = async (c) => {
+    if (!confirm(`把 ${c.name} 加入排除名单？以后的重算不会再推荐 TA。`)) return;
+    try { await api("/api/track/scholars/exclude", { json: { name: c.name, scholar_id: c.scholar_id, openalex: c.openalex, reason: "确认建议时排除" } }); toast(`已排除 ${c.name}，重新「立即更新」后生效`); R.load(); }
+    catch (e) { toast(e.message); }
+  };
+  const move = (c) => { const m = p.moves.find((x) => x.name === c.name); return !m ? html`<span class="tk-mv new">新</span>` : m.from === m.to ? "" : m.from > m.to ? html`<span class="tk-mv up">▲${m.from - m.to}</span>` : html`<span class="tk-mv down">▼${m.to - m.from}</span>`; };
+  const r = p.rules || {};
+  return html`<div class="tk-sheet-bg" onClick=${(e) => e.target === e.currentTarget && onClose()}><div class="tk-sheet">
+    <div class="head"><h2>名单更新建议</h2><span class="spacer" /><button class="abtn" onClick=${onClose}><${Icon} name="x" sm /></button></div>
+    <div class="muted small">${p.source} · ${p.created?.slice(0, 16).replace("T", " ")} · 规则：近 ${r.months} 个月 ≥${r.min_papers} 篇领域论文，取前 ${r.top_n}${r.one_per_lab ? "，每个实验室只留被引最高的一人（同实验室的其他人见「被跳过」）" : ""}；固定的学者另外保留，不占名额</div>
+    ${p.enter.length > 0 && html`<div class="label">新进入（${p.enter.length}）</div>
+      ${p.enter.map((c) => html`<div class="tk-erow" style=${{ gridTemplateColumns: "26px 1fr auto auto" }}>
+        <span class="n">#${p.ranking.find((x) => x.name === c.name)?.rank ?? ""}</span>
+        <div><b>${c.name}</b><div class="m">${c.lab_name || c.affiliation || ""} · 被引 ${fmtN(c.citations)} · 近期领域论文 ${c.field_papers ?? "—"} 篇</div>
+          ${(c.titles || []).slice(0, 2).map((t) => html`<div class="m">· ${t}</div>`)}</div>
+        <span class="tk-mv new">新</span><span><${LabPick} c=${c} list=${list} R=${R} toast=${toast} /> <button class="linkbtn" onClick=${() => ex(c)}>排除</button></span></div>`)}`}
+    ${p.leave.length > 0 && html`<div class="label">将移出（${p.leave.length}）</div>
+      ${p.leave.map((c) => html`<div class="tk-erow" style=${{ gridTemplateColumns: "26px 1fr auto" }}>
+        <span class="n">#${c.rank ?? ""}</span><div><b>${c.name}</b><div class="m">${reasonOf(c)}</div></div>
+        <span class="muted small">想留下：在管理名单里「固定」</span></div>`)}`}
+    ${!p.enter.length && !p.leave.length && html`<div class="muted pad">没有人进出，只有名次和被引数更新。</div>`}
+    <div class="label">新名单</div>
+    ${p.ranking.map((c) => html`<div class="tk-erow" style=${{ gridTemplateColumns: "26px 1fr auto auto" }}>
+      <span class="n">${c.rank}</span><div><b>${c.name}</b> ${c.pinned && html`<span class="tk-badge" title="固定：不占前 ${r.top_n} 名额，永不自动移除">固定</span>`}
+        <div class="m">${c.lab_name ? `${c.lab_name} · ` : ""}被引 ${fmtN(c.citations)} · 近期领域论文 ${c.field_papers ?? "—"} 篇</div></div>
+      ${move(c)}<span /></div>`)}
+    ${p.alternates.length > 0 && html`<div class="label">候补</div>
+      ${p.alternates.map((c) => html`<div class="tk-erow" style=${{ gridTemplateColumns: "1fr auto" }}>
+        <div><b>${c.name}</b><div class="m">${c.lab_name ? `${c.lab_name} · ` : ""}被引 ${fmtN(c.citations)} · 近期领域论文 ${c.field_papers} 篇</div></div>
+        <${LabPick} c=${c} list=${list} R=${R} toast=${toast} /></div>`)}`}
+    ${p.skipped.length > 0 && html`<details class="tk-skipped"><summary class="label">被跳过的候选（${p.skipped.length}）</summary>
+      ${p.skipped.map((c) => html`<div class="m">${c.name} · ${fmtN(c.citations)} · ${c.reason}</div>`)}</details>`}
+    <div class="tk-sheet-actions"><button class="btn" onClick=${() => { R.dismiss(p.id); onClose(); }}>忽略</button>
+      <button class="btn primary" onClick=${() => { R.apply(p.id); onClose(); }}>应用到名单</button></div>
+  </div></div>`;
+}
+
+function ListRules({ R, toast }) {
+  const rf = R.rf;
+  const [form, setForm] = useState(null);
+  const [snap, setSnap] = useState("");
+  useEffect(() => { if (rf && !form) setForm({ ...rf.rules, keywords: rf.rules.keywords.join(", "), labels: rf.rules.labels.join("\n") }); }, [rf]);
+  if (!rf || !form) return null;
+  const save = async () => {
+    try {
+      await api("/api/track/scholars/rules", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+        ...form, keywords: form.keywords.split(/[,，]/).map((x) => x.trim()).filter(Boolean), labels: form.labels.split("\n").map((x) => x.trim()).filter(Boolean) }) });
+      toast("更新规则已保存"); R.load();
+    } catch (e) { toast(e.message); }
+  };
+  const importSnap = async () => { try { const r = await api("/api/track/scholars/snapshot", { json: { text: snap } }); toast(`已导入快照：${r.count} 人（${r.date}）`); setSnap(""); R.load(); } catch (e) { toast(e.message); } };
+  const unex = async (x) => { await api(`/api/track/scholars/exclude/${x.id}`, { method: "DELETE" }); toast(`已取消排除 ${x.name}`); R.load(); };
+  const num = (k, label, w = 56) => html`<label class="tk-rule">${label}<input type="number" min="1" style=${{ width: w + "px" }} value=${form[k]} onInput=${(e) => setForm({ ...form, [k]: e.target.value })} /></label>`;
+  return html`
+    <div class="label">自动更新</div>
+    <div class="tk-rules">
+      <label class="tk-rule"><input type="checkbox" checked=${form.auto} onChange=${(e) => setForm({ ...form, auto: e.target.checked })} /> 每 ${num("cadence_days", "", 48)} 天自动重算</label>
+      ${num("top_n", "名单人数")}${num("min_papers", "近期论文至少")}${num("months", "近期 = 最近（月）")}
+      <label class="tk-rule" title="同一实验室只保留被引最高的一人；实验室来自名单记录或 Lab Tracker 笔记"><input type="checkbox" checked=${form.one_per_lab} onChange=${(e) => setForm({ ...form, one_per_lab: e.target.checked })} /> 每个实验室只留一人</label>
+      <label class="tk-rule wide">领域关键词（OpenAlex 检索，逗号分隔）<input value=${form.keywords} onInput=${(e) => setForm({ ...form, keywords: e.target.value })} /></label>
+      <label class="tk-rule wide">Scholar 标签检索（每行一个 mauthors）<textarea rows="3" value=${form.labels} onInput=${(e) => setForm({ ...form, labels: e.target.value })} /></label>
+      <div class="tk-rule wide muted small">主题要求：${(rf.rules.topic_groups || []).map((g) => g.join(" 或 ")).join(" 且 ")}（每周巡检的主题模型）· 下次自动：${rf.next_auto || "—"}</div>
+      <div class="tk-rule wide muted small">自动重算只在一台电脑上跑：${rf.rules.runner ? (rf.rules.runner === rf.device ? `本机（${rf.device}）` : rf.rules.runner) : "第一次重算的那台"}
+        ${rf.rules.runner && rf.rules.runner !== rf.device && html` <button class="linkbtn" onClick=${async () => { await api("/api/track/scholars/rules", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ runner: rf.device }) }); toast("自动重算改由本机负责"); R.load(); }}>改为本机</button>`}</div>
+      <button class="btn" onClick=${save}>保存规则</button>
+      ${rf.capture ? html`<button class="btn" onClick=${R.openScholar}>打开 Scholar 窗口（登录）</button>` : html`<span class="muted small">Scholar 窗口只在桌面 App 里可用</span>`}
+    </div>
+    <div class="label">排除名单（${rf.excluded.length}）</div>
+    ${rf.excluded.length === 0 && html`<div class="muted small">没有。确认建议时可以把不想要的人排除。</div>`}
+    ${rf.excluded.map((x) => html`<div class="tk-erow" style=${{ gridTemplateColumns: "1fr auto" }}><div><b>${x.name}</b><div class="m">${x.reason || ""}</div></div>
+      <button class="linkbtn" onClick=${() => unex(x)}>取消排除</button></div>`)}
+    <div class="label">Scholar 快照 ${rf.snapshot ? html`<span class="muted small">（最新：${rf.snapshot.date} · ${rf.snapshot.source} · ${rf.snapshot.count} 人）</span>` : ""}</div>
+    <div class="tk-search"><textarea class="tk-kw" rows="3" placeholder="粘贴从 Scholar 整理的排名（每行：12. 姓名 · Scholar id · 65k · 机构 · 备注）或 JSON 快照" value=${snap} onInput=${(e) => setSnap(e.target.value)} />
+      <button class="btn" disabled=${!snap.trim()} onClick=${importSnap}>导入</button></div>
+    ${rf.history.length > 0 && html`<div class="label">重算记录</div>
+      ${rf.history.map((h) => html`<div class="m tk-hist">${h.created?.slice(0, 10)} · ${h.source} · ${{ proposed: "待确认", applied: "已应用", dismissed: "已忽略", superseded: "被新建议替代" }[h.status] || h.status}</div>`)}`}`;
+}
+
+function ScholarEditor({ list, onClose, toast, onChanged, R }) {
   const [q, setQ] = useState("");
   const [res, setRes] = useState(null);
   const [busy, setBusy] = useState(false);
   const search = async () => { setBusy(true); try { setRes((await api(`/api/track/scholars/search?q=${encodeURIComponent(q)}`)).results); } catch (e) { toast(e.message); } finally { setBusy(false); } };
   const add = async (c) => { try { await api("/api/track/scholars", { json: { name: c.name, openalex: c.openalex, affiliation: c.affiliation } }); toast(`已加入：${c.name}（正在抓取数据）`); setRes(null); setQ(""); onChanged(); } catch (e) { toast(e.message); } };
   const remove = async (s) => { if (!confirm(`从名单移除 ${s.name}？`)) return; await api(`/api/track/scholars/${s.id}`, { method: "DELETE" }); toast(`已移除 ${s.name}`); onChanged(); };
+  const pin = async (s) => { try { await api(`/api/track/scholars/${s.id}/pin`, { json: { on: !s.pinned } }); toast(s.pinned ? `取消固定 ${s.name}` : `已固定 ${s.name}：自动更新不会移除`); onChanged(); } catch (e) { toast(e.message); } };
   const have = new Set(list.map((s) => s.openalex));
   return html`<div class="tk-sheet-bg" onClick=${(e) => e.target === e.currentTarget && onClose()}><div class="tk-sheet">
     <div class="head"><h2>学者名单</h2><span class="muted small">名单存在你的 vault 里，两台电脑同步</span><span class="spacer" />
@@ -185,11 +329,21 @@ function ScholarEditor({ list, onClose, toast, onChanged }) {
       <div><b>${s.name}</b> ${s.tracked_lab && html`<span class="tk-badge ok">48 lab 内</span>`}
         <div class="m" title=${Object.entries(s.sources || {}).map(([k, v]) => `${k}: ${v}`).join("\n")}>${[s.lab, s.affiliation].filter(Boolean).join(" · ")}</div></div>
       <span class="muted small">${s.scholar_citations ? `Scholar ${fmtN(s.scholar_citations.value)}` : s.topic_citations ? `主题引用 ${fmtN(s.topic_citations)}` : s.added === "user" ? "手动加入" : ""}</span>
-      <button class="abtn" title="移除" onClick=${() => remove(s)}><${Icon} name="x" sm /></button>
+      <span><button class=${"tk-pin" + (s.pinned ? " on" : "")} title="固定：自动更新永远不会移除" onClick=${() => pin(s)}>${s.pinned ? "已固定" : "固定"}</button>
+        <button class="abtn" title="移除" onClick=${() => remove(s)}><${Icon} name="x" sm /></button></span>
     </div>`)}
     <${LineKeywords} toast=${toast} onChanged=${onChanged} />
+    ${R && html`<${ListRules} R=${R} toast=${toast} />`}
   </div></div>`;
 }
+
+// Rank movement from the last applied recompute.
+const rankMove = (s) => {
+  if (!s.rank_changed) return "";
+  if (s.prev_rank == null) return html` <span class="tk-mv new" title=${`${s.rank_changed} 新进入`}>新</span>`;
+  const d = s.prev_rank - s.rank;
+  return d === 0 ? "" : html` <span class=${"tk-mv " + (d > 0 ? "up" : "down")} title=${`${s.rank_changed} 起：#${s.prev_rank} → #${s.rank}`}>${d > 0 ? "▲" : "▼"}${Math.abs(d)}</span>`;
+};
 
 // Scholars sharing a lab (lab_id, else lab name): shown as a group, the list keeps both for now.
 const labKey = (s) => s.lab_id || (s.lab || "").toLowerCase();
@@ -199,7 +353,7 @@ function ScholarCard({ s, on, onClick, mates }) {
   const years = (s.by_year || []).slice(-8);
   const gs = s.scholar_citations?.value;
   return html`<button class=${"tk-person" + (on ? " on" : "")} onClick=${onClick}>
-    <span class="tk-rank">#${s.rank ?? "—"}</span>
+    <span class="tk-rank">${s.pinned && html`<span title="已固定">固定 · </span>`}#${s.rank ?? "—"}${rankMove(s)}</span>
     <div class="tk-person-top"><${Avatar} name=${s.name} srcs=${avatarSrcs(s)} size=${46} />
       <div class="tk-person-id"><b>${s.name}</b><span>${s.lab || s.inst?.name || s.affiliation || ""}</span>
         <span>${s.affiliation || s.inst?.name || ""}</span></div></div>
@@ -258,12 +412,14 @@ function ScholarsTab({ toast, onOpenPaper, onOpenNote, onAsk, onChanged, version
   const [line, setLine] = useState("");
   const [month, setMonth] = useState(null);
   const [edit, setEdit] = useState(false);
+  const [proposal, setProposal] = useState(false);
   const [busy, setBusy] = useState(false);
   const timer = useRef();
   const listRef = useRef();
+  const R = useListRefresh(toast, () => load());
   const load = async (refresh = false) => {
     setBusy(true);
-    try { setD(await api(`/api/track/scholars/activity${refresh ? "?refresh=true" : ""}`)); } catch (e) { toast(e.message); } finally { setBusy(false); }
+    try { setD(await api(`/api/track/scholars/activity${refresh ? "?refresh=true" : ""}`)); R.load(); } catch (e) { toast(e.message); } finally { setBusy(false); }
   };
   useEffect(() => { load(); return () => clearTimeout(timer.current); }, [version]);
   useEffect(() => { clearTimeout(timer.current); if (d?.job?.running) timer.current = setTimeout(() => load(), 2500); }, [d]);
@@ -309,9 +465,11 @@ function ScholarsTab({ toast, onOpenPaper, onOpenNote, onAsk, onChanged, version
       <span class="tk-prog" style=${{ flex: 1 }}><span class="tk-prog-bar"><i style=${{ width: (job.total ? (job.done / job.total) * 100 : 5) + "%" }} /></span></span></div>`}
     ${job.error && !job.running && html`<div class="tk-banner bad"><span>上次抓取出错：${job.error}（显示的是缓存）</span></div>`}
 
+    <${RefreshBanner} R=${R} onOpen=${() => setProposal(true)} />
     <div class="tk-section-title"><h2>领域 Top ${d.scholars.length} 学者</h2>
       <span class="muted">${d.scholars[0]?.rank_by ? `按 ${d.scholars[0].rank_by}` : "领域排名"} · 点卡片看详情</span><span class="spacer" />
       <button class="linkbtn" disabled=${busy || job.running} onClick=${() => load(true)}>${job.running ? "抓取中…" : "刷新数据"}</button>
+      <button class="linkbtn" disabled=${R.rf?.job?.running} onClick=${R.start} title="重算名单：读 Scholar 排名、核对近期论文，结果作为建议给你确认">${R.rf?.job?.running ? "重算中…" : "立即更新"}</button>
       <button class="linkbtn" onClick=${() => setEdit(true)}>管理名单</button></div>
     <div class="tk-people">${d.scholars.map((s) => html`<${ScholarCard} key=${s.id} s=${s} on=${open === s.id} onClick=${() => pickScholar(s.id)}
       mates=${d.scholars.filter((x) => x.id !== s.id && labKey(x) && labKey(x) === labKey(s)).map((x) => x.name)} />`)}</div>
@@ -349,7 +507,8 @@ function ScholarsTab({ toast, onOpenPaper, onOpenNote, onAsk, onChanged, version
     <${PaperGrid} papers=${papers} render=${(p, ready) => html`<${PaperCard} thumbReady=${ready} key=${p.arxiv || p.oa || p.title} p=${p} labels=${labels} reason=${reason(p)}
       faces=${p.scholars.slice(0, 4).map((x) => byId[x] && html`<span title=${byId[x].name}><${Avatar} name=${byId[x].name} srcs=${avatarSrcs(byId[x])} size=${20} /></span>`)}
       toast=${toast} onOpenPaper=${onOpenPaper} onAsk=${onAsk} onAdded=${onChanged} />`} />
-    ${edit && html`<${ScholarEditor} list=${d.scholars} onClose=${() => setEdit(false)} toast=${toast} onChanged=${() => load()} />`}`;
+    ${edit && html`<${ScholarEditor} list=${d.scholars} onClose=${() => setEdit(false)} toast=${toast} onChanged=${() => load()} R=${R} />`}
+    ${proposal && html`<${ProposalSheet} R=${R} list=${d.scholars} onClose=${() => setProposal(false)} toast=${toast} />`}`;
 }
 
 // ---------------- weekly radar ----------------
