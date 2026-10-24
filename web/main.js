@@ -10,6 +10,7 @@ import { IdeasPage } from "/ideas.js";
 import { TrackPage } from "/track.js";
 import { DirectionPage, LinePanel, keepLines } from "/direction.js";
 import { NoteSheet } from "/note.js";
+import { ZoteroButton, ZoteroSettings } from "/zotero.js";
 
 // ---------------- library ----------------
 
@@ -62,7 +63,7 @@ function excerptLine(text, page, comment) {
   return `- "${q}"` + (page ? ` [p.${page}]` : "") + (c ? ` — ${c}` : "");
 }
 
-function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef, jumpRef, toast, onDone, onAddToList, onExcerpted }) {
+function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef, jumpRef, toast, onDone, onAddToList, onExcerpted, onNoteChanged }) {
   const containerRef = useRef();
   const wrapRef = useRef();
   const [page, setPage] = useState(1);
@@ -248,6 +249,7 @@ function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef
             ${paper.reading.status !== "done" && html`<button class="tb-btn" title="记为读完" onClick=${onDone}><${Icon} name="check" sm />读完</button>`}
           </span>`
         : html`<button class="tb-btn" title="加入阅读清单 (T2)" onClick=${onAddToList}><${Icon} name="plus" sm />清单</button>`)}
+      ${paper && html`<${ZoteroButton} stem=${stem} toast=${toast} onNoteChanged=${onNoteChanged} />`}
       <span class="grow" />
       <span class="pageinput"><input value=${page} onKeyDown=${(e) => e.key === "Enter" && v.goTo(Number(e.target.value))} />/ ${pages || "–"}</span>
       <div class="tb-sep" />
@@ -353,6 +355,7 @@ function Settings({ status, onClose, onSaved }) {
         <select value=${s.claude_model} onChange=${(e) => save({ claude_model: e.target.value })}>
           <option value="">默认</option><option value="opus">Opus</option><option value="sonnet">Sonnet</option><option value="haiku">Haiku（快）</option>
         </select></div>
+      <${ZoteroSettings} settings=${s} save=${save} />
       <div class="field"><div><label>翻译引擎</label><small>划词翻译和整篇双语 PDF</small></div>
         <select value=${s.translate_engine} onChange=${(e) => save({ translate_engine: e.target.value })}>
           <option value="deepseek">DeepSeek</option><option value="google">Google 翻译（免费）</option>
@@ -553,7 +556,7 @@ function App() {
   let page;
   if (reading) page = html`<${Reader} key=${stem} stem=${stem} paper=${paper} pageRef=${pageRef} viewRef=${viewRef} jumpRef=${jumpRef} toast=${toast}
       onSelectionAction=${onSelectionAction} onCropAction=${onCropAction} onDone=${() => setDoneOpen(true)} onAddToList=${addToList}
-      onExcerpted=${onExcerpted} />`;
+      onExcerpted=${onExcerpted} onNoteChanged=${() => { loadPaper(stem); setNoteVersion((n) => n + 1); }} />`;
   else if (view === "list") page = html`<${ReadingPage} version=${dataVersion} toast=${toast} onOpen=${(i) => pick(i.key)} />`;
   else if (view === "timeline") page = html`<${TimelinePage} version=${dataVersion} tab=${tlTab} onOpenVenue=${setVenueKey} toast=${toast} onChanged=${bump} />`;
   else if (view === "ideas") page = html`<${IdeasPage} version=${dataVersion} lines=${status?.lines || []} radarPath=${status?.idea_radar}

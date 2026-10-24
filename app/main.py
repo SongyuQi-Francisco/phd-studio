@@ -588,4 +588,6 @@ from .line_api import router as line_router  # noqa: E402  (方向 page: researc
 app.include_router(line_router)
 from .venue_api import router as venue_check_router  # noqa: E402  (venue details: freshness, 让助手核对)
 app.include_router(venue_check_router)
+from .zotero_api import router as zotero_router  # noqa: E402  (push papers into Zotero)
+app.include_router(zotero_router)
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
