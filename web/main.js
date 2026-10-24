@@ -4,6 +4,7 @@ import { html, Icon, api, prefs } from "/lib.js";
 import { PdfView } from "/pdfview.js";
 import { ChatPanel, NotePanel, PROMPTS } from "/chat.js";
 import { ReadingPage, DoneDialog } from "/reading.js";
+import { OverviewPage, TimelinePage, IdeasPage, VenueSheet, IdeaCapture } from "/plan.js";
 
 // ---------------- library ----------------
 
@@ -304,38 +305,56 @@ function Settings({ status, onClose, onSaved }) {
 
 // ---------------- app ----------------
 
+const STUDIO_CHIPS = [
+  { label: "今天该做什么", prompt: "看看我的时间线、阅读清单和想法，告诉我今天最该做的 3 件事（按截止紧迫度排）。" },
+  { label: "最近截稿", prompt: "未来 60 天我关注的会议有哪些截稿？按时间列出，标出和我投稿目标相关的。" },
+  { label: "加里程碑", prompt: "帮我加一个里程碑：", fill: true },
+  { label: "记想法", prompt: "记一个想法：", fill: true },
+];
+
 function App() {
   const [papers, setPapers] = useState([]);
   const [stem, setStem] = useState(prefs.get("lastStem", null));
-  const [view, setView] = useState("list");
+  const [view, setView] = useState("overview");
+  const [tlTab, setTlTab] = useState("watched");
   const [doneOpen, setDoneOpen] = useState(false);
-  const [listVersion, setListVersion] = useState(0);
+  const [dataVersion, setDataVersion] = useState(0);
   const [quitState, setQuitState] = useState(""); // "" | "confirm" | "done"
   const [paper, setPaper] = useState(null);
   const [drawer, setDrawer] = useState(false);
   const [tab, setTab] = useState("claude");
+  const [assistant, setAssistant] = useState(prefs.get("assistant", true));
+  const [venueKey, setVenueKey] = useState(null);
+  const [ideaOpen, setIdeaOpen] = useState(false);
   const [status, setStatus] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [attachments, setAttachments] = useState({ selection: null, images: [] });
+  const [studioAtt, setStudioAtt] = useState({ selection: null, images: [] });
   const [noteVersion, setNoteVersion] = useState(0);
   const [toastMsg, setToastMsg] = useState("");
   const [sideW, setSideW] = useState(prefs.get("sideW", 420));
   const pageRef = useRef(1);
   const viewRef = useRef(null);
   const chatRef = useRef(null);
+  const studioRef = useRef(null);
 
-  const toast = useCallback((m) => { setToastMsg(m); setTimeout(() => setToastMsg(""), 2200); }, []);
+  const toast = useCallback((m) => { setToastMsg(m); setTimeout(() => setToastMsg(""), 2400); }, []);
   const refreshStatus = () => api("/api/status").then(setStatus).catch(() => {});
+  const bump = () => setDataVersion((n) => n + 1);
 
   useEffect(() => {
     api("/api/papers").then((r) => setPapers(r.papers));
     refreshStatus();
     const k = (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") { e.preventDefault(); setDrawer((d) => !d); }
+      if (!(e.metaKey || e.ctrlKey)) return;
+      if (e.key === "k") { e.preventDefault(); setDrawer((d) => !d); }
+      if (e.key === "j") { e.preventDefault(); setAssistant((a) => !a); }
+      if (e.key === "i") { e.preventDefault(); setIdeaOpen(true); }
     };
     window.addEventListener("keydown", k);
     return () => window.removeEventListener("keydown", k);
   }, []);
+  useEffect(() => prefs.set("assistant", assistant), [assistant]);
 
   const loadPaper = (s) => api(`/api/papers/${encodeURIComponent(s)}`).then(setPaper)
     .catch(() => { setStem(null); prefs.set("lastStem", null); setView("list"); });
@@ -352,6 +371,12 @@ function App() {
   useEffect(() => { document.documentElement.style.setProperty("--side-w", sideW + "px"); prefs.set("sideW", sideW); }, [sideW]);
 
   const pick = (s) => { setStem(s); setView("reader"); setDrawer(false); };
+  const go = (v) => {
+    setDrawer(false);
+    if (v === "plan") { setTlTab("plan"); setView("timeline"); }
+    else { if (v === "timeline") setTlTab("watched"); setView(v); }
+    bump();
+  };
   const addToList = async () => {
     try {
       await api("/api/reading", { json: paper.arxiv && !paper.note_rel ? { arxiv: paper.arxiv, tier: "T2" } : { paper: stem, tier: "T2" } });
@@ -381,18 +406,33 @@ function App() {
   };
 
   const claudeOk = status?.claude?.ok;
-
   const reading = view === "reader" && stem;
-  return html`<div class=${"shell" + (reading ? "" : " no-side")}>
+  const studioSide = !reading && assistant;
+  const nav = (v, icon, label) => html`<button class=${"rail-btn" + (view === v && !drawer ? " on" : "")} title=${label}
+    onClick=${() => go(v)}><${Icon} name=${icon} /></button>`;
+
+  let page;
+  if (reading) page = html`<${Reader} key=${stem} stem=${stem} paper=${paper} pageRef=${pageRef} viewRef=${viewRef} toast=${toast}
+      onSelectionAction=${onSelectionAction} onCropAction=${onCropAction} onDone=${() => setDoneOpen(true)} onAddToList=${addToList} />`;
+  else if (view === "list") page = html`<${ReadingPage} version=${dataVersion} toast=${toast} onOpen=${(i) => pick(i.key)} />`;
+  else if (view === "timeline") page = html`<${TimelinePage} version=${dataVersion} tab=${tlTab} onOpenVenue=${setVenueKey} toast=${toast} onChanged=${bump} />`;
+  else if (view === "ideas") page = html`<${IdeasPage} version=${dataVersion} />`;
+  else page = html`<${OverviewPage} version=${dataVersion} onOpenVenue=${setVenueKey} go=${go} />`;
+
+  return html`<div class=${"shell" + (reading || studioSide ? "" : " no-side")}>
     <nav class="rail">
       <img class="logo-img" src="/icon.svg" alt="PhD Studio" title="PhD Studio" />
-      <button class=${"rail-btn" + (view === "list" && !drawer ? " on" : "")} title="阅读清单" onClick=${() => { setView("list"); setDrawer(false); setListVersion((n) => n + 1); }}><${Icon} name="inbox" /></button>
+      ${nav("overview", "home", "总览")}
+      ${nav("list", "inbox", "阅读清单")}
+      ${nav("timeline", "calendar", "时间线 · 会议与规划")}
+      ${nav("ideas", "bulb", "想法 (⌘I 随手记)")}
       <button class=${"rail-btn" + (drawer ? " on" : "")} title="论文库 (⌘K)" onClick=${() => setDrawer(!drawer)}><${Icon} name="library" /></button>
-      ${stem && view === "list" && html`<button class="rail-btn" title="回到正在读的论文" onClick=${() => setView("reader")}><${Icon} name="book" /></button>`}
-      ${reading && html`
+      ${stem && !reading && html`<button class="rail-btn" title="回到正在读的论文" onClick=${() => setView("reader")}><${Icon} name="book" /></button>`}
+      ${reading && html`<div class="rail-sep" />
         <button class=${"rail-btn" + (tab === "claude" ? " on" : "")} title="Claude 伴读" onClick=${() => setTab("claude")}><${Icon} name="chat" /></button>
         <button class=${"rail-btn" + (tab === "note" ? " on" : "")} title="笔记" onClick=${() => setTab("note")}><${Icon} name="note" /></button>`}
       <div class="spacer" />
+      ${!reading && html`<button class=${"rail-btn" + (assistant ? " on" : "")} title="工作台助手 (⌘J)" onClick=${() => setAssistant(!assistant)}><${Icon} name="sparkle" /></button>`}
       <button class="rail-btn" title="关闭工作台" onClick=${() => setQuitState("confirm")}><${Icon} name="power" /></button>
       <button class="rail-btn" title="设置" onClick=${() => { refreshStatus(); setSettingsOpen(true); }}>
         <${Icon} name="settings" />${status && html`<span class=${"dot " + (claudeOk ? "ok" : "bad")} />`}
@@ -401,11 +441,7 @@ function App() {
 
     <div class="center">
       <${Library} papers=${papers} current=${stem} open=${drawer} onPick=${pick} onClose=${() => setDrawer(false)} />
-      ${reading
-        ? html`<${Reader} key=${stem} stem=${stem} paper=${paper} pageRef=${pageRef} viewRef=${viewRef} toast=${toast}
-            onSelectionAction=${onSelectionAction} onCropAction=${onCropAction}
-            onDone=${() => setDoneOpen(true)} onAddToList=${addToList} />`
-        : html`<${ReadingPage} version=${listVersion} toast=${toast} onOpen=${(i) => pick(i.key)} />`}
+      ${page}
     </div>
 
     ${reading && html`<div class="resizer" onMouseDown=${startResize} />
@@ -419,7 +455,17 @@ function App() {
         onAskUpdate=${() => { setTab("claude"); chatRef.current?.send(PROMPTS.note(paper.note_rel), { selection: null, images: [], label: "更新笔记" }); }}
         onAskIntake=${() => { setTab("claude"); chatRef.current?.send(PROMPTS.intake, { selection: null, images: [], label: "建笔记" }); }} />`}
     </aside>`}
+    ${studioSide && html`<div class="resizer" onMouseDown=${startResize} />
+    <aside class="side">
+      <${ChatPanel} stem="studio" paper=${null} attachments=${studioAtt} setAttachments=${setStudioAtt}
+        registerSend=${(api_) => (studioRef.current = api_)} claudeOk=${claudeOk} title="工作台助手"
+        chips=${STUDIO_CHIPS} emptyHint="跟我说要做的事：加里程碑、设投稿目标、记想法、把论文推进清单、查会议截稿……"
+        onStudioChanged=${() => { bump(); }} />
+    </aside>`}
 
+    ${venueKey && html`<${VenueSheet} vkey=${venueKey} onClose=${() => setVenueKey(null)} toast=${toast} onChanged=${bump} />`}
+    ${ideaOpen && html`<${IdeaCapture} lines=${status?.lines || []} context=${reading ? { paper: stem, page: pageRef.current } : null}
+      onClose=${() => setIdeaOpen(false)} onSaved=${() => { setIdeaOpen(false); toast("想法已记下"); bump(); }} />`}
     ${doneOpen && paper?.reading && html`<${DoneDialog} item=${{ ...paper.reading, key: stem, title: paper.title }}
       onClose=${() => setDoneOpen(false)} onSaved=${() => { setDoneOpen(false); toast("已记为读完"); loadPaper(stem); }} />`}
     ${settingsOpen && status && html`<${Settings} status=${status} onClose=${() => setSettingsOpen(false)} onSaved=${refreshStatus} />`}

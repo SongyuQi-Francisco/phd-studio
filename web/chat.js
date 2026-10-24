@@ -47,6 +47,8 @@ function AssistantMsg({ m, onPage, answer }) {
       ? html`<div class="tool"><${Icon} name=${s.name === "Edit" || s.name === "Write" ? "file" : "search"} sm /><span>${s.summary}</span></div>`
       : s.type === "perm"
       ? html`<${Permission} p=${s} answer=${answer} />`
+      : s.type === "change"
+      ? html`<div class="change"><${Icon} name="check" sm /><span>${s.text}</span></div>`
       : html`<div class="err">${s.text}</div>`)}
     ${m.streaming && html`<div class="typing"><i /><i /><i /></div>`}
     ${!m.streaming && m.model && html`<div class="foot"><span>${m.model}</span>${m.duration_ms ? html`<span>${(m.duration_ms / 1000).toFixed(1)}s</span>` : ""}</div>`}
@@ -61,7 +63,8 @@ function UserMsg({ m }) {
   </div>`;
 }
 
-export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, registerSend, onPage, onNoteChanged, claudeOk }) {
+export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, registerSend, onPage, onNoteChanged, claudeOk,
+  chips, emptyHint, title, onStudioChanged }) {
   const [msgs, setMsgs] = useState([]);
   const [busy, setBusy] = useState(false);
   const [text, setText] = useState("");
@@ -95,6 +98,7 @@ export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, r
       });
       else if (d.type === "tool") update((m) => { m.segments.push({ type: "tool", name: d.name, summary: d.summary }); return m; });
       else if (d.type === "permission") update((m) => { m.segments.push({ ...d, type: "perm" }); return m; });
+      else if (d.type === "studio_changed") { update((m) => { m.segments.push({ type: "change", text: d.summary }); return m; }); onStudioChanged?.(d.area); }
       else if (d.type === "permission_resolved") {
         setMsgs((prev) => prev.map((m) => m.segments ? { ...m, segments: m.segments.map((s) => s.type === "perm" && s.id === d.id ? { ...s, resolved: d.allowed } : s) } : m));
         if (d.allowed) onNoteChanged?.();
@@ -103,7 +107,7 @@ export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, r
       } else if (d.type === "done") {
         update((m) => {
           // keep live permission cards (they carry the user's decision); take text/tools from the server
-          const perms = m.segments.filter((s) => s.type === "perm");
+          const perms = m.segments.filter((s) => s.type === "perm" || s.type === "change");
           const segs = d.segments.length ? [...d.segments, ...perms] : m.segments;
           return { ...m, segments: segs, streaming: false, model: d.model, duration_ms: d.duration_ms };
         });
@@ -133,7 +137,7 @@ export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, r
     if (busy) return;
     const sel = opts.selection !== undefined ? opts.selection : attachments.selection;
     const imgs = opts.images !== undefined ? opts.images : attachments.images;
-    const page = opts.page || sel?.page || imgs[0]?.page || getPage();
+    const page = opts.page || sel?.page || imgs[0]?.page || getPage?.() || null;
     const payload = {
       type: "send", text: body, page,
       selection: sel?.text || null,
@@ -192,15 +196,17 @@ export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, r
 
   return html`
     <div class="side-head">
-      <div class="meta"><span class=${"dot " + (claudeOk ? "ok" : "bad")} /><span>${claudeOk ? (lastModel || "Claude") : "Claude 未连接"}</span></div>
+      <div class="meta"><span class=${"dot " + (claudeOk ? "ok" : "bad")} /><span>${claudeOk ? (title ? `${title} · ${lastModel || "Claude"}` : lastModel || "Claude") : "Claude 未连接"}</span></div>
       <button class="tb-btn" title="新对话" onClick=${reset}><${Icon} name="refresh" sm /></button>
     </div>
     <div class="chat" ref=${listRef} onScroll=${onScroll}>
       ${msgs.length === 0
-        ? html`<div class="chat-empty"><${Icon} name="sparkle" /><div>划选文字，或按住 ⌥ 框选图表 / 公式</div></div>`
+        ? html`<div class="chat-empty"><${Icon} name="sparkle" /><div>${emptyHint || "划选文字，或按住 ⌥ 框选图表 / 公式"}</div></div>`
         : msgs.map((m) => m.role === "user" ? html`<${UserMsg} m=${m} />` : html`<${AssistantMsg} m=${m} onPage=${onPage} answer=${answer} />`)}
     </div>
     <div class="composer">
+      ${chips ? html`<div class="chips">${chips.map((c) => html`<button class="chip" disabled=${busy}
+          onClick=${() => c.fill ? (setText(c.prompt), setTimeout(() => taRef.current?.focus(), 0)) : send(c.prompt, { selection: null, images: [], label: c.label })}>${c.label}</button>`)}</div>` : html`
       <div class="chips">
         <button class="chip" disabled=${busy} onClick=${() => send(PROMPTS.brief, { selection: null, images: [], label: "速读" })}>速读</button>
         <button class="chip" disabled=${busy} onClick=${() => { const p = getPage(); send(PROMPTS.page(p), { includePageText: true, page: p, selection: null, images: [], label: `讲解第 ${p} 页` }); }}>讲解本页</button>
@@ -208,7 +214,7 @@ export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, r
         <button class="chip" disabled=${busy || !paper} onClick=${() => paper.note_rel
           ? send(PROMPTS.note(paper.note_rel), { selection: null, images: [], label: "更新笔记" })
           : send(PROMPTS.intake, { selection: null, images: [], label: "建笔记" })}>${paper && !paper.note_rel ? "建笔记" : "更新笔记"}</button>
-      </div>
+      </div>`}
       ${hasAttach && html`<div class="attach">
         ${attachments.selection && html`<div class="att"><${Icon} name="quote" sm /><span>${attachments.selection.text}</span>
           <button onClick=${() => setAttachments({ ...attachments, selection: null })}><${Icon} name="x" sm /></button></div>`}

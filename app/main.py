@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import bilingual, library, reading
+from . import bilingual, library, plan, reading, venues
 from .claude_chat import claude_status, draft_takeaway, history, registry
 from .config import CROPS_DIR, PROFILE, STUDIO_DIR, load_settings, save_settings
 from .translate import translate
@@ -27,6 +27,7 @@ WEB_DIR = STUDIO_DIR / "web"
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     reaper = asyncio.create_task(registry.reap_idle())
+    venues.refresh_in_background()
     yield
     reaper.cancel()
     bilingual.stop_all()
@@ -47,6 +48,8 @@ async def revalidate_app_files(request, call_next):
 
 
 def _stem_or_404(stem: str) -> str:
+    if stem == "studio":  # the workbench-wide assistant
+        return stem
     try:
         library.validate(stem)
     except FileNotFoundError:
@@ -222,10 +225,131 @@ async def focus() -> dict[str, bool]:
     return {"ok": True}
 
 
+# ---------- venues, plan, ideas, overview ----------
+
+
+@app.get("/api/venues")
+def venue_list(q: str = "", ccf: str = "", core: str = "", scope: str = "all", limit: int = 300) -> dict[str, Any]:
+    if scope == "watched":
+        keys = plan.watched_keys()
+        rows = [venues.summary(venues.catalog()[k]) for k in keys if k in venues.catalog()]
+    else:
+        rows = venues.search(q, ccf=ccf, core=core, limit=limit)
+    watched = set(plan.watched_keys())
+    for r in rows:
+        r["watched"] = r["key"] in watched
+    return {"venues": rows, "stats": venues.stats()}
+
+
+@app.get("/api/venues/{key}")
+def venue_detail(key: str) -> dict[str, Any]:
+    v = venues.get(key)
+    if not v:
+        raise HTTPException(404, "没有这个会议")
+    v["watched"] = v["key"] in set(plan.watched_keys())
+    return v
+
+
+@app.post("/api/venues/refresh")
+async def venue_refresh() -> dict[str, Any]:
+    try:
+        return await run_in_threadpool(venues.refresh, True)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"更新失败：{e}")
+
+
+class WatchReq(BaseModel):
+    on: bool = True
+
+
+@app.post("/api/venues/{key}/watch")
+def venue_watch(key: str, req: WatchReq) -> dict[str, Any]:
+    try:
+        return plan.watch(key, req.on)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/plan")
+def plan_timeline() -> dict[str, Any]:
+    return plan.timeline()
+
+
+@app.post("/api/plan/{collection}")
+def plan_add(collection: str, body: dict[str, Any]) -> dict[str, Any]:
+    try:
+        if collection == "milestones":
+            return plan.add_milestone(body["title"], body["date"], line=body.get("line"),
+                                      kind=body.get("kind") or "milestone", notes=body.get("notes"))
+        if collection == "targets":
+            return plan.add_target(body["title"], body["venue"], line=body.get("line"),
+                                   alternatives=body.get("alternatives"), notes=body.get("notes"))
+    except (KeyError, ValueError) as e:
+        raise HTTPException(400, str(e))
+    raise HTTPException(404)
+
+
+@app.patch("/api/plan/{collection}/{rid}")
+def plan_patch(collection: str, rid: str, body: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return plan.update(collection, rid, body)
+    except (KeyError, ValueError) as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/plan/{collection}/{rid}")
+def plan_delete(collection: str, rid: str) -> dict[str, bool]:
+    try:
+        plan.delete(collection, rid)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    return {"ok": True}
+
+
+@app.get("/api/ideas")
+def idea_list() -> dict[str, Any]:
+    return {"ideas": plan.ideas()}
+
+
+@app.post("/api/ideas")
+def idea_add(body: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return plan.add_idea(body.get("text", ""), line=body.get("line"), paper=body.get("paper"),
+                             page=body.get("page"), tags=body.get("tags"))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.patch("/api/ideas/{rid}")
+def idea_patch(rid: str, body: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return plan.idea_store.update("ideas", rid, body)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.get("/api/overview")
+def overview() -> dict[str, Any]:
+    tl = plan.timeline(days_back=0, days_ahead=120)
+    items = reading.load()
+    s = reading.summary(items)
+    upcoming = [e for e in tl["events"] if e["days"] >= 0]
+    return {
+        "next_target": next((e for e in upcoming if e["type"] == "target"), None),
+        "next_any": next((e for e in upcoming if e["type"] != "milestone"), None),
+        "next_milestone": next((e for e in upcoming if e["type"] == "milestone"), None),
+        "events": tl["events"],
+        "targets": tl["targets"],
+        "reading": {k: s[k] for k in ("inbox", "T1", "queued", "reading", "done_week", "caps")},
+        "ideas_new": sum(1 for i in plan.ideas() if i.get("status") == "new"),
+        "lines": PROFILE.get("lines", []),
+    }
+
+
 @app.get("/api/status")
 async def status() -> dict[str, Any]:
     return {"claude": await run_in_threadpool(claude_status), "settings": load_settings(),
-            "focus": PROFILE.get("current_focus", "")}
+            "focus": PROFILE.get("current_focus", ""), "lines": PROFILE.get("lines", [])}
 
 
 @app.post("/api/settings")

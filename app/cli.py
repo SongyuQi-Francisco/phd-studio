@@ -4,6 +4,9 @@
     studio push --arxiv 2606.17328 --reason "..." --by "weekly tracker" --source tracker
     studio list [--status inbox] [--line "Project A"]
     studio done "Attention 2017" --depth deep --verdict key --takeaway "..."
+    studio milestone "Draft experiments" --date 2026-11-15 --line "Project A" [--kind gate] [--notes "..."]
+    studio idea "use X as a verifier for Y" [--line "Project A"]
+    studio deadlines [--days 90]
 
 Works whether or not the web app is running (the YAML file is locked while writing).
 """
@@ -13,7 +16,7 @@ import argparse
 import json
 import sys
 
-from . import reading
+from . import plan, reading
 
 
 def _row(i: dict) -> str:
@@ -50,6 +53,20 @@ def main(argv: list[str] | None = None) -> int:
     d.add_argument("--verdict", choices=reading.VERDICTS)
     d.add_argument("--takeaway")
 
+    m = sub.add_parser("milestone", help="add a milestone / gate to the plan")
+    m.add_argument("title")
+    m.add_argument("--date", required=True, help="YYYY-MM-DD")
+    m.add_argument("--line")
+    m.add_argument("--kind", choices=plan.KINDS, default="milestone")
+    m.add_argument("--notes")
+
+    i = sub.add_parser("idea", help="add an idea to the idea inbox")
+    i.add_argument("text")
+    i.add_argument("--line")
+
+    dl = sub.add_parser("deadlines", help="upcoming watched-venue deadlines, targets and milestones")
+    dl.add_argument("--days", type=int, default=90)
+
     a = ap.parse_args(argv)
     try:
         if a.cmd == "push":
@@ -78,7 +95,18 @@ def main(argv: list[str] | None = None) -> int:
                 patch["takeaway"] = a.takeaway
             item = reading.update(item["id"], patch)
             print(f"done: {item['id']} {reading.key_of(item)}")
-    except reading.ReadingError as e:
+        elif a.cmd == "milestone":
+            rec = plan.add_milestone(a.title, a.date, line=a.line, kind=a.kind, notes=a.notes)
+            print(f"added: {rec['id']} {rec['date']} {rec['title']}")
+        elif a.cmd == "idea":
+            rec = plan.add_idea(a.text, line=a.line, source="claude")
+            print(f"added: {rec['id']} {rec['text'][:60]}")
+        elif a.cmd == "deadlines":
+            for e in plan.timeline(days_back=0, days_ahead=a.days)["events"]:
+                if e["days"] >= 0:
+                    tag = {"venue": "venue", "target": "TARGET", "milestone": "plan"}[e["type"]]
+                    print(f"{e['at'][:16].replace('T', ' ')} UTC  {e['days']:>3}d  {tag:<6} {e['title']}")
+    except (reading.ReadingError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
     return 0

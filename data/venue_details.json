@@ -1,0 +1,1111 @@
+{
+ "verified_at": "2026-10-24",
+ "note": "Collected from official conference/CFP pages; see each venue's sources. Ranks come from ICORE2026/CCF data at runtime, not from here.",
+ "venues": [
+  {
+   "name": "SIGIR",
+   "edition": "SIGIR 2027",
+   "homepage": "https://sigir2027.org/",
+   "cfp_url": "https://sigir2027.org/pages/submit-full.html",
+   "location": "Signia by Hilton San Jose, San Jose, California, USA",
+   "dates": "July 18-24, 2027 (banner on homepage says July 19-24; body and important-dates say July 18-24)",
+   "deadlines": [
+    {
+     "track": "Full papers (dates marked 'PROPOSED' on CFP page)",
+     "abstract": "2027-01-14 AoE",
+     "paper": "2027-01-21 AoE"
+    },
+    {
+     "track": "Short, demo, resource, reproducibility, perspective papers",
+     "abstract": null,
+     "paper": null
+    }
+   ],
+   "tracks": [
+    {
+     "name": "Full papers",
+     "page_limit": "at most 9 pages (incl. figures, tables, proofs, appendixes, acknowledgments) + unlimited references; +1 page in camera-ready",
+     "notes": "Submitted via OpenReview; abstract required before full paper; notification 2027-04-05; camera-ready 2027-04-30"
+    },
+    {
+     "name": "Short papers",
+     "page_limit": null,
+     "notes": "Call page is a placeholder (TBA)"
+    },
+    {
+     "name": "Resource & Reproducibility",
+     "page_limit": null,
+     "notes": "Call page is a placeholder (TBA)"
+    },
+    {
+     "name": "Perspectives",
+     "page_limit": null,
+     "notes": "Call page is a placeholder (TBA)"
+    },
+    {
+     "name": "Demonstrations",
+     "page_limit": null,
+     "notes": "TBA"
+    },
+    {
+     "name": "SIRIP / industry",
+     "page_limit": null,
+     "notes": "TBA"
+    }
+   ],
+   "format": {
+    "template": "ACM sigconf (\\documentclass[sigconf,natbib=true,anonymous=true]{acmart}); Word Interim Template",
+    "review_model": "double-anonymous",
+    "notable_rules": [
+     "Full-paper deadlines labelled 'PROPOSED' on the CFP page; submission link 'to come'",
+     "One author per submission must agree to serve as reviewer",
+     "Author list locked at abstract submission; no changes afterward",
+     "All authors need complete OpenReview profiles; authors with >=10 DBLP papers must add DBLP URL",
+     "Anonymous code repositories required (e.g. anonymous.4open.science)",
+     "Concurrent submission prohibited, including to other SIGIR 2027 tracks",
+     "AI use must follow ACM policy on AI; LLM-generated reviews considered 'highly irresponsible' and may be sanctioned",
+     "Desk rejection for incomplete profiles, author changes, overlength, formatting, anonymity violations, topical misfit",
+     "50th-anniversary edition of SIGIR"
+    ]
+   },
+   "sources": [
+    "https://sigir2027.org/",
+    "https://sigir2027.org/pages/submit-full.html",
+    "https://sigir2027.org/pages/submit-tracks.html",
+    "https://sigir2027.org/pages/submit-short.html",
+    "https://sigir2027.org/pages/submit-resource.html",
+    "https://sigir2027.org/pages/submit-perspectives.html",
+    "https://sigir2027.org/pages/policies.html",
+    "https://portal.core.edu.au/conf-ranks/?search=SIGIR&by=acronym&source=CORE2023&sort=atitle&page=1",
+    "https://www.ccf.org.cn/Academic_Evaluation/DM_CS"
+   ],
+   "status": "confirmed",
+   "notes": "Full-paper dates are labelled PROPOSED on the CFP page; submission link to come. Short/resource/reproducibility/perspectives call pages are empty placeholders (fields null).",
+   "key": "SIGIR"
+  },
+  {
+   "name": "RecSys",
+   "edition": "RecSys 2026",
+   "homepage": "https://recsys.acm.org/recsys26/",
+   "cfp_url": "https://recsys.acm.org/recsys26/call/",
+   "location": "Minneapolis, Minnesota, USA",
+   "dates": "September 28 - October 2, 2026 (Doctoral Symposium Sept 27)",
+   "deadlines": [
+    {
+     "track": "Main track (Long, Short, Past/Present/Future)",
+     "abstract": "2026-04-14 23:59 AoE",
+     "paper": "2026-04-21 23:59 AoE"
+    },
+    {
+     "track": "Reproducibility",
+     "abstract": "2026-04-28 23:59 AoE",
+     "paper": "2026-05-05 23:59 AoE"
+    },
+    {
+     "track": "Industry",
+     "abstract": null,
+     "paper": "2026-05-21 23:59 AoE"
+    },
+    {
+     "track": "Doctoral Symposium",
+     "abstract": null,
+     "paper": "2026-06-09 23:59 AoE"
+    },
+    {
+     "track": "Research & Practice Notes",
+     "abstract": null,
+     "paper": "2026-07-15 23:59 AoE"
+    },
+    {
+     "track": "Demonstrations",
+     "abstract": null,
+     "paper": "2026-07-15 23:59 AoE"
+    }
+   ],
+   "tracks": [
+    {
+     "name": "Long papers",
+     "page_limit": "The maximum length is 8 pages (including figures, tables, appendices and acknowledgements); references not counted",
+     "notes": "Rebuttal June 4-9 (500 chars, factual errors only); notification July 9; long-paper acceptance 20-24% over past 3 years"
+    },
+    {
+     "name": "Short papers",
+     "page_limit": "The maximum length is 4 pages for all the technical content, with additional pages for references allowed.",
+     "notes": null
+    },
+    {
+     "name": "Past, Present, and Future (perspectives)",
+     "page_limit": "The maximum length is 4 pages for all the technical content, with additional pages allowed for references.",
+     "notes": null
+    },
+    {
+     "name": "Reproducibility",
+     "page_limit": "Reproducibility and Replicability papers are up to 8 pages (plus up to 2 additional pages for references).",
+     "notes": "Resource papers in this track: up to 4 pages excl. references, single-anonymous; required artifacts must be available or desk reject"
+    },
+    {
+     "name": "Industry",
+     "page_limit": "4-8 pages incl. figures, tables, appendices, bios, acknowledgements; references excluded",
+     "notes": "Single-blind"
+    },
+    {
+     "name": "Research & Practice Notes (new)",
+     "page_limit": "2 pages + 1 additional page for references and supplementary content",
+     "notes": "Mutually anonymous; posters; in-person"
+    }
+   ],
+   "format": {
+    "template": "ACM double-column, LaTeX sigconf with anonymous option (not manuscript)",
+    "review_model": "mutually anonymous (double-blind) for main track",
+    "notable_rules": [
+     "NEXT EDITION: RecSys 2027 announced at https://recsys.acm.org/recsys27/ - Aug 23-27, 2027, Hilton Hawaiian Village Waikiki Beach Resort, Honolulu, Hawaii; no CFP/deadlines yet",
+     "Generative AI: follow ACM policy; substantial GenAI-generated material disclosed in Acknowledgments; mainly GenAI-produced submissions treated as spam",
+     "Anonymized preprints may be posted anytime; non-anonymized overlapping preprints before deadline must be disclosed in EasyChair; no non-anonymized posting during review",
+     "Dual submission prohibited, including across RecSys tracks",
+     "Desk rejection for anonymity/length/format violations, undeclared COI, author-list changes after abstract deadline, out of scope",
+     "In-person presentation required by at least one author",
+     "APC applies to authors outside ACM Open ($250 member / $350 non-member in 2026)"
+    ]
+   },
+   "sources": [
+    "https://recsys.acm.org/",
+    "https://recsys.acm.org/recsys27/",
+    "https://recsys.acm.org/recsys26/call/",
+    "https://portal.core.edu.au/conf-ranks/?search=RecSys&by=acronym&source=CORE2023&sort=atitle&page=1",
+    "https://www.ccf.org.cn/Academic_Evaluation/DM_CS"
+   ],
+   "status": "previous-edition",
+   "notes": "RecSys 2027 page exists (Honolulu, Aug 23-27, 2027) but no CFP/deadlines yet; 2026 details given.",
+   "key": "RecSys"
+  },
+  {
+   "name": "KDD",
+   "edition": "KDD 2027",
+   "homepage": "https://kdd2027.kdd.org/",
+   "cfp_url": "https://kdd2027.kdd.org/research-track-call-for-papers/",
+   "location": "San Jose McEnery Convention Center, San Jose, United States",
+   "dates": "August 1-5, 2027",
+   "deadlines": [
+    {
+     "track": "Research track, Cycle 1 (PASSED)",
+     "abstract": "2026-07-19 23:59 AoE",
+     "paper": "2026-07-26 23:59 AoE"
+    },
+    {
+     "track": "Applied Data Science track, Cycle 1 (PASSED)",
+     "abstract": "2026-07-19 23:59 AoE",
+     "paper": "2026-07-26 23:59 AoE"
+    },
+    {
+     "track": "Datasets and Benchmarks track, Cycle 1 (PASSED)",
+     "abstract": "2026-07-19 23:59 AoE",
+     "paper": "2026-07-26 23:59 AoE"
+    },
+    {
+     "track": "Research / ADS track, Cycle 2 (dates not yet published)",
+     "abstract": null,
+     "paper": null
+    }
+   ],
+   "tracks": [
+    {
+     "name": "Research track",
+     "page_limit": "8 (eight) content pages as main paper, followed by references and an optional Appendix that has no page limits (accepted papers: 12 pages, of which 9 are content pages; references + appendix limited to 3 pages)",
+     "notes": "Double-blind on OpenReview; max 7 submissions per author per cycle; pure survey papers out of scope; rebuttal Sep 29 - Oct 13, 2026; notification Nov 14, 2026 (Cycle 1)"
+    },
+    {
+     "name": "Applied Data Science",
+     "page_limit": "8 (eight) content pages as main paper, followed by references and an optional Appendix with no page limit (accepted: 12 pages, 9 content)",
+     "notes": "SINGLE-blind (author names required); must quantify post-launch/deployment performance or desk reject; max 5 submissions per author per cycle"
+    },
+    {
+     "name": "Datasets and Benchmarks",
+     "page_limit": "8 (eight) content pages as main paper, followed by references and an optional Appendix that has no page limits",
+     "notes": "Single-blind"
+    },
+    {
+     "name": "AI for Sciences",
+     "page_limit": null,
+     "notes": "Separate CFP at https://kdd2027.kdd.org/ai4sciences-track-call-for-papers/ (not read)"
+    }
+   ],
+   "format": {
+    "template": "ACM acmart sigconf, double-column (\\documentclass[sigconf,anonymous,review]{acmart} for Research; [sigconf,review] for ADS)",
+    "review_model": "double-blind (Research), single-blind (ADS, D&B); OpenReview; reviews of accepted papers made public",
+    "notable_rules": [
+     "Two submission cycles per year; KDD 2027 Cycle 1 (Jul 2026) passed; Cycle 2 dates not on official pages as of 2026-10-24 (ADS CFP mentions a 'Jan/Feb 2027' cycle in resubmission text only)",
+     "Reciprocal reviewing: each submission must nominate at least one qualified reviewer (author with >=3 KDD/related papers); authors on 3+ papers may be auto-enrolled as reviewers; late reviewer-authors lose access to their paper's reviews",
+     "Generative AI: ACM authorship policy applies; reviewers must disclose GenAI use; uploading paper passages to GenAI tools is forbidden for reviewers",
+     "arXiv/SSRN preprints allowed (submit anonymized, do not cite the preprint)",
+     "'Resubmit' decisions from previous cycle may be revised with one-page summary of changes and prior OpenReview forum ID; rejected/withdrawn papers should not be resubmitted as new to the next cycle",
+     "Withdrawal after reviews are revealed triggers a 12-month KDD resubmission ban",
+     "Author list fixed at abstract deadline; complete OpenReview profiles required (desk reject otherwise)",
+     "Each accepted paper needs its own full 5-day in-person registration; in-person presentation required",
+     "ACM Open APC for non-participating institutions: $500 members / $750 non-members (2027)",
+     "One track per paper; no transfers between tracks"
+    ]
+   },
+   "sources": [
+    "https://kdd2027.kdd.org/",
+    "https://kdd2027.kdd.org/research-track-call-for-papers/",
+    "https://kdd2027.kdd.org/applied-data-science-ads-track-call-for-papers/",
+    "https://kdd2027.kdd.org/datasets-and-benchmarks-track-call-for-papers/",
+    "https://portal.core.edu.au/conf-ranks/?search=KDD&by=acronym&source=CORE2023&sort=atitle&page=1",
+    "https://www.ccf.org.cn/Academic_Evaluation/DM_CS/"
+   ],
+   "status": "confirmed",
+   "notes": "KDD 2027 CFP is out but only Cycle 1 dates (already passed: abstract Jul 19, paper Jul 26, 2026) are listed. Cycle 2 (expected early 2027 per CFP wording) has no official dates yet. D&B CFP page still had '<INSERT DATES>' placeholder for conference dates.",
+   "key": "KDD"
+  },
+  {
+   "name": "WWW",
+   "edition": "WWW 2027",
+   "homepage": "https://www2027.thewebconf.org/",
+   "cfp_url": "https://www2027.thewebconf.org/?p=296",
+   "location": "Dublin Royal Convention Centre, Dublin, Ireland",
+   "dates": "10-14 May 2027 (workshops/tutorials May 10-11; main conference May 12-14)",
+   "deadlines": [
+    {
+     "track": "Research track - long papers (abstract PASSED)",
+     "abstract": "2026-10-18 23:59 AoE",
+     "paper": "2026-10-25 23:59 AoE"
+    },
+    {
+     "track": "Research track - short papers",
+     "abstract": "2026-11-09 AoE",
+     "paper": "2026-11-16 AoE"
+    },
+    {
+     "track": "Industry papers",
+     "abstract": null,
+     "paper": "2026-10-25"
+    },
+    {
+     "track": "Resource submissions",
+     "abstract": null,
+     "paper": "2026-12-17 23:59 AoE (UTC-12)"
+    },
+    {
+     "track": "Demos",
+     "abstract": null,
+     "paper": "2026-11-16 23:59 AoE"
+    }
+   ],
+   "tracks": [
+    {
+     "name": "Research track - long papers",
+     "page_limit": "8 (eight) pages as main paper, plus references and an optional appendix, up to 12 pages total; first 8 pages must be self-contained",
+     "notes": "12 topical research tracks (incl. 'Search, Recommendation, and Retrieval-Augmented AI' and 'User Modeling, Personalization and Agentic Web Users'); results Dec 15, rebuttal Dec 15-20, 2026; notification Jan 4, 2027; camera-ready Jan 31, 2027"
+    },
+    {
+     "name": "Research track - short papers",
+     "page_limit": "4 pages, including references and appendix",
+     "notes": "Separate later deadline (abstract Nov 9, paper Nov 16, 2026) per homepage"
+    },
+    {
+     "name": "Resource",
+     "page_limit": "at most four (4) pages, including references",
+     "notes": "Single-blind; OpenReview; Companion Proceedings; ethics section required; stable access link + license required"
+    },
+    {
+     "name": "Demos",
+     "page_limit": "at most 4 (four) pages, including references",
+     "notes": "Notification Jan 4, 2027"
+    }
+   ],
+   "format": {
+    "template": "ACM sigconf, double-column (\\documentclass[sigconf,anonymous,review]{acmart}); Word Interim Template allowed",
+    "review_model": "double-blind; OpenReview; written-only rebuttal",
+    "notable_rules": [
+     "Reciprocal reviewing: authors asked to join review committee; failure to complete reviews can lead to desk rejection",
+     "LLMs cannot be authors; LLM use for rephrasing allowed, authors fully responsible",
+     "Anonymized preprints (arXiv, SSRN) allowed without citing them",
+     "First page must state relevance to the Web and the chosen track; papers merely using Web data without a Web research question are desk-rejected",
+     "Max 7 submissions per author per submission type",
+     "Authorship fixed at submission; no placeholder abstracts; no extensions",
+     "Each accepted paper needs its own full or main conference registration at standard non-student in-person rate; all papers presented (oral or poster)",
+     "ACM Open APC subsidy 2027: $500 members / $750 non-members",
+     "Web4Good not part of Web'27"
+    ]
+   },
+   "sources": [
+    "https://www2027.thewebconf.org/",
+    "https://www2027.thewebconf.org/?p=296",
+    "https://www2027.thewebconf.org/resource-submissions/",
+    "https://portal.core.edu.au/conf-ranks/?search=WWW&by=acronym&source=CORE2023&sort=atitle&page=1",
+    "https://www.ccf.org.cn/Academic_Evaluation/Cross_Compre_Emerging/",
+    "https://www2027.thewebconf.org/demos/"
+   ],
+   "status": "confirmed",
+   "notes": "Long-paper abstract deadline (Oct 18, 2026) already PASSED; full paper deadline is Oct 25, 2026 AoE (tomorrow) and only for registered abstracts. Short papers (Nov 16) and Resource (Dec 17) still open. CORE lists it as 'International World Wide Web Conference'; CCF A under Cross/Comprehensive/Emerging.",
+   "key": "WWW"
+  },
+  {
+   "name": "WSDM",
+   "edition": "WSDM 2027",
+   "homepage": "https://wsdm-conference.org/2027/",
+   "cfp_url": "https://wsdm-conference.org/2027/cffp.html",
+   "location": "Cordis, Hong Kong (555 Shanghai St, Mong Kok)",
+   "dates": "February 15-19, 2027",
+   "deadlines": [
+    {
+     "track": "Full papers (CLOSED; Findings considered from same pool)",
+     "abstract": "2026-08-17 23:59 AoE",
+     "paper": "2026-08-24 23:59 AoE"
+    },
+    {
+     "track": "Short papers (OPEN)",
+     "abstract": null,
+     "paper": "2026-11-17 23:59 AoE"
+    },
+    {
+     "track": "Industry Day talks",
+     "abstract": null,
+     "paper": "2026-10-30 23:59 AoE"
+    },
+    {
+     "track": "Doctoral Consortium",
+     "abstract": null,
+     "paper": "2026-11-12 23:59 AoE"
+    },
+    {
+     "track": "WSDM Day presentations",
+     "abstract": null,
+     "paper": "2026-11-30 23:59 AoE"
+    }
+   ],
+   "tracks": [
+    {
+     "name": "Full papers",
+     "page_limit": "Submissions should not exceed 9 pages including diagrams, tables, appendices, etc. (References and the ethical consideration section are excluded.)",
+     "notes": "Notification 2026-11-02; max 10 full-paper submissions per author"
+    },
+    {
+     "name": "Findings of WSDM (new)",
+     "page_limit": null,
+     "notes": "No separate submission; drawn from full-paper reviews; poster-only presentation; authors may opt to publish or withdraw"
+    },
+    {
+     "name": "Short papers",
+     "page_limit": "Submissions should not exceed 4 pages including diagrams, tables, appendices, etc. (References and the ethical consideration section are excluded.)",
+     "notes": "Notification 2026-12-18; max 10 short-paper submissions per author (independent of full-paper limit)"
+    }
+   ],
+   "format": {
+    "template": "ACM sigconf (\\documentclass[sigconf,anonymous,review]{acmart})",
+    "review_model": "combination of single-blind and double-blind (double-blind to PC/SPC; ACs see author metadata)",
+    "notable_rules": [
+     "Max 10 full-paper and 10 short-paper submissions per author; extras rejected without review",
+     "arXiv/GitHub preprints allowed but must not be explicitly linked to the submission",
+     "Generative AI use governed by ACM authorship policy",
+     "Desk rejection for length/format/originality violations, dual submission, off-topic papers",
+     "In-person conference; no remote presentations (proxies allowed)",
+     "Homepage omits the full-paper submission deadline; dates taken from the full-paper CFP page"
+    ]
+   },
+   "sources": [
+    "https://wsdm-conference.org/2027/",
+    "https://wsdm-conference.org/2027/cffp.html",
+    "https://wsdm-conference.org/2027/cfsp.html",
+    "https://portal.core.edu.au/conf-ranks/?search=WSDM&by=acronym&source=CORE2023&sort=atitle&page=1",
+    "https://www.ccf.org.cn/Academic_Evaluation/DM_CS"
+   ],
+   "status": "confirmed",
+   "notes": "Full-paper deadline (Aug 24, 2026) already passed; short papers (Nov 17, 2026) still open. No WSDM 2028 site found.",
+   "key": "WSDM"
+  },
+  {
+   "name": "CIKM",
+   "edition": "CIKM 2026",
+   "homepage": "https://cikm2026.diag.uniroma1.it/",
+   "cfp_url": "https://cikm2026.diag.uniroma1.it/full-research-papers/",
+   "location": "Rome, Italy",
+   "dates": "November 7-11, 2026 (main conference Nov 9-11; tutorials/Industry Day/PhD Symposium Nov 7; workshops Nov 8)",
+   "deadlines": [
+    {
+     "track": "Full research papers",
+     "abstract": "2026-05-16 23:59 AoE",
+     "paper": "2026-05-23 23:59 AoE"
+    },
+    {
+     "track": "Applied research papers",
+     "abstract": "2026-05-16 23:59 AoE",
+     "paper": "2026-05-23 23:59 AoE"
+    },
+    {
+     "track": "Short research papers",
+     "abstract": "2026-05-30 23:59 AoE",
+     "paper": "2026-06-06 23:59 AoE"
+    },
+    {
+     "track": "Resource papers",
+     "abstract": "2026-05-30 23:59 AoE",
+     "paper": "2026-06-06 23:59 AoE"
+    },
+    {
+     "track": "Demo papers",
+     "abstract": "2026-05-30 23:59 AoE",
+     "paper": "2026-06-06 23:59 AoE"
+    }
+   ],
+   "tracks": [
+    {
+     "name": "Full research papers",
+     "page_limit": "must not exceed 10 pages, including all figures, tables, and appendices, plus up to 2 additional pages exclusively for references",
+     "notes": "Overlength papers rejected without review"
+    },
+    {
+     "name": "Short research papers",
+     "page_limit": "cannot exceed 4 pages, including an appendix, plus unlimited pages for the GenAI Usage Disclosure section and references",
+     "notes": "Double-blind; suited to posters"
+    },
+    {
+     "name": "Applied research papers",
+     "page_limit": "limited to 7 pages, including an appendix (GenAI Usage Disclosure and references excluded)",
+     "notes": "Single-blind; must show post-launch metrics; synthetic-only or non-reproducible systems desk-rejected"
+    },
+    {
+     "name": "Resource papers",
+     "page_limit": "no more than 4 pages long, including appendices and acknowledgments, plus unlimited pages for the GenAI Usage Disclosure section and references",
+     "notes": "Single-blind; datasets need a DOI; code must be public"
+    }
+   ],
+   "format": {
+    "template": "ACM sigconf 2-column (anonymous=true for double-blind tracks); Word Interim Template",
+    "review_model": "double-blind (full and short); single-blind (applied, resource)",
+    "notable_rules": [
+     "NEXT EDITION: no official CIKM 2027 site/CFP found (cikm2027.org connection refused); third-party listings say Sydney, Australia, ~Oct 25-29, 2027 (tentative, unverified)",
+     "Each submission must nominate at least one author as reviewer, else desk rejection",
+     "GenAI Usage Disclosure section required/allowed outside page limit (short, applied, resource tracks)",
+     "On-site presentation in Rome required by at least one author",
+     "Submission via EasyChair"
+    ]
+   },
+   "sources": [
+    "https://cikm2026.diag.uniroma1.it/",
+    "https://cikm2026.diag.uniroma1.it/full-research-papers/",
+    "https://cikm2026.diag.uniroma1.it/short-research-papers/",
+    "https://cikm2026.diag.uniroma1.it/applied-research-papers/",
+    "https://cikm2026.diag.uniroma1.it/resource-papers/",
+    "https://portal.core.edu.au/conf-ranks/?search=CIKM&by=acronym&source=CORE2023&sort=atitle&page=1",
+    "https://www.ccf.org.cn/Academic_Evaluation/DM_CS"
+   ],
+   "status": "previous-edition",
+   "notes": "No official CIKM 2027 site/CFP found; 2026 details given.",
+   "key": "CIKM"
+  },
+  {
+   "name": "ECIR",
+   "edition": "ECIR 2027",
+   "homepage": "https://www.ecir2027.co.uk/",
+   "cfp_url": "https://www.ecir2027.co.uk/call-for-full-papers",
+   "location": "Southampton Football Club, St Mary's Stadium, Southampton, UK",
+   "dates": "21-25 March 2027 (tutorials/DC Mar 21; main conference Mar 22-24; Industry Day Mar 25)",
+   "deadlines": [
+    {
+     "track": "Full papers (PASSED)",
+     "abstract": "2026-09-21 23:59 AoE",
+     "paper": "2026-10-05 23:59 AoE"
+    },
+    {
+     "track": "Short papers (PASSED)",
+     "abstract": "2026-10-05 (no TZ stated)",
+     "paper": "2026-10-12 (no TZ stated)"
+    },
+    {
+     "track": "IR for Good (PASSED)",
+     "abstract": null,
+     "paper": "2026-10-05 (no TZ stated)"
+    },
+    {
+     "track": "Reproducibility (PASSED)",
+     "abstract": "2026-10-12 (no TZ stated)",
+     "paper": "2026-10-19 (no TZ stated)"
+    },
+    {
+     "track": "Resource papers",
+     "abstract": null,
+     "paper": "2026-11-02 (no TZ stated)"
+    },
+    {
+     "track": "Demos",
+     "abstract": null,
+     "paper": "2026-11-02 (no TZ stated)"
+    },
+    {
+     "track": "Doctoral Consortium",
+     "abstract": "2026-10-26 (no TZ stated)",
+     "paper": "2026-11-02 (no TZ stated)"
+    },
+    {
+     "track": "Industry Day",
+     "abstract": null,
+     "paper": "2026-11-02 (no TZ stated)"
+    }
+   ],
+   "tracks": [
+    {
+     "name": "Full papers",
+     "page_limit": "up to 12 pages, plus unlimited additional pages for references; appendices count toward the page limit",
+     "notes": "Double-blind, two-stage review with meta-reviewer discussion; strong non-accepted papers may be invited as findings papers; notification Dec 7, 2026"
+    },
+    {
+     "name": "Short papers",
+     "page_limit": "up to 6 pages in length, plus additional pages for references (appendices count toward limit)",
+     "notes": "Double-anonymous"
+    },
+    {
+     "name": "Reproducibility",
+     "page_limit": "up to 12 pages in length plus additional pages for references (appendices count)",
+     "notes": "Double-blind"
+    },
+    {
+     "name": "Resource",
+     "page_limit": "up to 12 pages in length plus additional pages for references (appendices count)",
+     "notes": "Single-blind (submissions are not anonymous)"
+    }
+   ],
+   "format": {
+    "template": "Springer LNCS proceedings template (LaTeX or Word)",
+    "review_model": "double-blind (full, short, reproducibility); single-blind (resource); EasyChair (conference ID ecir27)",
+    "notable_rules": [
+     "Technical reports/arXiv versions allowed but must not be cited; avoid compromising double-blindness",
+     "AI tools for reviewers: only language editing of own review text; no uploading submissions to external AI services; links to Springer AI policy",
+     "Authorship cannot change after submission; titles/abstracts used for bidding must reflect content",
+     "At least one author must register and present in person",
+     "IR-for-Good is now a core track alongside the main conference",
+     "ACM policies on authorship, ethics, COI, plagiarism, harassment apply"
+    ]
+   },
+   "sources": [
+    "https://www.ecir2027.co.uk/",
+    "https://www.ecir2027.co.uk/call-for-full-papers",
+    "https://www.ecir2027.co.uk/call-for-short-papers",
+    "https://www.ecir2027.co.uk/call-for-reproducibility-papers",
+    "https://www.ecir2027.co.uk/call-for-resource-papers",
+    "https://portal.core.edu.au/conf-ranks/?search=ECIR&by=acronym&source=CORE2023&sort=atitle&page=1",
+    "https://www.ccf.org.cn/Academic_Evaluation/DM_CS/"
+   ],
+   "status": "confirmed",
+   "notes": "Official site is ecir2027.co.uk (ecir2027.org does not resolve). Full, short, IR4Good and reproducibility deadlines already PASSED; resource/demo/DC/industry (Nov 2, 2026) still open. Homepage labels dates as 'current proposed deadlines'. Site inconsistently says 48th vs 49th ECIR. ECIR 2028 not yet announced (BCS bid call only).",
+   "key": "ECIR"
+  },
+  {
+   "name": "UMAP",
+   "edition": "UMAP 2027",
+   "homepage": "https://um.org/umap2027/",
+   "cfp_url": "https://um.org/umap2027/call-for-full-and-short-paper/",
+   "location": "Chicago, USA (in person)",
+   "dates": "June 9-12, 2027 (Doctoral Consortium June 8)",
+   "deadlines": [
+    {
+     "track": "Full and short papers",
+     "abstract": "2027-01-22 23:59 AoE",
+     "paper": "2027-01-29 23:59 AoE"
+    },
+    {
+     "track": "Industry track",
+     "abstract": null,
+     "paper": "2027-03-22 23:59 AoE"
+    },
+    {
+     "track": "Late-Breaking Results & Demos",
+     "abstract": null,
+     "paper": "2027-03-22 23:59 AoE"
+    },
+    {
+     "track": "Doctoral Consortium",
+     "abstract": null,
+     "paper": "2027-02-06 23:59 AoE"
+    },
+    {
+     "track": "Workshop/Tutorial proposals",
+     "abstract": null,
+     "paper": "2026-12-11 23:59 AoE"
+    }
+   ],
+   "tracks": [
+    {
+     "name": "Full papers (long)",
+     "page_limit": "8 pages of manuscript content (including figures, tables, appendices, acknowledgments), references excluded and may add up to 2 pages (10 pages max)",
+     "notes": "Rebuttal Mar 2-8, 2027; notification Mar 15, 2027"
+    },
+    {
+     "name": "Short papers",
+     "page_limit": "4 pages of manuscript content, references excluded and may add up to 2 pages (6 pages max)",
+     "notes": null
+    }
+   ],
+   "format": {
+    "template": "ACM sigconf double-column (\\documentclass[sigconf,review,anonymous]{acmart}; no 'manuscript' option)",
+    "review_model": "double-blind with rebuttal; EasyChair",
+    "notable_rules": [
+     "Mandatory abstract submission; author list and order fixed at abstract deadline",
+     "AI use in research process (coding, analysis, figures) must be described in methods; AI used only for writing/editing need not be disclosed; fabricated references -> desk reject; only humans as authors",
+     "Non-anonymous arXiv preprints may be posted before/during review; do not link to them in submission",
+     "Automated plagiarism check; dual submission prohibited",
+     "Human-subjects papers must state ethics review; ethical considerations discussion expected",
+     "At least one author registers by early cutoff; in-person presentation required",
+     "ACM Open APC may apply"
+    ]
+   },
+   "sources": [
+    "https://um.org/umap2027/",
+    "https://um.org/umap2027/call-for-full-and-short-paper/",
+    "https://portal.core.edu.au/conf-ranks/?search=UMAP&by=acronym&source=CORE2023&sort=atitle&page=1",
+    "https://www.ccf.org.cn/Academic_Evaluation/HCIAndPC/"
+   ],
+   "status": "confirmed",
+   "notes": "CORE2023 rank is B, but the UMAP site claims 'A' in ICORE 2026 (not verified on portal). UMAP conference not found in CCF HCI list (only the UMUAI journal is listed), so ccf=null. Camera-ready date differs: homepage Apr 2 vs CFP Mar 30, 2027. No reciprocal reviewing mentioned.",
+   "key": "UMAP"
+  },
+  {
+   "name": "ACL",
+   "edition": "ACL 2027",
+   "homepage": "https://2027.aclweb.org/",
+   "cfp_url": "https://2027.aclweb.org/calls/main/",
+   "location": "Kyoto, Japan",
+   "dates": "August 17-22, 2027 (tutorials Aug 17; workshops Aug 18-19; main conference Aug 20-22)",
+   "deadlines": [
+    {
+     "track": "ARR cycle (Jan 2027) - long & short papers",
+     "abstract": null,
+     "paper": "2027-01-04 23:59 UTC-12 (AoE)"
+    },
+    {
+     "track": "Commitment",
+     "abstract": null,
+     "paper": null
+    }
+   ],
+   "tracks": [
+    {
+     "name": "Long papers",
+     "page_limit": "Long Papers (8 pages); camera-ready: one additional page of content (up to 9 pages) to address reviewers' comments. Per ARR CFP: up to eight (8) pages of content, plus unlimited pages for limitations/optional ethics section and unlimited pages of references; appendices after references do not count",
+     "notes": null
+    },
+    {
+     "name": "Short papers",
+     "page_limit": "Short Papers (4 pages); camera-ready: up to 5 pages. Per ARR CFP: up to four (4) pages of content, plus unlimited pages for limitations/ethics and references",
+     "notes": "Short papers are marked as such in the proceedings"
+    },
+    {
+     "name": "Findings",
+     "page_limit": null,
+     "notes": "Submissions not selected for the main conference will also automatically be considered for publication in the Findings of the ACL"
+    },
+    {
+     "name": "Theme track",
+     "page_limit": "Theme track submissions can be either long or short",
+     "notes": "Theme: homogenization and knowledge collapse in LLMs; special session and Thematic Paper Award"
+    }
+   ],
+   "format": {
+    "template": "Official ACL style template (unmodified)",
+    "review_model": "ARR (OpenReview), double-blind; commit reviewed papers to ACL via OpenReview",
+    "notable_rules": [
+     "Commitment deadline, notification and camera-ready are TBA/TBD on the official site; commitment link not available yet",
+     "ACL Sustainable Reviewing Policy (from ARR Oct 2026 cycle): each submission must provide a qualified service contributor (reviewer or chair), named on no more than two submissions; submissions without one go into a lottery for spare capacity and may be desk rejected",
+     "Author caps: 20 total submissions and 5 first-author (incl. shared first-author) submissions per ARR cycle",
+     "Limitations section mandatory; papers missing it are desk rejected",
+     "Responsible NLP Checklist required; use of generative AI for writing or coding must be disclosed in it; AI tools cannot be authors; prompt-injection attempts may be desk rejected",
+     "No anonymity period; non-anonymous preprints allowed (unless author opts into binding no-preprint option)",
+     "Dual submissions not allowed; author list cannot be modified at commitment",
+     "Accepted papers must be presented; papers without a registered presenting author by early registration deadline may be rejected"
+    ]
+   },
+   "sources": [
+    "https://2027.aclweb.org/",
+    "https://2027.aclweb.org/calls/main/",
+    "https://aclrollingreview.org/dates",
+    "https://aclrollingreview.org/cfp",
+    "https://aclweb.org/portal/content/acl-sustainable-reviewing-policy",
+    "https://portal.core.edu.au/conf-ranks/?search=Computational+Linguistics&by=all&source=CORE2023&sort=atitle&page=1",
+    "https://www.ccf.org.cn/Academic_Evaluation/By_category/"
+   ],
+   "status": "confirmed",
+   "notes": "ARR submission 2027-01-04; commitment deadline TBA.",
+   "key": "ACL"
+  },
+  {
+   "name": "EMNLP",
+   "edition": "EMNLP 2026",
+   "homepage": "https://2026.emnlp.org/",
+   "cfp_url": "https://2026.emnlp.org/calls/main_conference_papers/",
+   "location": "Budapest, Hungary",
+   "dates": "October 24-29, 2026 (main conference)",
+   "deadlines": [
+    {
+     "track": "ARR cycle (May 2026) - long & short papers",
+     "abstract": null,
+     "paper": "2026-05-25 23:59 UTC-12 (AoE)"
+    },
+    {
+     "track": "Commitment",
+     "abstract": null,
+     "paper": "2026-08-02 23:59 UTC-12 (AoE)"
+    }
+   ],
+   "tracks": [
+    {
+     "name": "Long papers",
+     "page_limit": "Long Papers (8 pages); camera-ready: one additional page of content (up to 9 pages for long papers)",
+     "notes": null
+    },
+    {
+     "name": "Short papers",
+     "page_limit": "Short Papers (4 pages); camera-ready: up to 5 pages",
+     "notes": null
+    },
+    {
+     "name": "Theme track",
+     "page_limit": null,
+     "notes": "Special theme: New Missions for NLP Research"
+    }
+   ],
+   "format": {
+    "template": "Official ACL style template (via ARR)",
+    "review_model": "ARR (OpenReview), double-blind",
+    "notable_rules": [
+     "All authors are expected to sign up to review, or serve as an Area Chair or Senior Area Chair (reviewer registration deadline May 27, 2026)",
+     "Highly irresponsible reviewers may be ineligible to submit or commit in the next ARR cycle",
+     "AI writing assistance permitted; entirely AI-generated papers may be desk rejected and authors may be ineligible to commit to EMNLP 2026 and 2027",
+     "Opt-in AI reviewing experiment; AI reviews do not inform decisions",
+     "No anonymity period requirement",
+     "Limitations section required (ARR); Responsible NLP Checklist required (ARR)",
+     "EMNLP 2027 CFP/site not found as of 2026-10-24; ARR dates page does not list EMNLP 2027"
+    ]
+   },
+   "sources": [
+    "https://2026.emnlp.org/",
+    "https://2026.emnlp.org/calls/main_conference_papers/",
+    "https://aclrollingreview.org/dates",
+    "https://aclrollingreview.org/cfp",
+    "https://portal.core.edu.au/conf-ranks/?search=Empirical+Methods&by=all&source=CORE2023&sort=atitle&page=1",
+    "https://www.ccf.org.cn/Academic_Evaluation/By_category/"
+   ],
+   "status": "previous-edition",
+   "notes": "No official EMNLP 2027 site/CFP or ARR cycle listing found; 2026 details given.",
+   "key": "EMNLP"
+  },
+  {
+   "name": "NAACL",
+   "edition": "NAACL 2027",
+   "homepage": "https://2027.naacl.org/",
+   "cfp_url": "https://2027.naacl.org/calls/main_conference_papers/",
+   "location": "San Francisco, California, USA",
+   "dates": "June 1-5, 2027",
+   "deadlines": [
+    {
+     "track": "ARR cycle (Oct 2026) - long & short papers (passed)",
+     "abstract": null,
+     "paper": "2026-10-12 23:59 UTC-12 (AoE)"
+    },
+    {
+     "track": "Commitment",
+     "abstract": null,
+     "paper": "2026-12-23 23:59 UTC-12 (AoE)"
+    }
+   ],
+   "tracks": [
+    {
+     "name": "Long papers",
+     "page_limit": "Long Papers (8 pages); camera-ready: one additional page (up to 9 pages) to address reviewers' comments",
+     "notes": null
+    },
+    {
+     "name": "Short papers",
+     "page_limit": "Short Papers (4 pages); camera-ready: up to 5 pages",
+     "notes": "Short papers are marked as such in the proceedings"
+    }
+   ],
+   "format": {
+    "template": "Official ACL style template (via ARR)",
+    "review_model": "ARR (OpenReview), double-blind; commit via OpenReview",
+    "notable_rules": [
+     "New ARR submissions for NAACL 2027 closed Oct 12, 2026; only commitment of already-reviewed ARR papers (meta-reviews released Dec 18, 2026) remains open, deadline Dec 23, 2026",
+     "Notification Feb 10, 2027; camera-ready Mar 3, 2027",
+     "Shares the ARR Oct 2026 cycle with COLING 2027: authors must pick one primary venue at commitment; dual commitment not allowed",
+     "Reviewer registration deadline for all authors: Oct 12, 2026; first cycle under ACL Sustainable Reviewing Policy (service contributor requirement, author caps 20 total / 5 first-author)",
+     "No anonymity period requirement; reviews not publicly visible",
+     "Limitations section and Responsible NLP Checklist required (ARR)",
+     "Author list cannot change at commitment (order may)"
+    ]
+   },
+   "sources": [
+    "https://2027.naacl.org/calls/main_conference_papers/",
+    "https://aclrollingreview.org/dates",
+    "https://aclrollingreview.org/cfp",
+    "https://aclweb.org/portal/content/acl-sustainable-reviewing-policy",
+    "https://portal.core.edu.au/conf-ranks/?search=Computational+Linguistics&by=all&source=CORE2023&sort=atitle&page=1",
+    "https://www.ccf.org.cn/Academic_Evaluation/By_category/"
+   ],
+   "status": "confirmed",
+   "notes": "ARR submission cycle (Oct 12, 2026) already closed; commitment of reviewed papers open until 2026-12-23. Shares cycle with COLING 2027.",
+   "key": "NAACL"
+  },
+  {
+   "name": "NeurIPS",
+   "edition": "NeurIPS 2026",
+   "homepage": "https://neurips.cc/",
+   "cfp_url": "https://neurips.cc/Conferences/2026/CallForPapers",
+   "location": "Sydney (main), Atlanta (satellite), Paris (satellite)",
+   "dates": "Sydney (Main): Dec 6-12, 2026; Atlanta (Satellite): Dec 9-13, 2026; Paris (Satellite): Dec 9-13, 2026",
+   "deadlines": [
+    {
+     "track": "Main track, Evaluations and Datasets, Position Papers",
+     "abstract": "2026-05-04 AoE",
+     "paper": "2026-05-06 AoE (full paper including all supplementary materials)"
+    }
+   ],
+   "tracks": [
+    {
+     "name": "Main track",
+     "page_limit": "nine content pages, including all figures and tables; additional pages containing references, appendices and the checklist do not count; one additional content page allowed for camera-ready",
+     "notes": "50MB file size limit; author notification 2026-09-24 AoE"
+    },
+    {
+     "name": "Evaluations and Datasets (formerly Datasets & Benchmarks)",
+     "page_limit": "follows the Call for Papers of the NeurIPS 2026 Main Track",
+     "notes": "Default review mode double-blind (single-blind selectable if datasets cannot be anonymized); datasets must be hosted on ML platform (e.g., Hugging Face, Kaggle, Dataverse, OpenML) and available at submission; Croissant metadata (core + RAI fields) required; code/datasets public by camera-ready"
+    },
+    {
+     "name": "Position Papers",
+     "page_limit": "main conference format, including a 9-page limit and preparation for double-blind review",
+     "notes": "Position must be stated in title/abstract and in bold in intro; 250-word rationale at submission; no checklist; AI only for copy-editing, must be declared"
+    }
+   ],
+   "format": {
+    "template": "NeurIPS 2026 LaTeX style file (Formatting_Instructions_For_NeurIPS_2026.zip); Word template discontinued",
+    "review_model": "OpenReview, double-blind",
+    "notable_rules": [
+     "NeurIPS paper checklist (included in template) is mandatory",
+     "All authors must have an OpenReview profile at abstract submission",
+     "Cannot switch tracks after submission or submit to multiple tracks; duplicates risk desk rejection from all tracks",
+     "LLM policy: authors must describe LLM/agent use if important, original or non-standard component of the method; LLMs/agents cannot be authors; reviewers must not use LLMs except where specifically allowed",
+     "Authors who are also reviewers will not see reviews of their own submissions until they complete assigned reviews",
+     "Non-anonymous preprints (e.g., arXiv) will not result in rejection, but must not say 'Under review at NeurIPS'",
+     "Dual submission prohibited (including submitting elsewhere while under review); non-archival workshops allowed",
+     "Accepted papers must upload a lay summary; at least one author must register in person (Virtual Only Pass insufficient)",
+     "No per-author submission cap stated in the 2026 handbook"
+    ]
+   },
+   "sources": [
+    "https://neurips.cc/Conferences/2026/CallForPapers",
+    "https://neurips.cc/Conferences/2026/MainTrackHandbook",
+    "https://neurips.cc/Conferences/2026/Dates",
+    "https://neurips.cc/Conferences/2026/CallForPositionPapers",
+    "https://neurips.cc/Conferences/2026/CallForEvaluationsDatasets",
+    "https://neurips.cc/",
+    "https://neurips.cc/Conferences/FutureMeetings",
+    "https://portal.core.edu.au/conf-ranks/?search=NeurIPS&by=all&source=CORE2023&sort=atitle&page=1",
+    "https://www.ccf.org.cn/Academic_Evaluation/AI/"
+   ],
+   "status": "previous-edition",
+   "notes": "previous edition; NeurIPS 2027 CFP not yet published on neurips.cc as of 2026-10-24; neurips.cc Future Meetings lists 2027: Europe, no city/dates",
+   "key": "NeurIPS"
+  },
+  {
+   "name": "ICLR",
+   "edition": "ICLR 2027",
+   "homepage": "https://iclr.cc/Conferences/2027/index.html",
+   "cfp_url": "https://www.iclr.cc/Conferences/2027/CallForPapers",
+   "location": "Venue TBA on Dates page; homepage says California, hero image captioned 'Moscone Center, San Francisco, CA'",
+   "dates": "April 26-30, 2027 (Main conference April 26-28; workshops April 29-30)",
+   "deadlines": [
+    {
+     "track": "Main track",
+     "abstract": "2026-09-18 AoE",
+     "paper": "2026-09-25 AoE"
+    }
+   ],
+   "tracks": [
+    {
+     "name": "Main track",
+     "page_limit": "main text should be 9 pages or fewer; references do not count; unlimited appendices after the bibliography; camera-ready 10 pages",
+     "notes": "Reviews released 2026-11-05; author-reviewer discussion Nov 5-18; final decisions 2026-12-16. Over-length main text is desk-rejected"
+    }
+   ],
+   "format": {
+    "template": "ICLR 2027 LaTeX style files",
+    "review_model": "OpenReview, double-blind; rejected and withdrawn submissions remain public with author names",
+    "notable_rules": [
+     "No author may appear as a co-author on more than 20 papers",
+     "Reciprocal reviewing: authors on 3 or more papers must review at least 6 papers; every submission needs at least one author registered to review at least 3 papers",
+     "Each author may appear on at most one paper in which no author is an eligible reciprocal reviewer",
+     "Required AI use statement (separate AI policy for authors/reviewers; new AI-use policy this year)",
+     "arXiv submission allowed during review",
+     "No authors can be added or removed after the abstract deadline; placeholder/duplicate abstracts removed",
+     "Optional ethics statement (max 1 page); encouraged reproducibility statement at end of main text",
+     "Identity revealed in paper or supplement leads to desk rejection"
+    ]
+   },
+   "sources": [
+    "https://www.iclr.cc/Conferences/2027/CallForPapers",
+    "https://www.iclr.cc/Conferences/2027/AuthorGuidelines",
+    "https://iclr.cc/Conferences/2027/Dates",
+    "https://iclr.cc/Conferences/2027/index.html",
+    "https://portal.core.edu.au/conf-ranks/?search=ICLR&by=all&source=CORE2023&sort=atitle&page=1",
+    "https://www.ccf.org.cn/Academic_Evaluation/AI/"
+   ],
+   "status": "previous-edition",
+   "notes": "deadline 2026-09-25 already passed; ICLR 2028 not yet announced on iclr.cc",
+   "key": "ICLR"
+  },
+  {
+   "name": "ICML",
+   "edition": "ICML 2026",
+   "homepage": "https://icml.cc/",
+   "cfp_url": "https://icml.cc/Conferences/2026/CallForPapers",
+   "location": "Seoul, South Korea (COEX Convention & Exhibition Center)",
+   "dates": "July 6-11, 2026",
+   "deadlines": [
+    {
+     "track": "Main track",
+     "abstract": "2026-01-23 AoE (Jan 24, 2026, 12 Noon UTC-0)",
+     "paper": "2026-01-28 AoE (Jan 29, 2026, 12 Noon UTC-0)"
+    },
+    {
+     "track": "Position papers",
+     "abstract": "2026-01-23 AoE (Jan 24, 2026, 12 Noon UTC-0)",
+     "paper": "2026-01-28 AoE (Jan 29, 2026, 12 Noon UTC-0)"
+    }
+   ],
+   "tracks": [
+    {
+     "name": "Main track",
+     "page_limit": "8 pages for the main paper, with unlimited pages for references, the impact statement, and appendices; one extra page for camera-ready",
+     "notes": "No separate supplementary deadline; single-file submission; no extensions"
+    },
+    {
+     "name": "Position papers",
+     "page_limit": null,
+     "notes": "Separate OpenReview site; requirements identical to main conference except listed exceptions"
+    }
+   ],
+   "format": {
+    "template": "ICML 2026 style files (icml2026.zip)",
+    "review_model": "OpenReview, double-blind",
+    "notable_rules": [
+     "Reciprocal reviewing: each submission needs at least one author who agrees to review; authors with 4 or more submissions must review (threshold may be lowered to 3)",
+     "An author can be designated as reciprocal reviewer for at most 2 of their submissions",
+     "LLMs allowed for writing/research with full author responsibility; LLMs not eligible for authorship; prompt injection = desk rejection",
+     "Preprints (arXiv) allowed; must not advertise as ICML submission during review",
+     "Required impact statement (not counted in page limit); lay summary for accepted papers",
+     "Author list cannot change after abstract deadline",
+     "Reviews/meta-reviews/discussions of accepted papers are published",
+     "Optional self-ranking of multiple submissions"
+    ]
+   },
+   "sources": [
+    "https://icml.cc/Conferences/2026/CallForPapers",
+    "https://icml.cc/Conferences/2026/CallForPositionPapers",
+    "https://icml.cc/",
+    "https://icml.cc/Conferences/FutureMeetings",
+    "https://portal.core.edu.au/conf-ranks/?search=ICML&by=all&source=CORE2023&sort=atitle&page=1",
+    "https://www.ccf.org.cn/Academic_Evaluation/AI/"
+   ],
+   "status": "previous-edition",
+   "notes": "previous edition; ICML 2027 CFP not yet published on icml.cc as of 2026-10-24; icml.cc Future Meetings lists 2027: South America, no city/dates",
+   "key": "ICML"
+  },
+  {
+   "name": "AAAI",
+   "edition": "AAAI-27",
+   "homepage": "https://aaai.org/conference/aaai/aaai-27/",
+   "cfp_url": "https://aaai.org/conference/aaai/aaai-27/main-technical-track-call/",
+   "location": "Montréal, Canada (in person)",
+   "dates": "February 16-23, 2027",
+   "deadlines": [
+    {
+     "track": "Main technical track",
+     "abstract": "2026-07-21 11:59 PM UTC-12 (AoE)",
+     "paper": "2026-07-28 11:59 PM UTC-12 (AoE); supplementary material and code 2026-07-31 11:59 PM UTC-12"
+    }
+   ],
+   "tracks": [
+    {
+     "name": "Main technical track",
+     "page_limit": "7 pages of main content, 9 pages total maximum; pages beyond page 7 for references only",
+     "notes": "Phase 1 rejections 2026-09-24; author feedback Oct 19-25, 2026; final decisions 2026-11-30; camera-ready 2026-12-14"
+    },
+    {
+     "name": "Special tracks: AI for Social Impact, AI Alignment",
+     "page_limit": null,
+     "notes": "Separate calls (aisi-call, aia-call); also IAAI-27, EAAI-27, Journal Track, Student Abstracts, Demos, Senior Member, New Faculty Highlights"
+    }
+   ],
+   "format": {
+    "template": "AAAI-27 Author Kit",
+    "review_model": "OpenReview, double-blind; two-phase review",
+    "notable_rules": [
+     "Authors may be listed on at most 10 AAAI-27 submissions",
+     "All qualified authors must be available to review at a light load",
+     "Reproducibility checklist must be completed by all authors",
+     "Generative AI may be used judiciously; authors fully responsible; plagiarism and non-existent references sanctioned",
+     "Sanctions (desk rejection to multi-year bans) for plagiarism, duplicate submissions, prompt-injection attacks on review system, reviewer coercion",
+     "Phase 1 reviewing: CFP says two human reviews plus one AI-generated non-decisional review, while the review-process page says three reviewers per paper; up to five reviews after Phase 2; humans make all decisions",
+     "Reviewers not required to read supplementary material"
+    ]
+   },
+   "sources": [
+    "https://aaai.org/conference/aaai/aaai-27/main-technical-track-call/",
+    "https://aaai.org/conference/aaai/aaai-27/review-process/",
+    "https://portal.core.edu.au/conf-ranks/?search=AAAI&by=all&source=CORE2023&sort=atitle&page=1",
+    "https://www.ccf.org.cn/Academic_Evaluation/AI/"
+   ],
+   "status": "previous-edition",
+   "notes": "41st AAAI; deadline 2026-07-28 already passed; no AAAI-28 page on aaai.org",
+   "key": "AAAI"
+  },
+  {
+   "name": "IJCAI",
+   "edition": "IJCAI 2027",
+   "homepage": "https://2027.ijcai.org/",
+   "cfp_url": "https://2027.ijcai.org/ijcai-2027-call-for-papers-main-track/",
+   "location": "Kyoto, Japan, with satellite event in Hengqin, China",
+   "dates": "August 7-13, 2027 (Kyoto); satellite in Hengqin August 15-17, 2027",
+   "deadlines": [
+    {
+     "track": "Main track (and special tracks AI4Science, AI and Health, AI the Arts and Creativity, AI for Social Good)",
+     "abstract": "2027-01-04 23:59 AoE (UTC-12)",
+     "paper": "2027-01-11 23:59 AoE (UTC-12) (author information and full paper incl. appendix and resubmission information)"
+    }
+   ],
+   "tracks": [
+    {
+     "name": "Main track",
+     "page_limit": "Papers must be no longer than 9 pages in total: 7 pages for the body of the paper (including all figures/tables) plus up to 2 additional pages with references",
+     "notes": "Overlength papers rejected without review; supplementary material up to 50MB PDF/ZIP; non-primary paper payment 2027-01-18; summary reject 2027-02-25; author response Mar 30-Apr 2, 2027; notification 2027-04-21; camera-ready 2027-05-07"
+    },
+    {
+     "name": "Special tracks: AI4Science, AI and Health, AI the Arts and Creativity, AI for Social Good",
+     "page_limit": null,
+     "notes": "Same deadlines as main track; each has its own call"
+    }
+   ],
+   "format": {
+    "template": "IJCAI LaTeX styles and Word template (https://www.ijcai.org/authors_kit)",
+    "review_model": "Double-blind (from the authors' perspective); two-phase with summary reject; submission system not named on CFP page",
+    "notable_rules": [
+     "Primary Paper Initiative: USD 100 fee per submission, waived for primary papers (where no author appears on another IJCAI 2027 submission)",
+     "Reciprocal reviewing: each submission must designate one qualified author as reciprocal reviewer; each author can be designated for at most two submissions",
+     "Generative AI cannot be an author; authors fully responsible for LLM-assisted text; LLM use in methods/experiments must be documented",
+     "Non-anonymous preprints not grounds for rejection, but submission must be anonymized",
+     "Reproducibility checklist required at submission; optional ethics statement",
+     "Must declare rejections from other peer-reviewed conferences in last 12 months and upload rejected version with reviews",
+     "No acknowledgements/contribution statements in submission; at least one author must attend in Kyoto or Hengqin"
+    ]
+   },
+   "sources": [
+    "https://2027.ijcai.org/",
+    "https://2027.ijcai.org/ijcai-2027-call-for-papers-main-track/",
+    "https://portal.core.edu.au/conf-ranks/?search=IJCAI&by=all&source=CORE2023&sort=atitle&page=1",
+    "https://www.ccf.org.cn/Academic_Evaluation/AI/"
+   ],
+   "status": "confirmed",
+   "notes": "36th IJCAI, Kyoto. Abstract 2027-01-04, paper 2027-01-11 AoE.",
+   "key": "IJCAI"
+  }
+ ]
+}

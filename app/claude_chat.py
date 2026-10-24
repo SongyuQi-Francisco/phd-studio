@@ -14,6 +14,7 @@ import difflib
 import json
 import subprocess
 import time
+from datetime import date
 import uuid
 from pathlib import Path
 from typing import Any
@@ -173,8 +174,21 @@ def _friendly_error(err: Any, content: list[Any] | None = None) -> str:
     return f"Claude 出错：{detail}"
 
 
+STUDIO_TOOL_LABELS = {
+    "reading_push": "加入阅读清单", "reading_list": "查看阅读清单", "reading_update": "更新阅读清单",
+    "milestone_add": "添加里程碑", "milestone_update": "更新里程碑", "target_add": "设定投稿目标",
+    "target_update": "更新投稿目标", "venue_search": "查会议", "venue_watch": "关注会议",
+    "idea_add": "记想法", "idea_list": "查看想法", "timeline": "查看时间线",
+}
+
+
 def _tool_summary(block: ToolUseBlock) -> str:
     inp = block.input or {}
+    if block.name.startswith("mcp__studio__"):
+        short = block.name.removeprefix("mcp__studio__")
+        detail = inp.get("title") or inp.get("text") or inp.get("query") or inp.get("venue") or inp.get("paper") \
+            or inp.get("arxiv") or ""
+        return f"{STUDIO_TOOL_LABELS.get(short, short)} {str(detail)[:40]}".strip()
     target = inp.get("file_path") or inp.get("pattern") or inp.get("url") or inp.get("query") or ""
     target = str(target).replace(str(VAULT_DIR) + "/", "").replace(str(TEXT_DIR) + "/", "全文：")
     return f"{block.name} {target}".strip()
@@ -200,7 +214,7 @@ class PaperChat:
     async def _can_use_tool(
         self, tool: str, inp: dict[str, Any], ctx: ToolPermissionContext
     ) -> PermissionResultAllow | PermissionResultDeny:
-        if tool in READ_TOOLS:
+        if tool in READ_TOOLS or tool.startswith("mcp__studio__"):
             return PermissionResultAllow()
         if tool not in WRITE_TOOLS:
             return PermissionResultDeny(message=f"工作台不允许 {tool}，只能读文件和改 vault 笔记。")
@@ -226,17 +240,18 @@ class PaperChat:
             return PermissionResultAllow()
         return PermissionResultDeny(message="用户拒绝了这次修改。")
 
-    async def _ensure_client(self) -> ClaudeSDKClient:
-        if self.client is not None:
-            return self.client
+    def _prompt(self) -> str:
+        return _system_prompt(self.stem)
+
+    def _options(self) -> ClaudeAgentOptions:
         settings = load_settings()
-        opts = ClaudeAgentOptions(
+        return ClaudeAgentOptions(
             cwd=str(VAULT_DIR),
             add_dirs=[str(TEXT_DIR), str(CROPS_DIR), *EXTRA_READ_DIRS],
             tools=READ_TOOLS + sorted(WRITE_TOOLS),
             allowed_tools=READ_TOOLS,
             can_use_tool=self._can_use_tool,
-            system_prompt={"type": "preset", "preset": "claude_code", "append": _system_prompt(self.stem)},
+            system_prompt={"type": "preset", "preset": "claude_code", "append": self._prompt()},
             setting_sources=[],
             include_partial_messages=True,
             resume=_load_sessions().get(self.stem),
@@ -244,6 +259,11 @@ class PaperChat:
             env=_claude_env(),
             cli_path=str(CLAUDE_CLI) if CLAUDE_CLI.exists() else None,
         )
+
+    async def _ensure_client(self) -> ClaudeSDKClient:
+        if self.client is not None:
+            return self.client
+        opts = self._options()
         client = ClaudeSDKClient(options=opts)
         try:
             await client.connect()
@@ -382,11 +402,65 @@ async def draft_takeaway(stem: str) -> str:
     return out.strip()
 
 
+STUDIO_KEY = "studio"
+
+
+def _studio_prompt() -> str:
+    agents = AGENTS_MD.read_text(encoding="utf-8") if AGENTS_MD.exists() else ""
+    notes = "、".join(f"`{n}`" for n in PROFILE.get("research_notes", [])) or "vault 里的路线图和 idea 笔记"
+    lang = PROFILE.get("answer_language", "中文")
+    return f"""
+# 你的角色
+你是用户 PhD 工作台（PhD Studio）里的全局助手。用户会直接跟你说要做的事，你用 studio 工具把它落到工作台里。
+关于用户：{PROFILE.get("about", "")}
+用户当前在做：{PROFILE.get("current_focus", "（未配置）")}
+- 一律用{lang}回答，简洁，先做事再汇报；汇报时一句话说清改了什么。
+- 今天是 {date.today().isoformat()}。用户说"下周三""月底"之类，换算成具体日期再写入。
+
+# 你能直接改的（studio 工具，立即生效，界面会显示变更卡片）
+- 阅读清单：reading_push / reading_list / reading_update
+- 规划：milestone_add / milestone_update（里程碑、Gate、Kill criteria 检查点），target_add / target_update（投稿目标与备选）
+- 会议：venue_search（CORE ICORE2026 + CCF 全量库、截稿、录用率、核实过的赛道和页数）、venue_watch
+- 想法：idea_add / idea_list
+- 时间线：timeline
+意图明确就直接做；有歧义（比如不确定是哪篇论文、哪条研究线）先问一句。不要编造会议日期，以 venue_search 返回的为准，并说明数据来源（ccfddl / CORE / 官网）。
+
+# Vault
+需要了解课题时先读 {notes}。修改 vault 里的笔记（Edit/Write）会弹出差异让用户确认，遵守下面的 AGENTS.md。
+
+<agents_md>
+{agents}
+</agents_md>
+""".strip()
+
+
+class StudioChat(PaperChat):
+    """The workbench-wide assistant: same chat machinery, plus tools that edit the app's data."""
+
+    def _prompt(self) -> str:
+        return _studio_prompt()
+
+    def _options(self) -> ClaudeAgentOptions:
+        from . import studio_tools
+
+        server, names = studio_tools.build(self.emit)
+        opts = super()._options()
+        opts.mcp_servers = {studio_tools.SERVER: server}
+        opts.tools = READ_TOOLS + sorted(WRITE_TOOLS)
+        opts.allowed_tools = READ_TOOLS + names
+        opts.add_dirs = [*EXTRA_READ_DIRS]
+        return opts
+
+
 class ChatRegistry:
     def __init__(self) -> None:
         self.chats: dict[str, PaperChat] = {}
 
     def get(self, stem: str) -> PaperChat:
+        if stem == STUDIO_KEY:
+            if stem not in self.chats:
+                self.chats[stem] = StudioChat(stem)
+            return self.chats[stem]
         library.validate(stem)
         if stem not in self.chats:
             self.chats[stem] = PaperChat(stem)

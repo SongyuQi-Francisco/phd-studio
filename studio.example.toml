@@ -6,6 +6,8 @@ papers = "Literature/Papers"                   # one note per paper, relative to
 pdfs = "Literature/PDFs"                       # optional local PDFs named <note name>.pdf
 reading_queue = "Reading Queue.md"             # hand-written queue; a generated summary block is kept at its top
 reading_list = "reading.yaml"                  # the reading list itself (inbox / T1-T3 / reading / done)
+plan = "plan.yaml"                             # targets, milestones, watched venues
+ideas = "ideas.yaml"                           # idea inbox
 rules = "AGENTS.md"                            # vault rules Claude must follow when editing
 zotero = "~/Zotero"                            # Zotero data dir (read-only)
 secrets = "~/.config/secrets"                  # claude.env / deepseek.env live here
@@ -21,5 +23,7 @@ answer_language = "中文"
 research_notes = ["Atlas/PhD Roadmap.md", "Ideas/Idea Radar.md"]
 # Research lines used to group the reading list (also matched against old queue headings).
 lines = ["Project A", "Project B"]
+# Conferences shown on the timeline at first start (then managed in the app).
+venues = ["SIGIR", "KDD", "ACL", "NeurIPS"]
 # Current projects, used in prompts like “和我的课题有什么关系”.
 current_focus = "Project A (target venue, deadline); Project B"
