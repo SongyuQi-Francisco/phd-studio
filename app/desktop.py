@@ -6,6 +6,7 @@ If the server is already running, the existing window is brought to the front.
 """
 from __future__ import annotations
 
+import os
 import sys
 import threading
 import time
@@ -43,6 +44,38 @@ def _brand_process() -> None:
         pass
 
 
+def _native_menus() -> None:
+    """pywebview's default menu lacks Undo/Redo and a Window menu; add them (⌘Z, ⇧⌘Z, ⌘W, ⌘M)."""
+    try:
+        from AppKit import NSApplication, NSEventModifierFlagCommand, NSEventModifierFlagShift, NSMenu, NSMenuItem
+        from PyObjCTools import AppHelper
+    except Exception:  # noqa: BLE001
+        return
+
+    def add() -> None:
+        main = NSApplication.sharedApplication().mainMenu()
+        if main is None:
+            return
+        edit = next((main.itemAtIndex_(i).submenu() for i in range(main.numberOfItems())
+                     if main.itemAtIndex_(i).submenu() is not None
+                     and main.itemAtIndex_(i).submenu().indexOfItemWithTarget_andAction_(None, "copy:") >= 0), None)
+        if edit is not None and edit.indexOfItemWithTarget_andAction_(None, "undo:") < 0:
+            redo = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("重做", "redo:", "z")
+            redo.setKeyEquivalentModifierMask_(NSEventModifierFlagCommand | NSEventModifierFlagShift)
+            edit.insertItem_atIndex_(redo, 0)
+            edit.insertItem_atIndex_(NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("撤销", "undo:", "z"), 0)
+            edit.insertItem_atIndex_(NSMenuItem.separatorItem(), 2)
+        win = NSMenu.alloc().initWithTitle_("窗口")
+        win.addItemWithTitle_action_keyEquivalent_("最小化", "performMiniaturize:", "m")
+        win.addItemWithTitle_action_keyEquivalent_("关闭窗口", "performClose:", "w")
+        holder = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("窗口", None, "")
+        holder.setSubmenu_(win)
+        main.addItem_(holder)
+        NSApplication.sharedApplication().setWindowsMenu_(win)
+
+    AppHelper.callAfter(add)
+
+
 def main() -> int:
     if _up():
         # Already running: ask that instance to show its window.
@@ -78,8 +111,11 @@ def main() -> int:
             pass
 
     app.state.focus = focus
+    if os.environ.get("STUDIO_DEBUG") == "1":
+        # Test hook: lets a local test script run JS inside this WebKit window. Off by default.
+        app.state.eval_js = window.evaluate_js
     app.state.quit = window.destroy  # the sidebar power button closes the window
-    webview.start(private_mode=False)
+    webview.start(_native_menus, private_mode=False)
 
     server.should_exit = True
     thread.join(timeout=10)

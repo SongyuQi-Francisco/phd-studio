@@ -1,6 +1,6 @@
 import { render } from "preact";
 import { useEffect, useMemo, useRef, useState, useCallback } from "preact/hooks";
-import { html, Icon, api, prefs } from "/lib.js";
+import { html, Icon, api, prefs, copyText } from "/lib.js";
 import { PdfView } from "/pdfview.js";
 import { ChatPanel, NotePanel, PROMPTS } from "/chat.js";
 import { ReadingPage, DoneDialog } from "/reading.js";
@@ -33,7 +33,8 @@ function Library({ papers, current, open, onPick, onClose }) {
     if (e.key === "Enter" && shown[0] && shown[0].pdf !== "none") onPick(shown[0].stem);
   };
 
-  return html`<div class=${"drawer" + (open ? " open" : "")}>
+  // A closed drawer must not keep keyboard focus (or every shortcut would land in its hidden search box).
+  return html`<div class=${"drawer" + (open ? " open" : "")} inert=${!open}>
     <div class="drawer-head">
       <h2>论文<small>${papers.length}</small></h2>
       <label class="search"><${Icon} name="search" sm /><input ref=${inputRef} placeholder="搜索标题、标签" value=${q} onInput=${(e) => setQ(e.target.value)} onKeyDown=${onKey} /></label>
@@ -187,7 +188,7 @@ function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef
   // keyboard
   useEffect(() => {
     const k = (e) => {
-      if (e.target.matches("input, textarea")) return;
+      if (e.target?.closest?.("input, textarea, select, [contenteditable]")) return;
       if ((e.metaKey || e.ctrlKey) && e.key === "f") { e.preventDefault(); setFindOpen(true); }
       if (e.key === "Escape") { setPop(null); setCropMode(false); setShowOutline(false); }
     };
@@ -259,7 +260,7 @@ function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef
       </div>
       ${pop.trans && html`<div class="trans">
         ${pop.trans.loading ? html`<div class="typing"><i /><i /><i /></div>` : html`<div>${pop.trans.text}</div>
-          <div class="meta"><span>${pop.trans.engine}</span><button onClick=${() => { navigator.clipboard?.writeText(pop.trans.text); toast("已复制"); }}>复制</button></div>`}
+          <div class="meta"><span>${pop.trans.engine}</span><button onClick=${async () => toast((await copyText(pop.trans.text)) ? "已复制" : "复制失败，请手动选中")}>复制</button></div>`}
       </div>`}
     </div>`}
 
@@ -375,7 +376,7 @@ function App() {
 
   useEffect(() => { document.documentElement.style.setProperty("--side-w", sideW + "px"); prefs.set("sideW", sideW); }, [sideW]);
 
-  const pick = (s) => { setStem(s); setView("reader"); setDrawer(false); };
+  const pick = (s) => { document.activeElement?.blur?.(); setStem(s); setView("reader"); setDrawer(false); };
   const go = (v) => {
     setDrawer(false);
     if (v === "plan") { setTlTab("plan"); setView("timeline"); }

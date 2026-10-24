@@ -21,6 +21,7 @@ export class PdfView {
       removePageBorders: true,
     });
     this.linkService.setViewer(this.viewer);
+    globalThis.__studioPdf = this; // handy for debugging in the console
     this.eventBus.on("pagechanging", (e) => onPage?.(e.pageNumber));
     this.eventBus.on("scalechanging", (e) => this.onScale?.(e.scale));
     this.eventBus.on("pagesinit", () => {

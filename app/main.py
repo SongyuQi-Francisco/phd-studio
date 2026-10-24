@@ -215,6 +215,35 @@ async def shutdown() -> dict[str, bool]:
     return {"ok": True, "window": bool(quit_)}
 
 
+@app.post("/api/debug/eval")
+async def debug_eval(body: dict[str, Any]) -> dict[str, Any]:
+    """Only exists when the desktop window was started with STUDIO_DEBUG=1."""
+    run = getattr(app.state, "eval_js", None)
+    if run is None:
+        raise HTTPException(404)
+    try:
+        return {"result": await run_in_threadpool(run, body.get("code", ""))}
+    except Exception as e:  # noqa: BLE001 - report the JS error to the test script
+        return {"error": f"{e.__class__.__name__}: {e}"}
+
+
+@app.get("/api/debug/menus")
+def debug_menus() -> dict[str, Any]:
+    """Debug only: the native menu bar as titles and shortcuts."""
+    if getattr(app.state, "eval_js", None) is None:
+        raise HTTPException(404)
+    from AppKit import NSApplication
+    out = {}
+    main = NSApplication.sharedApplication().mainMenu()
+    for i in range(main.numberOfItems() if main else 0):
+        item = main.itemAtIndex_(i)
+        sub = item.submenu()
+        out[str(item.title() or sub.title() if sub else item.title())] = [
+            f"{sub.itemAtIndex_(j).title()} ⌘{sub.itemAtIndex_(j).keyEquivalent()}" for j in range(sub.numberOfItems() if sub else 0)
+            if not sub.itemAtIndex_(j).isSeparatorItem()]
+    return out
+
+
 @app.post("/api/focus")
 async def focus() -> dict[str, bool]:
     """Launcher double-clicked while running: bring the desktop window forward."""

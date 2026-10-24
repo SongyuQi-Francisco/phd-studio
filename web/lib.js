@@ -100,3 +100,15 @@ export const prefs = {
     try { localStorage.setItem("studio:" + key, JSON.stringify(value)); } catch {}
   },
 };
+
+// Clipboard that also works inside the desktop window (WebKit can refuse navigator.clipboard).
+export async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch {}
+  const ta = document.createElement("textarea");
+  ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+  document.body.appendChild(ta); ta.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch {}
+  ta.remove();
+  return ok;
+}

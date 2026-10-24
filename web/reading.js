@@ -129,7 +129,7 @@ export function ReadingPage({ onOpen, toast, version }) {
 
   useEffect(() => {
     const k = (e) => {
-      if (e.target.matches("input, textarea") || doneItem || e.metaKey || e.ctrlKey) return;
+      if (e.target?.closest?.("input, textarea, select, [contenteditable]") || doneItem || e.metaKey || e.ctrlKey) return;
       const i = current;
       if (e.key === "j" || e.key === "ArrowDown") { e.preventDefault(); setSel((n) => Math.min(n + 1, flat.length - 1)); }
       else if (e.key === "k" || e.key === "ArrowUp") { e.preventDefault(); setSel((n) => Math.max(n - 1, 0)); }

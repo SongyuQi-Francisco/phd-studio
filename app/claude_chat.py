@@ -16,6 +16,7 @@ import subprocess
 import time
 from datetime import date
 import uuid
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,9 @@ from .config import (
     load_secrets,
     load_settings,
 )
+
+# Read-only tools are meant to bypass the approval callback; don't warn about it on every session.
+warnings.filterwarnings("ignore", message="can_use_tool will not be invoked")
 
 SESSIONS_FILE = STATE_DIR / "sessions.json"
 READ_TOOLS = ["Read", "Glob", "Grep", "WebFetch", "WebSearch"]

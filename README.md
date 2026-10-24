@@ -54,8 +54,8 @@ claude setup-token
 read -s "T?token: " && printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$T" > ~/.config/secrets/claude.env && chmod 600 ~/.config/secrets/claude.env && unset T
 ```
 
-Desktop launcher (macOS): `launcher/make_app.sh` builds `PhD Studio.app` on your Desktop with its icon.
-Double-click it to start the server if needed and open the workbench in its own Chrome app window (or your default browser).
+Desktop app (macOS): `launcher/make_app.sh` builds `PhD Studio.app` on your Desktop: a small native entry point (`launcher/stub.c`) that runs the workbench in a WebKit window, so it shows up as "PhD Studio" in the Dock and ⌘Tab.
+Double-click to open; closing the window or ⌘Q stops everything. Start it with `STUDIO_DEBUG=1 .venv/bin/python -m app.desktop` to enable a local JS-eval hook for testing.
 The power button in the sidebar shuts the server down. Server logs go to `~/Library/Logs/PhD Studio.log`.
 
 Optional: `DEEPSEEK_API_KEY=...` in `~/.config/secrets/deepseek.env` for fast selection translation and bilingual PDFs; without it Google Translate is used.
