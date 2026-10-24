@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 
-from . import scholars, tracker_run, tracking
+from . import scholar_capture, scholar_refresh, scholars, tracker_run, tracking
 
 router = APIRouter(prefix="/api/track")
 IMG_HEADERS = {"Cache-Control": "max-age=604800"}
@@ -22,7 +22,86 @@ def scholar_list() -> dict[str, Any]:
 
 @router.get("/scholars/activity")
 def scholar_activity(refresh: bool = False) -> dict[str, Any]:
+    scholar_refresh.maybe_schedule()  # monthly list recompute, when due
     return scholars.activity(refresh)
+
+
+@router.get("/scholars/refresh")
+def list_refresh_status() -> dict[str, Any]:
+    return scholar_refresh.status()
+
+
+@router.post("/scholars/refresh")
+def list_refresh_start() -> dict[str, Any]:
+    try:
+        return scholar_refresh.start(manual=True)
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+
+
+@router.post("/scholars/refresh/{run_id}/apply")
+def list_refresh_apply(run_id: str) -> dict[str, Any]:
+    try:
+        return scholar_refresh.apply(run_id)
+    except (ValueError, KeyError) as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/scholars/refresh/{run_id}/dismiss")
+def list_refresh_dismiss(run_id: str) -> dict[str, Any]:
+    try:
+        return scholar_refresh.dismiss(run_id)
+    except KeyError:
+        raise HTTPException(404)
+
+
+@router.post("/scholars/snapshot")
+def list_snapshot_import(body: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return scholar_refresh.import_snapshot(str(body.get("text") or ""))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.put("/scholars/rules")
+def list_rules(body: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return scholar_refresh.set_rules(body)
+    except (TypeError, ValueError) as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/scholars/exclude")
+def list_exclude(body: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return scholar_refresh.exclude(body, str(body.get("reason") or ""))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.delete("/scholars/exclude/{xid}")
+def list_unexclude(xid: str) -> dict[str, bool]:
+    try:
+        scholar_refresh.unexclude(xid)
+    except KeyError:
+        raise HTTPException(404)
+    return {"ok": True}
+
+
+@router.post("/scholars/{sid}/pin")
+def scholar_pin(sid: str, body: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return scholar_refresh.set_pin(sid, bool(body.get("on", True)))
+    except KeyError:
+        raise HTTPException(404)
+
+
+@router.post("/scholars/scholar-window")
+def scholar_window() -> dict[str, bool]:
+    """Desktop app only: show the Google Scholar window so the user can sign in."""
+    if not scholar_capture.show():
+        raise HTTPException(400, "只有桌面 App 里才能打开 Scholar 窗口")
+    return {"ok": True}
 
 
 @router.get("/scholars/search")

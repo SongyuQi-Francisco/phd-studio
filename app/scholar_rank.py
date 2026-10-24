@@ -1,0 +1,225 @@
+"""Rules for recomputing the top-scholar list. Pure functions (no config, no I/O) so they can be
+unit-tested; app/scholar_refresh.py feeds them Scholar rankings and OpenAlex data.
+
+- Candidates: Google Scholar label rankings (several label spellings, merged by user id) plus the
+  current list, ordered by Scholar total citations.
+- A candidate is kept when it has at least `min_papers` field papers in the recent window
+  (title/abstract topics must hit every topic group, e.g. RecSys AND (LLM or Agent); workshop
+  and tutorial items do not count), is not citation noise (most citations from non-field work or
+  from mega-collaborations), is still publishing, and is not on the exclude list.
+- Pinned scholars always stay; the remaining slots go to the best-cited candidates that pass.
+"""
+from __future__ import annotations
+
+import re
+import unicodedata
+from datetime import date
+from typing import Any, Callable, Iterable
+
+NOT_PAPER = re.compile(r"workshop|tutorial|proceedings|preface|\bsummary of\b|panel|keynote|doctoral consortium", re.I)
+
+
+class CheckUnavailable(RuntimeError):
+    """The data needed to judge a candidate could not be fetched (offline, out of quota)."""
+
+
+# ---------- names and keys ----------
+
+def norm_name(name: str) -> str:
+    s = unicodedata.normalize("NFKD", name or "")
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return " ".join(re.sub(r"[^a-z ]+", " ", s.lower().replace("-", "").replace("‐", "")).split())
+
+
+def same_person(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    if a.get("scholar_id") and b.get("scholar_id"):
+        return a["scholar_id"] == b["scholar_id"]
+    if a.get("openalex") and b.get("openalex"):
+        return a["openalex"] == b["openalex"]
+    return norm_name(a.get("name", "")) == norm_name(b.get("name", ""))
+
+
+def parse_count(num: str, unit: str = "") -> int:
+    n = float(num.replace(",", ""))
+    return int(round(n * {"k": 1_000, "m": 1_000_000}.get(unit.lower(), 1)))
+
+
+# ---------- snapshots ----------
+
+_SNAP_ROW = re.compile(r"^\s*(\d+)\.\s+(.+?)\s+·\s+([\w-]{12})\s+·\s+([\d.,]+)\s*([kKmM]?)(?:\s+·\s+(.*))?\s*$")
+_SNAP_PI = re.compile(r"^\s*-\s+(.+?)\s+·\s+([\d.,]+)\s*([kKmM]?)\s+·\s+(.*)$")
+_DATE = re.compile(r"(20\d\d-\d\d-\d\d)")
+
+
+def parse_snapshot_md(text: str) -> dict[str, Any]:
+    """A pasted ranking: '12. Name · scholarid12ch · 65k · Affiliation · note' rows, optionally a
+    '- Name · 76k · Affiliation' list of extra people found by name search."""
+    m = _DATE.search(text)
+    out: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        r = _SNAP_ROW.match(line)
+        if r:
+            rest = [x.strip() for x in (r.group(6) or "").split(" · ")]
+            note = " · ".join(rest[1:]) if len(rest) > 1 else ""
+            out.append({"name": r.group(2).strip(), "scholar_id": r.group(3), "citations": parse_count(r.group(4), r.group(5)),
+                        "affiliation": "" if rest[0] in ("—", "-") else rest[0], "note": note, "via": "label",
+                        "scholar_rank": int(r.group(1)), **flags_from_note(note)})
+            continue
+        p = _SNAP_PI.match(line)
+        if p:
+            note = p.group(4).strip()
+            aff = note.split(" · ")[0]
+            out.append({"name": p.group(1).strip(), "scholar_id": None, "citations": parse_count(p.group(2), p.group(3)),
+                        "affiliation": aff, "note": "", "via": "name"})
+    return {"date": m.group(1) if m else None, "entries": out}
+
+
+def flags_from_note(note: str) -> dict[str, Any]:
+    low = note.lower()
+    return {"noise": "noise" in low, "deceased": "deceased" in low or "已故" in note}
+
+
+def merge_entries(*lists: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One row per person (Scholar user id, else name): highest citation count wins, labels union."""
+    merged: list[dict[str, Any]] = []
+    for lst in lists:
+        for e in lst:
+            hit = next((m for m in merged if same_person(m, e)), None)
+            if hit is None:
+                merged.append(dict(e, labels=list(e.get("labels") or [])))
+                continue
+            for k, v in e.items():
+                if k == "labels":
+                    hit["labels"] = sorted(set(hit["labels"]) | set(v or []))
+                elif k == "citations":
+                    hit[k] = max(hit.get(k) or 0, v or 0)
+                elif k in ("noise", "deceased"):
+                    hit[k] = bool(hit.get(k)) or bool(v)
+                elif not hit.get(k) and v:
+                    hit[k] = v
+    return sorted(merged, key=lambda e: -(e.get("citations") or 0))
+
+
+# ---------- topic checks ----------
+
+def compile_model(model: dict[str, Any]) -> dict[str, Any]:
+    fl = re.IGNORECASE
+    return {"gate": [re.compile(p, fl) for p in model.get("domain_gate", {}).get("patterns", [])],
+            "topics": [(t["id"], [re.compile(p, fl) for p in t["patterns"]]) for t in model.get("topics", [])]}
+
+
+def topics_of(text: str, compiled: dict[str, Any]) -> set[str]:
+    return {tid for tid, pats in compiled["topics"] if any(p.search(text) for p in pats)}
+
+
+def field_papers(works: Iterable[dict[str, Any]], compiled: dict[str, Any], groups: list[list[str]],
+                 since: str | None = None) -> list[str]:
+    """Titles of research papers whose topics hit every group (one entry per title)."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for w in works:
+        title = w.get("title") or ""
+        if not title or NOT_PAPER.search(title) or (since and (w.get("date") or "") < since):
+            continue
+        hits = topics_of(title + " " + (w.get("abstract") or ""), compiled)
+        if not all(set(g) & hits for g in groups):
+            continue
+        k = re.sub(r"[^a-z0-9]", "", title.lower())[:80]
+        if k not in seen:
+            seen.add(k)
+            out.append(title)
+    return out
+
+
+def noise_verdict(top_works: list[dict[str, Any]], compiled: dict[str, Any], *, min_field_share: float = 0.1,
+                  mega_team: int = 30, mega_share: float = 0.5) -> str | None:
+    """Why a Scholar citation count does not reflect the field, or None. `top_works` are the
+    author's most-cited works: {title, abstract?, cites, team}, `team` = institutions (or
+    authors) on the paper; physics-style collaborations run into the hundreds."""
+    total = sum(w.get("cites") or 0 for w in top_works)
+    if total <= 0:
+        return None
+    mega = sum(w.get("cites") or 0 for w in top_works if (w.get("team") or 0) >= mega_team)
+    if mega / total >= mega_share:
+        return f"被引主要来自超大合作组论文（{round(100 * mega / total)}%）"
+    field = sum(w.get("cites") or 0 for w in top_works
+                if any(p.search((w.get("title") or "") + " " + (w.get("abstract") or "")) for p in compiled["gate"]))
+    if field / total < min_field_share:
+        return f"被引几乎都来自领域外论文（领域内仅 {round(100 * field / total)}%）"
+    return None
+
+
+def inactive_verdict(last_work: str | None, today: date, years: int = 3) -> str | None:
+    if not last_work:
+        return "查不到发表记录"
+    if (today - date.fromisoformat(last_work[:10])).days > years * 365:
+        return f"{years} 年内没有新发表（最近 {last_work[:7]}）"
+    return None
+
+
+# ---------- ranking ----------
+
+def rank(candidates: list[dict[str, Any]], check: Callable[[dict[str, Any]], dict[str, Any]], *, top_n: int = 10,
+         alternates: int = 5, min_papers: int = 3, pinned: Iterable[dict[str, Any]] = (),
+         excluded: Iterable[dict[str, Any]] = ()) -> dict[str, Any]:
+    """Walk candidates by citations; `check(c)` (called lazily, only as far as needed) returns
+    {field_papers, noise, inactive, ...}. Pinned people always stay; excluded people are never used.
+    People are matched by Scholar id, else OpenAlex id, else name."""
+    pinned, excluded = list(pinned), list(excluded)
+    ordered = sorted(candidates, key=lambda c: -(c.get("citations") or 0))
+    is_pin = [any(same_person(c, p) for p in pinned) for c in ordered]
+    slots = max(0, top_n - sum(is_pin))
+    chosen: list[dict[str, Any]] = []
+    alts: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    open_slots = lambda: slots - sum(1 for x in chosen if not x.get("pinned"))  # noqa: E731
+    for i, c in enumerate(ordered):
+        if is_pin[i]:
+            chosen.append(dict(c, pinned=True, verdict=_safe_check(check, c)))
+            continue
+        if open_slots() <= 0 and len(alts) >= alternates:
+            if not any(is_pin[i:]):
+                break
+            continue
+        if any(same_person(c, x) for x in excluded):
+            skipped.append(dict(c, reason="在排除名单里"))
+            continue
+        if c.get("deceased"):
+            skipped.append(dict(c, reason="已故"))
+            continue
+        if c.get("noise"):
+            skipped.append(dict(c, reason="快照标注：被引来自领域外的大合作"))
+            continue
+        v = check(c)
+        reason = v.get("noise") or v.get("inactive")
+        if not reason and (v.get("field_papers") or 0) < min_papers:
+            reason = f"近期领域论文 {v.get('field_papers') or 0} 篇（需 ≥{min_papers}）"
+        if reason:
+            skipped.append(dict(c, reason=reason, verdict=v))
+        elif open_slots() > 0:
+            chosen.append(dict(c, verdict=v))
+        else:
+            alts.append(dict(c, verdict=v))
+    chosen.sort(key=lambda c: -(c.get("citations") or 0))
+    for n, c in enumerate(chosen, 1):
+        c["rank"] = n
+    return {"list": chosen, "alternates": alts, "skipped": skipped}
+
+
+def _safe_check(check: Callable[[dict[str, Any]], dict[str, Any]], c: dict[str, Any]) -> dict[str, Any] | None:
+    try:
+        return check(c)
+    except CheckUnavailable:
+        return None
+
+
+def diff(current: list[dict[str, Any]], proposed: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Who enters, who leaves (pinned never leave) and how ranks move."""
+    enter = [p for p in proposed if not any(same_person(p, c) for c in current)]
+    leave = [c for c in current if not c.get("pinned") and not any(same_person(p, c) for p in proposed)]
+    moves = []
+    for p in proposed:
+        c = next((c for c in current if same_person(p, c)), None)
+        if c is not None:
+            moves.append({"name": p.get("name"), "from": c.get("rank"), "to": p.get("rank")})
+    return {"enter": enter, "leave": leave, "moves": moves}
