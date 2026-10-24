@@ -54,7 +54,7 @@ class Fake:
         return [sys.executable, str(FAKE), str(pdf), str(out), self.mode, str(self.log)]
 
     def starts(self) -> list[str]:
-        return self.log.read_text(encoding="utf-8").split()
+        return self.log.read_text(encoding="utf-8").splitlines()
 
 
 @pytest.fixture
@@ -67,6 +67,7 @@ def fake(sandbox, monkeypatch):
     bilingual.QUEUED.clear()
     bilingual._stopping.clear()
     bq._stop.clear()
+    config.save_settings({"bilingual_prefetch": "T1T2"})  # off by default; see test_off_by_default
     yield f
     for job in bilingual._jobs.values():  # nothing outlives a test
         if (p := job.get("proc")) and p.poll() is None:
@@ -385,3 +386,172 @@ def test_routes(fake, make_note):
 def test_queue_file_lives_in_the_data_dir():
     assert bq.QUEUE_FILE.is_relative_to(ROOT) and bq.QUEUE_FILE.parent == config.DATA_DIR
     assert not bq.QUEUE_FILE.is_relative_to(config.VAULT_DIR)
+
+
+# ---------- review fixes ----------
+
+
+def test_off_by_default(fake, make_note):
+    assert config.DEFAULT_SETTINGS["bilingual_prefetch"] == "off"
+    config.SETTINGS_FILE.unlink()
+    assert bq.mode() == "off" and bq.snapshot()["mode"] == "off"
+    reading.push(paper=paper(make_note, "A"), reason="r", source="tracker")
+    bq.tick()
+    tier("A", "T1")
+    bq.tick()
+    assert queued() == [] and fake.starts() == []
+
+
+def _make_output(key: str) -> Path:
+    out = config.BILINGUAL_DIR / library.safe_name(key)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "x.zh.dual.pdf").write_bytes(b"%PDF-dual")
+    return out
+
+
+def test_a_pdf_made_before_the_note_is_found_after_it(fake, make_note):
+    _make_output("arxiv:2610.11920")
+    make_note("Later Note", arxiv="2610.11920", title="Later Note")
+    (config.VAULT_PDFS_DIR / "Later Note.pdf").write_bytes(b"%PDF-1.4")
+    assert bilingual.aliases("Later Note") == ["Later Note", "arxiv:2610.11920"]
+    assert bilingual.aliases("arxiv:2610.11920") == ["arxiv:2610.11920", "Later Note"]
+    assert bilingual.output("Later Note", "dual") and bilingual.status("Later Note")["state"] == "done"
+    assert bilingual.start("Later Note")["state"] == "done"  # never translated (and paid for) again
+    assert fake.starts() == []
+    _make_output("Other Note")
+    make_note("Other Note", arxiv="2610.22222", title="Other Note")
+    assert bilingual.status("arxiv:2610.22222")["state"] == "done"
+
+
+def test_a_job_under_the_old_key_is_seen_under_the_new_one(fake, make_note):
+    (config.PDF_CACHE_DIR / "arxiv_2610.11920.pdf").write_bytes(b"%PDF-1.4")
+    fake.mode = "slow"
+    bilingual.start("arxiv:2610.11920")
+    make_note("New Note", arxiv="2610.11920", title="New Note")
+    (config.VAULT_PDFS_DIR / "New Note.pdf").write_bytes(b"%PDF-1.4")
+    assert bilingual.status("New Note")["state"] == "running"
+    assert bilingual.start("New Note")["state"] == "running"
+    until(lambda: fake.starts())
+    assert fake.starts() == ["arxiv_2610.11920"] and bilingual.running() == ["arxiv:2610.11920"]
+
+
+@pytest.mark.parametrize("relinked", [False, True])
+def test_a_waiting_arxiv_item_follows_its_new_note(fake, make_note, relinked):
+    reading.push(arxiv="2610.11920", title="Loose", reason="r", source="tracker")
+    bq.set_paused(True)
+    bq.tick()
+    tier("arxiv:2610.11920", "T1")
+    bq.tick()
+    assert queued() == ["arxiv:2610.11920"]
+    make_note("Got A Note", arxiv="2610.11920", title="Got A Note")
+    (config.VAULT_PDFS_DIR / "Got A Note.pdf").write_bytes(b"%PDF-1.4")
+    if relinked:
+        reading.load()  # the reading list itself now says paper: Got A Note
+    assert queued() == ["Got A Note"]  # followed, not dropped as "no longer T1"
+    assert bilingual.status("Got A Note") == {"state": "queued", "position": 1, "paused": True}
+    bq.set_paused(False)
+    bq.tick()
+    assert wait("Got A Note") == "done"
+    bq.tick()
+    assert jobs()["Got A Note"]["state"] == "done" and fake.starts() == ["Got A Note"]
+
+
+def test_a_job_started_before_the_rekey_still_settles(fake, make_note):
+    reading.push(arxiv="2610.11920", title="Loose", reason="r", source="tracker")
+    (config.PDF_CACHE_DIR / "arxiv_2610.11920.pdf").write_bytes(b"%PDF-1.4")
+    bq.tick()
+    tier("arxiv:2610.11920", "T1")
+    bq.tick()  # starts under arxiv:2610.11920
+    make_note("Mid Note", arxiv="2610.11920", title="Mid Note")
+    assert wait("arxiv:2610.11920") == "done"
+    bq.tick()
+    assert jobs()["Mid Note"]["state"] == "done" and jobs()["Mid Note"]["job"] == "arxiv:2610.11920"
+    assert bilingual.status("Mid Note")["state"] == "done"
+
+
+@pytest.mark.parametrize("gap", ["missing", "emptied"])
+def test_a_list_that_disappears_for_a_while_is_not_news(fake, make_note, gap):
+    for s in ("A", "B"):
+        reading.push(paper=paper(make_note, s), reason="r", source="self", tier="T1")
+    bq.set_paused(True)
+    bq.tick()  # both already T1: recorded, not queued
+    saved = config.READING_LIST.read_bytes()
+    if gap == "missing":
+        config.READING_LIST.unlink()
+    else:
+        config.READING_LIST.write_text("items: []\n", encoding="utf-8")
+    bq.tick()
+    config.READING_LIST.write_bytes(saved)
+    t = time.time() + 5
+    os.utime(config.READING_LIST, (t, t))
+    bq.tick()
+    assert queued() == []  # neither A nor B is "new" after the gap
+
+
+def test_child_process_does_not_get_the_launchers_python_settings(fake, make_note, monkeypatch):
+    monkeypatch.setenv("PYTHONHOME", "/nonexistent-stub-home")  # the desktop stub's; breaks any other Python
+    monkeypatch.setenv("PYTHONNOUSERSITE", "1")
+    assert "PYTHONHOME" not in bilingual._child_env() and "PYTHONNOUSERSITE" not in bilingual._child_env()
+    reading.push(paper=paper(make_note, "Env"), reason="r", source="tracker")
+    bilingual.start("Env")
+    assert wait("Env") == "done"
+
+
+def test_shutdown_during_a_download_starts_no_process(fake, make_note, monkeypatch):
+    reading.push(paper=paper(make_note, "Slow"), reason="r", source="tracker")
+    bq.tick()
+    real = library.ensure_pdf
+
+    def slow_pdf(stem):
+        time.sleep(0.4)
+        return real(stem)
+    monkeypatch.setattr(library, "ensure_pdf", slow_pdf)
+    tier("Slow", "T1")
+    t = threading.Thread(target=bq.tick)
+    t.start()
+    time.sleep(0.15)  # the worker is inside the download
+    bq.stop_worker()
+    t.join()
+    assert wait("Slow") == "error" and bilingual._jobs["Slow"]["error"] == "工作台正在关闭"
+    assert fake.starts() == []
+
+
+def _folder(name: str, days_old: float, size: int = 1000) -> Path:
+    d = config.BILINGUAL_DIR / name
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / "x.zh.dual.pdf"
+    f.write_bytes(b"x" * size)
+    t = time.time() - days_old * 86400
+    os.utime(f, (t, t))
+    return d
+
+
+def test_disk_use_and_cleanup(fake, make_note):
+    reading.push(paper=paper(make_note, "Read"), reason="r", source="self", tier="T1")
+    reading.update(reading.find(reading.load(), "Read")["id"], {"status": "done"})
+    reading.push(paper=paper(make_note, "Active"), reason="r", source="self", tier="T2")
+    make_note("Noted", arxiv="2601.00001", title="Noted")
+    reading.push(paper="Noted", reason="r", source="tracker")  # in the inbox
+    _folder("Read", 100)
+    _folder("Active", 200)
+    _folder("Recent", 2)
+    _folder("arxiv_2601.00009", 40)  # never on the list
+    _folder("arxiv_2601.00001", 200)  # the inbox paper's, under its old key
+    d = bq.disk()
+    assert (d["bytes"], d["papers"]) == (5000, 5)
+    assert d["cleanable"] == {"30": {"papers": 2, "bytes": 2000}, "90": {"papers": 1, "bytes": 1000},
+                              "180": {"papers": 0, "bytes": 0}}
+    r = bq.cleanup(90)
+    assert (r["removed"], r["bytes"]) == (1, 1000) and not (config.BILINGUAL_DIR / "Read").exists()
+    assert sorted(p.name for p in config.BILINGUAL_DIR.iterdir()) == ["Active", "Recent", "arxiv_2601.00001", "arxiv_2601.00009"]
+    with pytest.raises(ValueError):
+        bq.cleanup(7)
+
+
+def test_cleanup_route(fake):
+    from app.main import app
+    client = TestClient(app)
+    _folder("arxiv_2601.00009", 40)
+    assert client.post("/api/bilingual-queue/cleanup", json={"days": 5}).status_code == 400
+    r = client.post("/api/bilingual-queue/cleanup", json={"days": 30}).json()
+    assert r["removed"] == 1 and r["disk"]["papers"] == 0

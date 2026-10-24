@@ -39,6 +39,18 @@ def queue_backfill() -> dict[str, Any]:
     return {"added": bilingual_queue.backfill(), **bilingual_queue.snapshot()}
 
 
+class CleanupReq(BaseModel):
+    days: int
+
+
+@router.post("/cleanup")
+def queue_cleanup(req: CleanupReq) -> dict[str, Any]:
+    try:
+        return bilingual_queue.cleanup(req.days)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @router.delete("/{key}")
 def queue_remove(key: str) -> dict[str, Any]:
     if not bilingual_queue.remove(key):

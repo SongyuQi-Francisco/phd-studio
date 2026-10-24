@@ -11,4 +11,7 @@
 .bq-row.past .bq-title { color: var(--text-2); }
 .bq-row.done .bq-n { color: var(--green); }
 .bq-row.error .bq-why { color: var(--red); }
+.bq-cost { margin-top: 2px; }
+.bqset .seg { flex: none; }
+.tb-btn.danger { color: var(--red); }
 .modal:has(.bqset) { max-height: 88vh; overflow-y: auto; }

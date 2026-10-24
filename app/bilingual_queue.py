@@ -8,19 +8,24 @@ reader, and a paper never gets two jobs. Papers that already have a bilingual PD
 The queue is per device, in the data dir (never in the synced vault). It survives restarts (a job cut
 off by quitting goes back to the front of the queue) and can be paused. Like Zotero auto mode, the
 first pass only records the list, so turning this on never back-fills; Settings offers that as a button.
+Off by default: each Mac makes (and pays for) its own copy. Settings shows the disk use and can clean up.
+
+Entries follow a paper's re-key from arxiv:<id> to its note stem (bilingual.aliases), so a paper that
+gets a note while it waits is neither dropped nor translated twice.
 """
 from __future__ import annotations
 
 import json
 import os
+import shutil
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import bilingual, reading
-from .config import DATA_DIR, READING_LIST, load_settings, secret
+from . import bilingual, library, reading
+from .config import BILINGUAL_DIR, DATA_DIR, READING_LIST, load_settings, secret
 
 QUEUE_FILE = DATA_DIR / "bilingual-queue.json"
 MODES: dict[str, tuple[str, ...]] = {"off": (), "T1": ("T1",), "T1T2": ("T1", "T2")}
@@ -40,7 +45,7 @@ def _mtime(p: Path) -> float:
 
 
 def mode() -> str:
-    m = load_settings().get("bilingual_prefetch", "T1T2")
+    m = load_settings().get("bilingual_prefetch", "off")
     return m if m in MODES else "off"
 
 
@@ -81,23 +86,51 @@ def _title(item: dict[str, Any]) -> str:
 
 
 def _active(st: dict[str, Any], key: str) -> dict[str, Any] | None:
-    return next((j for j in st["jobs"] if j["key"] == key and j["state"] in ("queued", "running")), None)
+    keys = set(bilingual.aliases(key))
+    return next((j for j in st["jobs"] if j["key"] in keys and j["state"] in ("queued", "running")), None)
 
 
 def _enqueue(st: dict[str, Any], item: dict[str, Any], why: str) -> bool:
     key = reading.key_of(item)
-    if _active(st, key) or bilingual.output(key, "dual") or key in bilingual.running():
+    if _active(st, key) or bilingual.output(key, "dual") or set(bilingual.aliases(key)) & set(bilingual.running()):
         return False
     st["jobs"].append({"key": key, "title": _title(item), "reason": why, "added": _now(), "state": "queued"})
     return True
 
 
+def _follow(st: dict[str, Any]) -> bool:
+    """Entries of arXiv-only items take the note stem once the note exists (the job keeps its own key)."""
+    changed = False
+    for j in st["jobs"]:
+        if j["state"] in ("queued", "running") and library.arxiv_key(j["key"]):
+            if (keys := bilingual.aliases(j["key"]))[1:]:
+                j.update(key=keys[1], title=keys[1] if j.get("title") in (None, j["key"]) else j["title"])
+                changed = True
+    return changed
+
+
+def _items_by_key() -> dict[str, dict[str, Any]]:
+    """Reading-list items under every key of their paper, whether or not reading.load() has re-keyed them yet."""
+    out: dict[str, dict[str, Any]] = {}
+    for i in reading._load_raw():
+        for k in bilingual.aliases(reading.key_of(i)):
+            out.setdefault(k, i)
+    return out
+
+
 def _reconcile(st: dict[str, Any]) -> bool:
-    """Queue papers whose item became T1/T2 since the last look (the first look only records)."""
+    """Queue papers whose item became T1/T2 since the last look (the first look only records).
+
+    A missing list (vault not mounted, mid-sync) or one that suddenly has no items is a gap, not news:
+    the round is skipped and what was seen stays, so nothing counts as new when it comes back."""
     stamp = _mtime(READING_LIST)
     if st.get("stamp") == stamp and "seen" in st:
         return False
+    if not READING_LIST.exists():
+        return False
     items = reading._load_raw()
+    if not items and st.get("seen"):
+        return False
     tiers = MODES[mode()]
     seen = st.get("seen")
     if seen is not None and tiers:
@@ -118,10 +151,11 @@ def tick() -> None:
     nxt = None
     with _lock:
         st = _load()
-        changed = _reconcile(st)
+        changed = _follow(st)
+        changed = _reconcile(st) or changed
         for j in st["jobs"]:
             if j["state"] == "running":
-                job = bilingual._jobs.get(j["key"])
+                job = bilingual._jobs.get(j.get("job") or j["key"])
                 if job is None or job["state"] == "running":
                     continue
                 j.update(state="done" if job["state"] == "done" else "error", finished=_now(), engine=job.get("engine"))
@@ -134,7 +168,7 @@ def tick() -> None:
         busy = bilingual.running() or any(j["state"] == "running" for j in st["jobs"])
         tiers = MODES[mode()]
         if not st["paused"] and tiers and not busy and any(j["state"] == "queued" for j in st["jobs"]):
-            items = {reading.key_of(i): i for i in reading._load_raw()}
+            items = _items_by_key()
             for j in st["jobs"]:
                 if j["state"] != "queued":
                     continue
@@ -142,7 +176,7 @@ def tick() -> None:
                     j.update(state="skipped", finished=_now(), error="已不在 " + "/".join(tiers))
                     changed = True
                     continue
-                j.update(state="running", started=_now())
+                j.update(state="running", started=_now(), job=j["key"])
                 nxt = j["key"]
                 changed = True
                 break
@@ -165,6 +199,8 @@ def tick() -> None:
 def snapshot() -> dict[str, Any]:
     with _lock:
         st = _load()
+        if _follow(st):
+            _save(st)
         _publish(st)
     label, _ = bilingual.engine()
     tiers = MODES[mode()]
@@ -173,15 +209,15 @@ def snapshot() -> dict[str, Any]:
         job = bilingual.status(running["key"])
         running = {**running, "progress": job.get("progress", 0), "started_ts": job.get("started")}
     finished = [j for j in st["jobs"] if j["state"] not in ("queued", "running")]
-    queued_keys = {j["key"] for j in st["jobs"] if j["state"] in ("queued", "running")}
-    backfill = [i for i in reading._load_raw() if _qualifies(i, tiers) and reading.key_of(i) not in queued_keys
+    backfill = [i for i in reading._load_raw() if _qualifies(i, tiers) and not _active(st, reading.key_of(i))
                 and not bilingual.output(reading.key_of(i), "dual")]
     return {"mode": mode(), "paused": st["paused"], "engine": label,
             "deepseek_key": bool(secret("DEEPSEEK_API_KEY", "deepseek")),
             "engine_setting": load_settings().get("translate_engine", "deepseek"),
             "running": running, "queued": [j for j in st["jobs"] if j["state"] == "queued"],
-            "recent": finished[::-1][:8], "busy": [k for k in bilingual.running() if not running or k != running["key"]],
-            "backfill": len(backfill)}
+            "recent": finished[::-1][:8],
+            "busy": [k for k in bilingual.running() if not running or k != running.get("job", running["key"])],
+            "backfill": len(backfill), "disk": disk()}
 
 
 def set_paused(paused: bool) -> dict[str, Any]:
@@ -243,6 +279,7 @@ def _loop() -> None:
 def start_worker() -> None:
     """On startup: a job cut off by the last quit goes back to the front of the queue."""
     global _thread
+    bilingual._stopping.clear()
     with _lock:
         st = _load()
         cut = [j for j in st["jobs"] if j["state"] == "running"]
@@ -258,13 +295,57 @@ def start_worker() -> None:
 
 
 def stop_worker() -> None:
-    """On shutdown: stop picking up work and end the queue's own pdf2zh process (the queue file still
-    says running, so it is redone after the next start)."""
+    """On shutdown: no new pdf2zh process from here on (set before waiting for the worker, which may be
+    mid-download), and the queue's own process ends. The queue file still says running, so that paper
+    is redone after the next start."""
     _stop.set()
+    bilingual.stop_all(source="queue")
     if _thread and _thread.is_alive():
         _thread.join(timeout=5)
-    for key in bilingual.running():
-        job = bilingual._jobs.get(key) or {}
-        proc = job.get("proc")
-        if job.get("source") == "queue" and proc and proc.poll() is None:
-            proc.terminate()
+
+
+# ---------- disk use ----------
+
+CLEAN_DAYS = (30, 90, 180)
+
+
+def _folders() -> list[tuple[Path, int, float]]:
+    """(folder, bytes, newest file time) for every paper's bilingual folder."""
+    out = []
+    if BILINGUAL_DIR.is_dir():
+        for d in BILINGUAL_DIR.iterdir():
+            if d.is_dir():
+                files = [f.stat() for f in d.rglob("*") if f.is_file()]
+                out.append((d, sum(f.st_size for f in files), max((f.st_mtime for f in files), default=d.stat().st_mtime)))
+    return out
+
+
+def _keep() -> set[str]:
+    """Folder names to never clean: papers still to read (inbox, T1–T3, reading), waiting or running."""
+    keys = {reading.key_of(i) for i in reading._load_raw() if i["status"] in ("inbox", "queued", "reading")}
+    keys |= {j["key"] for j in _load()["jobs"] if j["state"] in ("queued", "running")} | set(bilingual.running())
+    return {library.safe_name(a) for k in keys for a in bilingual.aliases(k)}
+
+
+def _cleanable(days: int, folders: list[tuple[Path, int, float]] | None = None) -> list[tuple[Path, int, float]]:
+    keep, cutoff = _keep(), time.time() - days * 86400
+    return [f for f in (folders if folders is not None else _folders()) if f[0].name not in keep and f[2] < cutoff]
+
+
+def disk() -> dict[str, Any]:
+    folders = _folders()
+    return {"bytes": sum(f[1] for f in folders), "papers": len(folders),
+            "cleanable": {str(d): {"papers": len(c), "bytes": sum(f[1] for f in c)}
+                          for d in CLEAN_DAYS for c in [_cleanable(d, folders)]}}
+
+
+def cleanup(days: int) -> dict[str, Any]:
+    """Delete the bilingual PDFs of papers no longer on the to-read list and made more than `days` ago.
+    They are only a cache: the reader's 双语 button makes them again."""
+    if days not in CLEAN_DAYS:
+        raise ValueError(f"days must be one of {CLEAN_DAYS}")
+    with _lock:
+        gone = _cleanable(days)
+        for d, _, _ in gone:
+            shutil.rmtree(d, ignore_errors=True)
+    return {"removed": len(gone), "bytes": sum(f[1] for f in gone), **snapshot()}
