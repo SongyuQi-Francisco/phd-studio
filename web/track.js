@@ -102,13 +102,17 @@ function Patrol({ toast, onAsk, onDone }) {
   const [st, setSt] = useState(null);
   const [showLog, setShowLog] = useState(false);
   const timer = useRef();
-  const load = async () => { try { const s = await api("/api/track/tracker"); setSt(s); return s; } catch { return null; } };
+  const load = async () => {
+    try { const s = await api("/api/track/tracker"); setSt(s); return s; }
+    catch { setSt((o) => o || { available: true, running: false, unreachable: true }); return null; }  // keep the button
+  };
   useEffect(() => { load(); return () => clearTimeout(timer.current); }, []);
   useEffect(() => {
     clearTimeout(timer.current);
     if (st?.running) timer.current = setTimeout(async () => {
       const s = await load();
-      if (s && !s.running) { toast(s.ok ? `巡检完成：${s.run}（保留 ${s.stats?.kept ?? "?"} 篇）` : `巡检失败：${s.error}`); onDone?.(s); }
+      if (s && !s.running && !st.external) { toast(s.ok ? `巡检完成：${s.run}（保留 ${s.stats?.kept ?? "?"} 篇）` : `巡检失败：${s.error}`); onDone?.(s); }
+      else if (s && !s.running) onDone?.(s);
     }, 1500);
   }, [st]);
   const start = async () => {
@@ -121,9 +125,9 @@ function Patrol({ toast, onAsk, onDone }) {
     : { prepare: 2, ingest: 84, render: 92, audit: 97 }[st.stage] || 50;
   const finishedRecently = !st.running && st.finished && Date.now() - new Date(st.finished) < 6 * 3600e3;
   return html`<span class="tk-patrol">
-    ${st.running && html`<span class="tk-prog" onClick=${() => setShowLog(!showLog)} title="点击看日志">
-      <span>${STAGES[st.stage] || st.stage}${st.stage === "fetch" && st.queries ? ` ${st.queries_done}/${st.queries}` : ""} · ${st.run}</span>
-      <span class="tk-prog-bar"><i style=${{ width: pct + "%" }} /></span></span>`}
+    ${st.running && html`<span class="tk-prog" onClick=${() => setShowLog(!showLog)} title=${st.external ? "这次巡检是之前开始的，进度不可见" : "点击看日志"}>
+      <span>${st.external ? "另一个巡检在运行" : STAGES[st.stage] || st.stage}${st.stage === "fetch" && st.queries ? ` ${st.queries_done}/${st.queries}` : ""}${st.run ? ` · ${st.run}` : ""}</span>
+      <span class=${"tk-prog-bar" + (st.external ? " indet" : "")}><i style=${{ width: pct + "%" }} /></span></span>`}
     ${finishedRecently && st.ok && html`<button class="chip" onClick=${() => onAsk(`按 research_tracker/WEEKLY_RUNBOOK.md 第 3 步审阅刚跑完的巡检 ${st.run}（since ${st.since}）：检查 tier-A 的同名误匹配，写 run note 的 ANALYSIS 区块，只给真正的必读建 paper note。先读 vault 的 AGENTS.md。`, "审阅本周巡检")}>
       <${Icon} name="sparkle" sm />交给助手写分析</button>`}
     ${finishedRecently && st.ok === false && html`<button class="chip" onClick=${() => setShowLog(!showLog)} title=${st.error}><span class="tag warn">上次失败</span></button>`}
@@ -416,7 +420,7 @@ function Follows({ toast, onOpenPaper, onAsk, version, onChanged }) {
     .filter((p, i, a) => a.findIndex((q) => q.arxiv === p.arxiv) === i).sort((a, b) => b.published.localeCompare(a.published));
   return html`
     ${link && html`<div class=${"tk-banner " + (link.reads_follows ? "ok" : "bad")}>
-      ${link.reads_follows ? html`<${Icon} name="check" sm /><span>每周巡检会一起抓取这些关注（已同步 ${link.count} 条到 research_tracker）</span>`
+      ${link.reads_follows ? html`<${Icon} name="check" sm /><span>每周巡检会一起抓取这些关注（tracker 里有 ${link.count} 条${link.in_sync ? "" : "，和这里不一致：下次增删关注或巡检时同步"}）</span>`
         : html`<span>每周巡检还读不到这里的关注（tracker.py 未接入 follows.json）</span>`}
       <span class="spacer" /><button class="linkbtn" disabled=${loading} onClick=${() => load(true)}>${loading ? "查询中…" : "刷新 arXiv"}</button></div>`}
     <div class="tk-addfollow">

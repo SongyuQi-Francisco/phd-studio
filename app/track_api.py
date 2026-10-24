@@ -73,7 +73,9 @@ def line_keywords(line: str, body: dict[str, Any]) -> dict[str, Any]:
 @router.get("/follows/feed")
 async def follow_feed(refresh: bool = False, days: int = 30) -> dict[str, Any]:
     """Like /api/track/feed but without the 8-per-follow cap, so the cards can count."""
-    return {"feed": await run_in_threadpool(tracking.feed, days, 25, refresh), "linkage": tracking.linkage()}
+    def load() -> dict[str, Any]:  # file reads and the plan.yaml lock stay off the event loop
+        return {"feed": tracking.feed(days, 25, refresh), "linkage": tracking.linkage()}
+    return await run_in_threadpool(load)
 
 
 @router.get("/labs/matrix")
