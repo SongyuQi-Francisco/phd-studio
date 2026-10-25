@@ -51,9 +51,9 @@ function LineCard({ l, onOpenNote, onLine, onOpenVenue, i, active }) {
       <div class="line-counts"><div><b>${l.papers}</b><span>篇论文</span></div><div><b>${l.ideas}</b><span>个想法</span></div></div>
     </div>
     ${(l.targets.length > 0 || ms.length > 0) && html`<div class="line-rings">
-      ${l.targets.map((t) => { const ev = l.deadlines.find((e) => e.target?.id === t.id);
-        return html`<${MiniRing} d=${ev ? daysTo(ev.at) : null} color=${C.orange} label=${t.venue.toUpperCase() + ((t.alternatives || []).length ? ` +${t.alternatives.length}` : "")}
-          sub=${ev ? ev.title.replace(/^\S+\s\d{4}\s/, "") : "截稿未公布"} onClick=${() => onOpenVenue(t.venue)} />`; })}
+      ${l.targets.map((t) => { const ev = l.deadlines.find((e) => (e.targets || []).some((x) => x.id === t.id)), sent = t.status === "submitted" || t.status === "accepted";
+        return html`<${MiniRing} d=${ev && !sent ? daysTo(ev.at) : null} color=${C.orange} label=${t.venue.toUpperCase() + (t.edition ? " " + t.edition : "") + ((t.alternatives || []).length ? ` +${t.alternatives.length}` : "")}
+          sub=${sent ? (t.status === "accepted" ? "已录用" : "已投稿") : ev ? ev.title.replace(/^\S+\s\d{4}\s/, "") : t.state === "past" ? "本届截稿已过" : "截稿未公布"} onClick=${() => onOpenVenue(t.venue)} />`; })}
       ${ms.map((m) => html`<${MiniRing} d=${daysTo(m.at)} color=${C.aqua} label=${m.title} sub=${(m.kind === "gate" ? "Gate · " : "") + m.at.slice(5, 10)} />`)}
     </div>`}
     ${l.kills.length > 0 && html`<div class="klights">

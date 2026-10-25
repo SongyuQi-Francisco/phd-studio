@@ -12,10 +12,17 @@
     studio idea tag i1a2b3 +verifier -todo
     studio idea merge i1a2b3 i4d5e6 [--text "the merged idea"]
     studio idea restore i1a2b3
+    studio target list [--status writing] [--line "Project A"] [--all] [--json]
+    studio target "Paper title" KDD [--edition 2027] [--deadline 2027-02-08] [--line "Project A"] [--alt CIKM]
+    studio target update t1a2b3 [--status submitted] [--edition 2027|auto] [--deadline 2027-02-08|none] [--venue ACL]
     studio deadlines [--days 90]
     studio remind [--check [--dry-run] [--now 2026-11-01T09:00] | --test] [--json]
 
-`studio milestone "Title" ...` and `studio idea "text"` are short for `milestone add` / `idea add`.
+`studio milestone "Title" ...`, `studio idea "text"` and `studio target "Title" VENUE` are short for `... add`.
+A target aims at one edition (year) of a venue, and optionally one round of it (a deadline date); without
+--edition it takes the nearest upcoming one. Several targets per venue are fine. Once a target is submitted
+or accepted, the rest of that edition's deadlines are no longer reminded for that paper. `list` marks an
+edition worked out for an older target with * (it is saved when the target is next changed).
 `idea list` hides ideas that were merged into another one (--all or --status merged shows them).
 Works whether or not the web app is running (the YAML file is locked while writing).
 """
@@ -44,6 +51,12 @@ def _idea_row(i: dict) -> str:
     return f"{i['id']}  {i.get('status', 'new'):8} {i.get('line', ''):16} {tags:20} {i['text'][:70]}"
 
 
+def _target_row(t: dict) -> str:
+    year = f"{t['edition']}{'' if t.get('edition_from') == 'set' else '*'}" if t.get("edition") else "-"
+    return (f"{t['id']}  {t.get('status', 'planning'):9} {t['venue'].upper():8} {year:6} {t.get('deadline', ''):10} "
+            f"{t.get('line', ''):16} {t['title'][:60]}")
+
+
 def _tag_ops(tokens: list[str]) -> tuple[list[str], list[str]]:
     """`+x -y z` -> (add [x, z], remove [y]). A bare word adds."""
     add, drop = [], []
@@ -52,7 +65,8 @@ def _tag_ops(tokens: list[str]) -> tuple[list[str], list[str]]:
     return add, drop
 
 
-_SUBCOMMANDS = {"milestone": ("add", "list", "done"), "idea": ("add", "list", "tag", "merge", "restore")}
+_SUBCOMMANDS = {"milestone": ("add", "list", "done"), "idea": ("add", "list", "tag", "merge", "restore"),
+                "target": ("add", "list", "update")}
 
 
 def _default_to_add(argv: list[str]) -> list[str]:
@@ -165,6 +179,31 @@ def main(argv: list[str] | None = None) -> int:
     ir = isub.add_parser("restore", help="bring back an idea that was merged into another one")
     ir.add_argument("id")
 
+    t = sub.add_parser("target", help="submission targets (a paper aimed at a venue's edition): add (the default), list, update")
+    tsub = t.add_subparsers(dest="action", required=True)
+    ta = tsub.add_parser("add", help="aim a paper at a venue")
+    ta.add_argument("title")
+    ta.add_argument("venue", help="venue acronym, e.g. SIGIR")
+    ta.add_argument("--edition", type=int, help="conference year (default: the nearest upcoming)")
+    ta.add_argument("--deadline", help="YYYY-MM-DD of one round's paper deadline, to aim at that round only")
+    ta.add_argument("--line")
+    ta.add_argument("--alt", action="append", default=[], help="alternative venue; repeatable")
+    ta.add_argument("--status", choices=plan.T_STATUS, default="planning")
+    ta.add_argument("--notes")
+    tl = tsub.add_parser("list", help="show the targets with their editions")
+    tl.add_argument("--status", choices=plan.T_STATUS)
+    tl.add_argument("--line")
+    tl.add_argument("--all", action="store_true", help="also list rejected and dropped targets")
+    tl.add_argument("--json", action="store_true")
+    tu = tsub.add_parser("update", help="change a target (status, edition, round, venue, notes)")
+    tu.add_argument("id")
+    tu.add_argument("--status", choices=plan.T_STATUS)
+    tu.add_argument("--edition", help="conference year, or 'auto' to let it follow the nearest upcoming one")
+    tu.add_argument("--deadline", help="YYYY-MM-DD of one round's paper deadline, or 'none' for the whole edition")
+    tu.add_argument("--venue")
+    tu.add_argument("--line")
+    tu.add_argument("--notes")
+
     dl = sub.add_parser("deadlines", help="upcoming watched-venue deadlines, targets and milestones")
     dl.add_argument("--days", type=int, default=90)
 
@@ -242,17 +281,41 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps(sel, ensure_ascii=False, indent=2))
             else:
                 print("\n".join(_idea_row(i) for i in sel) or "(empty)")
+        elif a.cmd == "target" and a.action == "add":
+            rec = plan.add_target(a.title, a.venue, line=a.line, alternatives=a.alt, status=a.status, notes=a.notes,
+                                  edition=a.edition, deadline=a.deadline)
+            print(f"added: {rec['id']} {rec['venue'].upper()} {rec.get('edition', '-')} {rec['title']}")
+        elif a.cmd == "target" and a.action == "list":
+            sel = [t for t in plan.targets(include_ended=a.all or a.status in ("rejected", "dropped"))
+                   if (not a.status or t.get("status", "planning") == a.status) and (not a.line or t.get("line") == a.line)]
+            if a.json:
+                print(json.dumps(sel, ensure_ascii=False, indent=2))
+            else:
+                print("\n".join(_target_row(t) for t in sel) or "(empty)")
+        elif a.cmd == "target":
+            patch = {k: v for k, v in (("status", a.status), ("venue", a.venue), ("line", a.line), ("notes", a.notes)) if v}
+            if a.edition is not None:
+                patch["edition"] = None if a.edition.lower() == "auto" else a.edition
+            if a.deadline is not None:
+                patch["deadline"] = None if a.deadline.lower() in ("none", "") else a.deadline
+            if not patch:
+                raise ValueError("nothing to change: give --status, --edition, --deadline, --venue, --line or --notes")
+            rec = plan.update("targets", a.id, patch)
+            print(f"updated: {rec['id']} {rec['venue'].upper()} {rec.get('edition', '-')} [{rec.get('status', 'planning')}] {rec['title']}")
         elif a.cmd == "deadlines":
             for e in plan.timeline(days_back=0, days_ahead=a.days)["events"]:
                 if e["days"] >= 0:
                     tag = {"venue": "venue", "target": "TARGET", "milestone": "plan"}[e["type"]]
-                    print(f"{e['at'][:16].replace('T', ' ')} UTC  {e['days']:>3}d  {tag:<6} {e['title']}")
+                    who = " · ".join(x["title"] for x in e.get("targets") or [])
+                    quiet = " (sent: " + ", ".join(x["title"] for x in e["closed"]) + ")" if e.get("muted") else ""
+                    print(f"{e['at'][:16].replace('T', ' ')} UTC  {e['days']:>3}d  {tag:<6} {e['title']}"
+                          + (f"  -> {who}" if who else "") + quiet)
         elif a.cmd == "remind":
             return _remind(a)
     except KeyError as e:
-        if a.cmd != "idea":
+        if a.cmd not in ("idea", "target"):
             raise
-        print(f"error: no idea {e.args[0]}", file=sys.stderr)
+        print(f"error: no {a.cmd} {e.args[0]}", file=sys.stderr)
         return 2
     except (reading.ReadingError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)

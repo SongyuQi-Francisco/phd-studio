@@ -37,6 +37,11 @@ def _kill_state(body: str) -> dict[str, str]:
     return state
 
 
+def _aims_at(event: dict[str, Any], line: str) -> bool:
+    """Whether a deadline event belongs to a paper of this research line (an event can have several papers)."""
+    return any(t.get("line") == line for t in event.get("targets") or [])
+
+
 def lines() -> list[dict[str, Any]]:
     data = plan.timeline(days_back=0, days_ahead=500)
     items = reading.load()
@@ -70,7 +75,7 @@ def lines() -> list[dict[str, Any]]:
             "kills": kills, "latest_status": latest_status,
             "milestones": [e for e in data["events"] if e["type"] == "milestone" and line and e.get("line") == line],
             "targets": [t for t in data["targets"] if line and t.get("line") == line],
-            "deadlines": [e for e in data["events"] if e["type"] == "target" and line and (e.get("target") or {}).get("line") == line][:3],
+            "deadlines": [e for e in data["events"] if e["type"] == "target" and line and _aims_at(e, line)][:3],
             "papers": sum(1 for i in items if line and line in i.get("lines", []) and i["status"] not in ("dismissed",)),
             "ideas": sum(1 for i in idea_list if line and i.get("line") == line and i.get("status") != "dropped"),
             "obsidian_url": n["obsidian_url"], "mtime": n["mtime"],
@@ -85,7 +90,7 @@ def lines() -> list[dict[str, Any]]:
             "horizon": None, "created": None, "pitch": "", "first_experiment": "", "kills": [], "latest_status": "",
             "milestones": [e for e in data["events"] if e["type"] == "milestone" and e.get("line") == ln],
             "targets": [t for t in data["targets"] if t.get("line") == ln],
-            "deadlines": [e for e in data["events"] if e["type"] == "target" and (e.get("target") or {}).get("line") == ln][:3],
+            "deadlines": [e for e in data["events"] if e["type"] == "target" and _aims_at(e, ln)][:3],
             "papers": sum(1 for i in items if ln in i.get("lines", []) and i["status"] != "dismissed"),
             "ideas": sum(1 for i in idea_list if i.get("line") == ln and i.get("status") != "dropped"),
             "obsidian_url": None, "mtime": 0, "virtual": True,

@@ -100,20 +100,25 @@ def build(emit: Callable[[dict[str, Any]], Awaitable[None]]):
         await changed("plan", f"里程碑：已更新 {rec['title']}", rec)
         return _ok(rec)
 
-    @tool("target_add", "为一篇在研论文设定目标会议（可带备选）。venue 用会议简称，如 SIGIR、ACL。",
-          _obj({"title": S, "venue": S, "line": S, "alternatives": SA, "notes": S}, ["title", "venue"]))
+    @tool("target_add", "为一篇在研论文设定目标会议和届次（可带备选）。venue 用会议简称，如 SIGIR、ACL；edition 是会议年份（整数，如 2027），"
+                        "不填就取最近一届；deadline 可选，指定某一轮截稿（该轮全文截止的 UTC 日期 YYYY-MM-DD，查 venue_search）。"
+                        "同一会议可以有多个目标（不同论文、不同届次）。",
+          _obj({"title": S, "venue": S, "line": S, "alternatives": SA, "notes": S, "edition": {"type": "integer"},
+                "deadline": S}, ["title", "venue"]))
     async def target_add(a):
         try:
             rec = plan.add_target(a["title"], a["venue"], line=a.get("line"), alternatives=a.get("alternatives"),
-                                  notes=a.get("notes"))
+                                  notes=a.get("notes"), edition=a.get("edition"), deadline=a.get("deadline"))
         except ValueError as e:
             return _err(str(e))
-        await changed("plan", f"目标：{rec['title']} → {rec['venue'].upper()}", rec)
+        await changed("plan", f"目标：{rec['title']} → {rec['venue'].upper()}" + (f" {rec['edition']}" if rec.get("edition") else ""), rec)
         return _ok(rec)
 
-    @tool("target_update", "修改投稿目标：venue、alternatives、status(planning/writing/submitted/accepted/rejected/dropped)、notes；delete=true 删除。",
-          _obj({"id": S, "title": S, "venue": S, "alternatives": SA, "status": S, "line": S, "notes": S,
-                "delete": {"type": "boolean"}}, ["id"]))
+    @tool("target_update", "修改投稿目标：venue、edition（年份，0 表示改回自动）、deadline（某一轮截稿的日期，空字符串表示整届）、alternatives、"
+                           "status(planning/writing/submitted/accepted/rejected/dropped)、notes；delete=true 删除。"
+                           "标为 submitted/accepted 后，该届剩下的截稿不再为这篇论文提醒，其他论文的目标和之后的届次照常提醒。",
+          _obj({"id": S, "title": S, "venue": S, "edition": {"type": "integer"}, "deadline": S, "alternatives": SA,
+                "status": S, "line": S, "notes": S, "delete": {"type": "boolean"}}, ["id"]))
     async def target_update(a):
         try:
             if a.get("delete"):

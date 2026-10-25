@@ -427,7 +427,7 @@ def _studio_prompt() -> str:
 
 # 你能直接改的（studio 工具，立即生效，界面会显示变更卡片）
 - 阅读清单：reading_push / reading_list / reading_update
-- 规划：milestone_add / milestone_update（里程碑、Gate、Kill criteria 检查点），target_add / target_update（投稿目标与备选）
+- 规划：milestone_add / milestone_update（里程碑、Gate、Kill criteria 检查点），target_add / target_update（投稿目标：会议 + 届次年份 + 可选某一轮截稿，备选；标 submitted/accepted 后该届不再为这篇论文提醒）
 - 会议：venue_search（CORE ICORE2026 + CCF 全量库、截稿、录用率、核实过的赛道和页数；freshness 说明这些信息是否可能过期）、venue_watch、venue_details_propose（核对官网 CFP 后提交更新提案，只提交不生效，用户在会议详情页确认）
 - 想法：idea_add / idea_update / idea_list / idea_merge（想法有自由标签：加标签用 idea_add 的 tags 或 idea_update 的 tags_add / tags_remove，按标签找用 idea_list 的 tags；合并重复的想法用 idea_merge，原想法保留可恢复）。把想法整理成正式 idea 笔记时：按 AGENTS.md 的 Idea Maintenance 和 Idea Note Template 写进 idea 笔记文件夹（Write 会让用户确认），写完用 idea_update 标为 promoted 并填 note 路径
 - 追踪：tracker_latest（每周实验室追踪）、follow（关注关键词 / 学者，追踪页实时查 arXiv）

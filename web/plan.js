@@ -19,6 +19,14 @@ const T_STATUS = { planning: "计划中", writing: "写作中", submitted: "已�
 const T_STEPS = ["planning", "writing", "submitted", "accepted"];
 const KILL = { clear: "未触发", partial: "部分触发", triggered: "已触发" };
 const HORIZON = 120;
+const SENT = ["submitted", "accepted"];  // 已投出：这一届剩下的截稿不再为这篇论文提醒
+const names = (list) => (list || []).map((x) => x.title).join("、");
+// the deadline event of a target still being prepared (an edition can hold several papers)
+const evOf = (events, t) => events.find((e) => e.type === "target" && e.days >= 0 && (e.targets || []).some((x) => x.id === t.id));
+// what to say about a target's deadlines when there is no upcoming one to count down to
+const noDeadline = (t) => SENT.includes(t.status) ? `${T_STATUS[t.status]} · 本届其余截稿不再提醒`
+  : !t.edition ? "下一届截稿未公布" : t.state === "past" ? `${t.edition} 届截稿已过` : `${t.edition} 届截稿未公布`;
+const roundLabel = (r) => `${r.comment ? r.comment.replace("（官网）", "") : "主会"} · ${r.abstract ? "摘要 " + md(r.abstract) + " · " : ""}${r.deadline ? "全文 " + md(r.deadline) : "全文未公布"}`;
 
 function Ranks({ core, ccf }) {
   return html`<span class="ranks">
@@ -42,6 +50,36 @@ function DaysRing({ d, max = HORIZON, size = 64, stroke = 6, color }) {
     title=${d == null ? "日期未公布" : late ? `已逾期 ${-d} 天` : `还剩 ${d} 天（满环 = ${max} 天）`}>
     <b class=${d != null && d <= 14 ? "hot" + (late ? " late" : "") : ""}>${d == null ? "—" : late ? "逾期" : d}</b><small>${d == null ? "未公布" : late ? `${-d} 天` : "天"}</small>
   </${Ring}>`;
+}
+
+// ---------------- edition + round picker for a submission target ----------------
+
+// Chooses which edition (year) of a venue a paper aims at, and optionally one round of it. `onChange({edition, deadline})`
+// gets "" for "automatic" / "the whole edition"; a venue the catalog does not know shows nothing.
+export function EditionPicker({ venue, edition, deadline, onChange }) {
+  const [opts, setOpts] = useState(null);
+  useEffect(() => {
+    setOpts(null);
+    const v = (venue || "").trim();
+    if (!v) return;
+    let live = true;
+    const timer = setTimeout(() => api(`/api/venues/${encodeURIComponent(v)}/editions`).then((o) => live && setOpts(o)).catch(() => live && setOpts(null)), 250);
+    return () => { live = false; clearTimeout(timer); };
+  }, [venue]);
+  if (!opts) return null;
+  const eds = [...opts.editions];
+  if (edition && !eds.some((e) => e.year === edition)) eds.push({ year: edition, rounds: [], extra: true });
+  eds.sort((a, b) => b.year - a.year);
+  const cur = eds.find((e) => e.year === (edition || opts.default));
+  const edLabel = (e) => `${e.year}${e.year === opts.default ? " · 最近一届" : e.past ? " · 已截稿" : e.rounds.length || e.extra ? "" : " · 截稿未公布"}`;
+  return html`<span class="ed-pick">
+    <select value=${edition || ""} title="投稿哪一届" onChange=${(e) => onChange({ edition: e.target.value ? Number(e.target.value) : "", deadline: "" })}>
+      <option value="">${opts.default ? `自动（${opts.default}）` : "自动（下一届）"}</option>
+      ${eds.map((e) => html`<option value=${e.year}>${edLabel(e)}</option>`)}</select>
+    ${edition && cur && cur.rounds.length > 0 && html`<select value=${deadline || ""} title="只看其中一轮的截稿" onChange=${(e) => onChange({ edition, deadline: e.target.value })}>
+      <option value="">整届（所有轮次）</option>
+      ${cur.rounds.map((r) => html`<option value=${r.key}>${roundLabel(r)}${r.past ? " · 已过" : ""}</option>`)}</select>`}
+  </span>`;
 }
 
 // ---------------- timeline chart (next N days) ----------------
@@ -88,14 +126,15 @@ export function TimelineChart({ events, days = 120, onPick }) {
           : e.type === "target" ? html`<path d=${`M${cx} ${cy - 8} L${cx + 8} ${cy} L${cx} ${cy + 8} L${cx - 8} ${cy} Z`} class=${"m-" + e.type} />`
           : html`<rect x=${cx - 6} y=${cy - 6} width="12" height="12" rx="3" class=${"m-" + e.type} />`;
         return html`<g class="pt" style=${{ animationDelay: i * 25 + "ms" }} onMouseEnter=${enter} onClick=${() => onPick?.(e)}>
-          <circle cx=${cx} cy=${cy} r="14" fill="transparent" /><g class="pt-mark">${shape}</g>
+          <circle cx=${cx} cy=${cy} r="14" fill="transparent" /><g class=${"pt-mark" + (e.muted ? " muted" : "")}>${shape}</g>
           ${labelled.has(e) && html`<text x=${Math.max(cx, L + (e.acronym || e.title).slice(0, 12).length * 3.4 + 6)} y=${cy - 13} text-anchor="middle" class="plabel">${(e.acronym || e.title).slice(0, 12)}</text>`}
         </g>`;
       })}
     </svg>
     ${tip && html`<div class="tip" style=${{ left: Math.max(0, Math.min(tip.x + 12, w - 230)) + "px", top: tip.y + 10 + "px" }}>
       <b>${tip.e.title}</b><div>${fmt(tip.e.at)} · <${Days} d=${daysTo(tip.e.at)} /></div>
-      ${tip.e.target && html`<div class="muted">${tip.e.target.title}</div>`}
+      ${tip.e.targets?.length > 0 && html`<div class="muted">${names(tip.e.targets)}</div>`}
+      ${tip.e.closed?.length > 0 && html`<div class="muted">${names(tip.e.closed)}：${tip.e.muted ? "已投出，不再提醒" : "已投出"}</div>`}
       ${tip.e.notes && html`<div class="muted">${tip.e.notes}</div>`}
     </div>`}
   </div>`;
@@ -104,15 +143,17 @@ export function TimelineChart({ events, days = 120, onPick }) {
 // ---------------- overview ----------------
 
 function Countdown({ c, onClick, i }) {
+  const sent = c.kind === "target" && SENT.includes(c.t.status);
   const d = c.ev ? daysTo(c.ev.at) : null;
-  const kicker = c.kind === "target" ? `投稿目标 · ${(c.t.venue || "").toUpperCase()}` : c.kind === "milestone" ? (c.ev.kind === "gate" ? "下一个 Gate" : "下一个里程碑") : "最近会议截稿";
+  const kicker = c.kind === "target" ? `投稿目标 · ${(c.t.venue || "").toUpperCase()}${c.t.edition ? " " + c.t.edition : ""}` : c.kind === "milestone" ? (c.ev.kind === "gate" ? "下一个 Gate" : "下一个里程碑") : "最近会议截稿";
   const title = c.kind === "target" ? c.t.title : c.ev.title;
   return html`<button class="cd click" style=${{ "--i": i }} onClick=${onClick}>
-    <${DaysRing} d=${d} color=${TYPE_COLOR[c.kind]} />
+    ${sent ? html`<${Ring} value=${1} max=${1} size=${64} stroke=${6} color=${C.aqua} title=${T_STATUS[c.t.status]}><b>✓</b><small>${T_STATUS[c.t.status]}</small></${Ring}>`
+      : html`<${DaysRing} d=${d} color=${TYPE_COLOR[c.kind]} />`}
     <div class="cd-body">
       <span class="cd-kicker"><${Mark} type=${c.kind} />${kicker}</span>
       <span class="cd-title" title=${title}>${title}</span>
-      <span class="cd-date">${c.ev ? `${c.kind === "target" ? c.ev.title.replace(/^\S+\s\d{4}\s/, "") + " · " : ""}${fmt(c.ev.at, c.kind !== "milestone")}` : "下一届截稿未公布"}</span>
+      <span class="cd-date">${sent ? noDeadline(c.t) : c.ev ? `${c.kind === "target" ? c.ev.title.replace(/^\S+\s\d{4}\s/, "") + " · " : ""}${fmt(c.ev.at, c.kind !== "milestone")}` : c.kind === "target" ? noDeadline(c.t) : "下一届截稿未公布"}</span>
     </div>
   </button>`;
 }
@@ -145,9 +186,9 @@ export function OverviewPage({ version, onOpenVenue, go }) {
   }, [version]);
   if (!o) return html`<${Skeleton} tiles=${5} rows=${2} />`;
   const up = o.events.filter((e) => e.days >= 0);
-  const cds = o.targets.map((t) => ({ kind: "target", t, ev: up.find((e) => e.type === "target" && e.target?.id === t.id) }));
+  const cds = o.targets.map((t) => ({ kind: "target", t, ev: evOf(up, t) }));
   if (o.next_milestone) cds.push({ kind: "milestone", ev: o.next_milestone });
-  const nv = up.find((e) => e.type === "venue");
+  const nv = up.find((e) => e.type === "venue" && !e.muted);  // not the deadlines of an edition whose paper is already sent
   if (nv) cds.push({ kind: "venue", ev: nv });
 
   const items = x.items || [], ideas = x.ideas || [], runs = x.runs || [];
@@ -227,7 +268,7 @@ export function OverviewPage({ version, onOpenVenue, go }) {
 
 function EvRow({ e, onOpenVenue, go }) {
   return html`<button class="ev" onClick=${() => e.venue ? onOpenVenue(e.venue) : go("plan")}>
-    <${Mark} type=${e.type} /><span class="ev-t">${e.title}${e.target ? html` <em>· ${e.target.title}</em>` : ""}</span>
+    <${Mark} type=${e.type} /><span class="ev-t">${e.title}${e.targets?.length ? html` <em>· ${names(e.targets)}</em>` : e.muted ? html` <em>· ${names(e.closed)} 已投出</em>` : ""}</span>
     <span class="ev-d">${fmt(e.at, e.type !== "milestone")}</span><${Days} d=${daysTo(e.at)} />
   </button>`;
 }
@@ -248,8 +289,10 @@ export function VenueSheet({ vkey, onClose, toast, onChanged, onAsk }) {
   const ed = v.editions[v.editions.length - 1];
   const toggle = async () => { await api(`/api/venues/${v.key}/watch`, { json: { on: !v.watched } }); setV({ ...v, watched: !v.watched }); onChanged?.(); };
   const saveTarget = async () => {
-    try { await api("/api/plan/targets", { json: { title: tgt.title, venue: v.key, line: tgt.line || null } }); toast("已设为投稿目标"); setTgt(null); onChanged?.(); }
-    catch (e) { toast(e.message); }
+    try {
+      await api("/api/plan/targets", { json: { title: tgt.title, venue: v.key, line: tgt.line || null, edition: tgt.edition || null, deadline: tgt.deadline || null } });
+      toast("已设为投稿目标"); setTgt(null); onChanged?.();
+    } catch (e) { toast(e.message); }
   };
   const links = [["官网", d?.homepage || ed?.link], ["CFP", d?.cfp_url], ["CORE", v.core_url], ["DBLP", v.dblp_url]].filter(([, u]) => httpUrl(u));
   const n = v.next, live = n && !n.past;
@@ -278,10 +321,11 @@ export function VenueSheet({ vkey, onClose, toast, onChanged, onAsk }) {
     <${CheckPanel} vkey=${v.key} v=${v} chk=${chk} reload=${reload} onAsk=${onAsk} onClose=${onClose} toast=${toast} onChanged=${onChanged} />
     <div class="row-wrap">
       <button class=${"btn " + (v.watched ? "" : "primary")} onClick=${toggle}><${Icon} name="star" sm /> ${v.watched ? "已关注" : "关注（上时间线）"}</button>
-      <button class="btn" onClick=${() => setTgt(tgt ? null : { title: "", line: "" })}>设为投稿目标</button>
+      <button class="btn" onClick=${() => setTgt(tgt ? null : { title: "", line: "", edition: "", deadline: "" })}>设为投稿目标</button>
     </div>
     <${Collapse} open=${!!tgt}>${tgt && html`<div class="inline-form"><input placeholder="论文名，如 Paper 1 · 题目" value=${tgt.title} onInput=${(e) => setTgt({ ...tgt, title: e.target.value })} />
       <input placeholder="研究线（可选）" value=${tgt.line} onInput=${(e) => setTgt({ ...tgt, line: e.target.value })} />
+      <${EditionPicker} venue=${v.key} edition=${tgt.edition} deadline=${tgt.deadline} onChange=${(p) => setTgt({ ...tgt, ...p })} />
       <button class="btn primary" disabled=${!tgt.title.trim()} onClick=${saveTarget}>保存</button></div>`}</${Collapse}>
 
     ${rates.length > 1 && html`<h3>历年录用率</h3>
@@ -316,12 +360,12 @@ function VenueRow({ v, onOpen, onStar }) {
   </div>`;
 }
 
-function VenueCard({ v, target, onOpen, onStar, i }) {
-  const n = v.next, live = n && !n.past;
+function VenueCard({ v, targets, onOpen, onStar, i }) {
+  const n = v.next, live = n && !n.past, target = targets.length > 0;
   const rate = v.accept_rate;
   return html`<div class=${"vcard click" + (live ? "" : " past")} style=${{ "--i": i }} role="button" tabindex="0"
     onClick=${() => onOpen(v.key)} onKeyDown=${(e) => e.key === "Enter" && onOpen(v.key)}>
-    <div class="vc-top"><b>${v.acronym}</b>${target && html`<span class="vc-tgt" title=${target.title}><${Mark} type="target" />目标</span>`}<span class="grow" />
+    <div class="vc-top"><b>${v.acronym}</b>${target && html`<span class="vc-tgt" title=${targets.map((t) => `${t.title}${t.edition ? "（" + t.edition + "）" : ""}`).join("\n")}><${Mark} type="target" />目标${targets.length > 1 ? " ×" + targets.length : targets[0].edition ? " " + targets[0].edition : ""}</span>`}<span class="grow" />
       <button class=${"star" + (v.watched ? " on" : "")} title="取消关注" onClick=${(e) => { e.stopPropagation(); onStar(v); }}><${Icon} name="star" sm /></button></div>
     <div class="vc-name" title=${v.title}>${v.title}</div>
     <div class="vc-mid">
@@ -352,7 +396,8 @@ export function TimelinePage({ version, tab: initialTab, onOpenVenue, toast, onC
     [tab, q, core, ccf, version]);
   const star = async (v) => { await api(`/api/venues/${v.key}/watch`, { json: { on: !v.watched } }); toast(v.watched ? `已取消关注 ${v.acronym}` : `已关注 ${v.acronym}`); loadVenues(); onChanged?.(); };
   const refresh = async () => { toast("正在更新会议数据…"); try { await api("/api/venues/refresh", { method: "POST" }); toast("会议数据已更新"); loadVenues(); } catch (e) { toast(e.message); } };
-  const targetOf = Object.fromEntries((plan?.targets || []).flatMap((t) => [[t.venue, t]]));
+  const targetsOf = {};  // venue -> the papers still being prepared for it (a sent paper no longer marks the venue)
+  for (const t of plan?.targets || []) if (!SENT.includes(t.status)) (targetsOf[t.venue] ||= []).push(t);
   const live = (rows || []).filter((v) => v.next && !v.next.past).length;
 
   return html`<div class="page"><div class="page-inner wide">
@@ -374,7 +419,7 @@ export function TimelinePage({ version, tab: initialTab, onOpenVenue, toast, onC
     ${tab === "watched" && rows && (rows.length === 0
       ? html`<div class="card"><${Empty} icon="star" title="还没有关注的会议" hint="去「全部会议」给常投的会议点星标，它们的截稿就会出现在这里和总览的时间轴上。">
           <button class="btn primary" onClick=${() => setTab("all")}>浏览全部会议</button></${Empty}></div>`
-      : html`<div class="vgrid stagger">${rows.map((v, i) => html`<${VenueCard} key=${v.key} v=${v} i=${Math.min(i, 12)} target=${targetOf[v.key]} onOpen=${onOpenVenue} onStar=${star} />`)}</div>`)}
+      : html`<div class="vgrid stagger">${rows.map((v, i) => html`<${VenueCard} key=${v.key} v=${v} i=${Math.min(i, 12)} targets=${targetsOf[v.key] || []} onOpen=${onOpenVenue} onStar=${star} />`)}</div>`)}
     ${tab === "all" && rows && html`<div class="card list-card">
       ${rows.length === 0 && html`<${Empty} compact icon="search" title="没有匹配的会议" hint="换个关键词，或放宽 CORE / CCF 筛选" />`}
       ${rows.map((v) => html`<${VenueRow} v=${v} onOpen=${onOpenVenue} onStar=${star} />`)}
@@ -384,9 +429,39 @@ export function TimelinePage({ version, tab: initialTab, onOpenVenue, toast, onC
   </div></div>`;
 }
 
+function TargetCard({ x, ev, call, onOpenVenue }) {
+  const [editing, setEditing] = useState(false);
+  const step = T_STEPS.indexOf(x.status), sent = SENT.includes(x.status);
+  const patch = (json) => call(() => api(`/api/plan/targets/${x.id}`, { method: "PATCH", json }));
+  return html`<div class=${"tcard" + (sent ? " sent" : "")}>
+    ${sent ? html`<${Ring} value=${1} max=${1} size=${58} stroke=${5} color=${C.aqua} title=${T_STATUS[x.status]}><b>✓</b><small>${T_STATUS[x.status]}</small></${Ring}>`
+      : html`<${DaysRing} d=${ev ? daysTo(ev.at) : null} max=${180} size=${58} stroke=${5} color=${C.orange} />`}
+    <div class="tc-body">
+      <div class="tc-top"><b>${x.title}</b>
+        <button class="abtn" title="删除" onClick=${() => confirm("删除这个目标？") && call(() => api(`/api/plan/targets/${x.id}`, { method: "DELETE" }))}><${Icon} name="x" sm /></button></div>
+      <div class="row-wrap tight"><button class="vlink" onClick=${() => onOpenVenue(x.venue)}>${x.venue.toUpperCase()}</button>
+        <button class=${"ed-chip" + (x.edition_from === "set" ? "" : " guess")} title=${x.edition_from === "set" ? "投稿的届次，点击修改" : "按日历推断的届次（还没保存），点击确认或修改"}
+          onClick=${() => setEditing(!editing)}>${x.edition ? x.edition : "届次未定"}${x.deadline ? html` · ${md(x.deadline + "T12:00:00")} 这一轮` : ""}<${Icon} name="down" sm /></button>
+        ${(x.alternatives || []).map((a) => html`<button class="vlink alt" onClick=${() => onOpenVenue(a)}>${a.toUpperCase()}</button>`)}
+        ${x.line && html`<span class="tag">${x.line}</span>`}
+        <span class="muted small">${ev ? ev.title.replace(/^\S+\s\d{4}\s/, "") + " " + fmt(ev.at) : noDeadline(x)}</span></div>
+      <${Collapse} open=${editing}>${editing && html`<div class="ed-edit">
+        <${EditionPicker} venue=${x.venue} edition=${x.edition_from === "set" ? x.edition : ""} deadline=${x.deadline} onChange=${(p) => patch(p).then(() => !p.edition && setEditing(false))} />
+        <span class="muted small">${x.edition_from === "set" ? "选「自动」让它跟随最近一届" : "现在是按日历推断的，选一个就保存下来"}</span></div>`}</${Collapse}>
+      <div class="stepper">${T_STEPS.map((s, k) => html`<button class=${"step" + (k < step ? " done" : k === step ? " on" : "")} title=${"设为" + T_STATUS[s]}
+          onClick=${() => patch({ status: s })}><i />${T_STATUS[s]}</button>`)}
+        ${step < 0 && html`<span class="tag warn">${T_STATUS[x.status] || x.status}</span>`}
+        <select value=${x.status} title="全部状态" onChange=${(e) => patch({ status: e.target.value })}>
+          ${Object.entries(T_STATUS).map(([k, l]) => html`<option value=${k}>${l}</option>`)}</select></div>
+      ${sent && html`<div class="muted small">${x.edition ? x.edition + " 届" : "这一届"}其余截稿不再为这篇论文提醒；其他论文和之后的届次照常。</div>`}
+      ${x.notes && html`<div class="muted small clamp2">${x.notes}</div>`}
+    </div>
+  </div>`;
+}
+
 function PlanEditor({ plan, reload, toast, onOpenVenue }) {
   const [m, setM] = useState({ title: "", date: "", line: "", kind: "milestone" });
-  const [t, setT] = useState({ title: "", venue: "", line: "" });
+  const [t, setT] = useState({ title: "", venue: "", line: "", edition: "", deadline: "" });
   const [adding, setAdding] = useState({ t: false, m: false });
   const call = async (fn) => { try { await fn(); reload(); } catch (e) { toast(e.message); } };
   const ms = [...plan.milestones].sort((a, b) => a.date.localeCompare(b.date));
@@ -394,34 +469,19 @@ function PlanEditor({ plan, reload, toast, onOpenVenue }) {
   const firstFuture = ms.findIndex((x) => x.date >= today);
   const done = ms.filter((x) => x.status === "done").length;
   const gates = ms.filter((x) => x.kind === "gate");
-  const nextOf = (x) => plan.events.find((e) => e.type === "target" && e.target?.id === x.id && e.days >= 0);
   return html`<div class="two-col">
     <section class="card">
       <div class="card-head"><h2>投稿目标</h2><button class="tb-btn" onClick=${() => setAdding({ ...adding, t: !adding.t })}><${Icon} name="plus" sm />添加</button></div>
       ${plan.targets.length === 0 && html`<${Empty} compact icon="star" title="还没有投稿目标" hint="对右侧助手说「把 X 论文的目标设为 SIGIR 2027」，或点添加" />`}
-      ${plan.targets.map((x) => { const ev = nextOf(x), step = T_STEPS.indexOf(x.status);
-        return html`<div class="tcard">
-          <${DaysRing} d=${ev ? daysTo(ev.at) : null} max=${180} size=${58} stroke=${5} color=${C.orange} />
-          <div class="tc-body">
-            <div class="tc-top"><b>${x.title}</b>
-              <button class="abtn" title="删除" onClick=${() => confirm("删除这个目标？") && call(() => api(`/api/plan/targets/${x.id}`, { method: "DELETE" }))}><${Icon} name="x" sm /></button></div>
-            <div class="row-wrap tight"><button class="vlink" onClick=${() => onOpenVenue(x.venue)}>${x.venue.toUpperCase()}</button>
-              ${(x.alternatives || []).map((a) => html`<button class="vlink alt" onClick=${() => onOpenVenue(a)}>${a.toUpperCase()}</button>`)}
-              ${x.line && html`<span class="tag">${x.line}</span>`}
-              <span class="muted small">${ev ? ev.title.replace(/^\S+\s\d{4}\s/, "") + " " + fmt(ev.at) : "下一届截稿未公布"}</span></div>
-            <div class="stepper">${T_STEPS.map((s, k) => html`<button class=${"step" + (k < step ? " done" : k === step ? " on" : "")} title=${"设为" + T_STATUS[s]}
-                onClick=${() => call(() => api(`/api/plan/targets/${x.id}`, { method: "PATCH", json: { status: s } }))}><i />${T_STATUS[s]}</button>`)}
-              ${step < 0 && html`<span class="tag warn">${T_STATUS[x.status] || x.status}</span>`}
-              <select value=${x.status} title="全部状态" onChange=${(e) => call(() => api(`/api/plan/targets/${x.id}`, { method: "PATCH", json: { status: e.target.value } }))}>
-                ${Object.entries(T_STATUS).map(([k, l]) => html`<option value=${k}>${l}</option>`)}</select></div>
-            ${x.notes && html`<div class="muted small clamp2">${x.notes}</div>`}
-          </div>
-        </div>`; })}
+      ${plan.targets.map((x) => html`<${TargetCard} key=${x.id} x=${x} ev=${evOf(plan.events, x)} call=${call} onOpenVenue=${onOpenVenue} />`)}
       <${Collapse} open=${adding.t}><div class="inline-form">
         <input placeholder="论文" value=${t.title} onInput=${(e) => setT({ ...t, title: e.target.value })} />
-        <input placeholder="会议，如 SIGIR" value=${t.venue} onInput=${(e) => setT({ ...t, venue: e.target.value })} style="max-width:130px" />
+        <input placeholder="会议，如 SIGIR" value=${t.venue} onInput=${(e) => setT({ ...t, venue: e.target.value, edition: "", deadline: "" })} style="max-width:130px" />
         <input placeholder="研究线" value=${t.line} onInput=${(e) => setT({ ...t, line: e.target.value })} style="max-width:120px" />
-        <button class="btn primary" disabled=${!t.title.trim() || !t.venue.trim()} onClick=${() => call(async () => { await api("/api/plan/targets", { json: t }); setT({ title: "", venue: "", line: "" }); })}>添加</button>
+        <${EditionPicker} venue=${t.venue} edition=${t.edition} deadline=${t.deadline} onChange=${(p) => setT({ ...t, ...p })} />
+        <button class="btn primary" disabled=${!t.title.trim() || !t.venue.trim()} onClick=${() => call(async () => {
+          await api("/api/plan/targets", { json: { ...t, edition: t.edition || null, deadline: t.deadline || null } });
+          setT({ title: "", venue: "", line: "", edition: "", deadline: "" }); })}>添加</button>
       </div></${Collapse}>
     </section>
     <section class="card">

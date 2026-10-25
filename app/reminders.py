@@ -9,6 +9,9 @@ When a reminder comes due (due_times): at the daily reminder time (default 09:00
 day-of one also at least DAY_OF_MARGIN before the deadline. One that would land in quiet hours
 waits until they end, unless the deadline passes first: then it moves to just before they start.
 
+Targets aim at an edition (plan.timeline): a deadline of that edition reminds as the paper's, and once
+the paper is submitted or accepted the rest of that edition is quiet for it (events()).
+
 Never twice for the same event and lead time:
 - Settings and the log of sent reminders live in the vault next to plan.yaml (reminders.yaml, a
   sync-safe Store), so both Macs see the same ones. Only the designated Mac sends, and the shared
@@ -52,7 +55,6 @@ DEFAULTS: dict[str, Any] = {
     "time": "09:00",  # when a day's reminders come due
     "device": "",  # machine_id() of the one Mac that sends; this Mac when reminders are turned on
 }
-OPEN_TARGET = ("planning", "writing")  # a submitted / accepted target no longer needs its deadlines
 DAY_OF_MARGIN = timedelta(hours=3)
 CHECK_EVERY = timedelta(hours=1)  # the LaunchAgent's interval (remind_agent.py)
 MAX_LEAD = 90
@@ -151,12 +153,13 @@ def _local(dt: datetime, tz: tzinfo | None) -> datetime:
 
 
 def events() -> list[dict[str, Any]]:
-    """The timeline's upcoming events, normalised for reminders (key, type, title, at, open, …)."""
+    """The timeline's upcoming events, normalised for reminders (key, type, title, at, open, …).
+
+    A venue deadline is a target's when it falls in the edition the target aims at (and its round): the
+    reminder names those papers. A submitted or accepted paper quiets the rest of its edition for itself
+    only: a deadline of that edition with no paper still being prepared is left out, while another
+    paper's target, a later edition and a venue nobody has sent to keep reminding."""
     tl = plan.timeline(days_back=1, days_ahead=MAX_LEAD + 400)
-    open_targets: dict[str, list[dict[str, Any]]] = {}
-    for t in tl["targets"]:  # every target, not just the one the timeline shows per venue
-        if t.get("status", "planning") in OPEN_TARGET:
-            open_targets.setdefault(t["venue"], []).append(t)
     dates = {m["id"]: m.get("date") for m in tl["milestones"]}
     out: list[dict[str, Any]] = []
     for e in tl["events"]:
@@ -168,9 +171,9 @@ def events() -> list[dict[str, Any]]:
                         "at": at, "kind": e.get("kind") or "milestone", "line": e.get("line"),
                         "open": {"view": "plan", "milestone": e["id"]}})
         else:
-            # A submitted or accepted target does not silence the venue (next year's edition, another
-            # paper aimed there): its deadlines stay reminders for a watched venue.
-            tgts = open_targets.get(e["venue"], [])
+            tgts = e.get("targets") or []
+            if e.get("muted") and not tgts:
+                continue
             stage = e.get("stage") or ("abstract" if "摘要" in e["title"] else "deadline")
             out.append({"key": f"v:{e['venue']}:{stage}:{at.astimezone(timezone.utc).date()}",
                         "type": "target" if tgts else "venue", "title": e["title"], "at": at, "venue": e["venue"],
