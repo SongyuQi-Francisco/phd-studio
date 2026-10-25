@@ -1,16 +1,18 @@
-// Research map page (研究地图): project switcher + registered views, toolbar and layer toggles, the
-// assistant's proposals, the KPI row, the map, the node detail panel, live refresh, and the extension
-// loader. Extensions plug in through /rmap/registry.js; every hook gets the same `ctx`
-// (see docs/research-map.md).
+// Research map page: project switcher + registered views, toolbar and layer toggles, the assistant's
+// proposals, the KPI row, the map, the node detail panel, live refresh, and the extension loader.
+// Extensions plug in through /rmap/registry.js; every hook gets the same `ctx` (see docs/research-map.md).
+// i18n: done
+// i18n-keys: rmap.status.{todo,active,verified,blocked,refuted,dropped}
 import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { html, Icon, api, prefs } from "/lib.js";
+import { t } from "/i18n.js";
 import { Empty } from "/ui.js";
 import { rmap, loadExtensions } from "/rmap/registry.js";
-import { t } from "/rmap/strings.js";
+import { label } from "/rmap/strings.js";
 import { MapView } from "/rmap/map.js";
 import { Detail } from "/rmap/detail.js";
 import { Proposals } from "/rmap/proposals.js";
-import { useAutoFocus } from "/rmap/util.js";
+import { useAutoFocus } from "/rmap/dom.js";
 import "/rmap/kpis.js";
 
 const POLL_MS = 2000;
@@ -68,9 +70,7 @@ function NewProject({ lines, onCreated, onCancel, toast }) {
 }
 
 // Research lines without a map yet: let the assistant draft one, or draft it straight from the note.
-export const seedPrompt = (l) => `用研究地图工具为研究线「${l.line || l.name}」起草第一版地图：先 map_seed_draft("${l.line || l.name}") 拿到骨架，`
-  + `再读研究线笔记（${l.path}）和相关的 Evidence 笔记，把标题改短、按最新状态改节点状态、补上已做的实验和结果、挂上证据，`
-  + `然后用 map_propose(new_project=…) 提交给我确认。`;
+export const seedPrompt = (l) => t("rmap.seed.prompt", { line: l.line || l.name, path: l.path });
 
 function SeedLines({ toast, onAsk, onSeeded, compact }) {
   const [lines, setLines] = useState(null);
@@ -121,6 +121,8 @@ export function RmapPage({ version, toast, lines = [], open, onAsk, onOpenNote, 
   const [side, setSide] = useState("right"); // where the floating detail panel goes in a narrow page: away from the node
   const [ready, setReady] = useState(false); // extensions loaded: they hear the first "load" too
   const lastSeq = useRef({}); // slug -> this Mac's ingest sequence already handed to "change" subscribers
+  const queue = useRef(Promise.resolve()); // refreshes, one after another
+  const gen = useRef(0); // the latest map request; older answers are dropped
   const [waiting, setWaiting] = useState({}); // slug -> proposals waiting for a confirm, for the project switcher
 
   useEffect(() => {
@@ -141,16 +143,21 @@ export function RmapPage({ version, toast, lines = [], open, onAsk, onOpenNote, 
   useEffect(() => { setCollapsed(new Set(slug ? prefs.get("rmap:collapsed:" + slug, []) : [])); setFocus(null); }, [slug]);
   useEffect(() => { if (slug) prefs.set("rmap:collapsed:" + slug, [...collapsed]); }, [collapsed]);
 
-  const loadMap = useCallback(async (s) => {
+  const loadMap = useCallback(async (s, current = () => true) => {
     try {
       const m = await api(base(s));
+      if (!current()) return null; // a newer request (or another project) took over meanwhile
       setMap((old) => (old?.slug === s && old.stamp === m.stamp ? old : m)); setError("");
       if (lastSeq.current[s] == null) lastSeq.current[s] = m.seq;
       rmap.emit("load", { slug: s, map: m });
       return m;
     } catch (e) { setError(e.message); return null; }
   }, []);
-  useEffect(() => { setMap(null); setSelected(null); if (slug && ready) loadMap(slug); }, [slug, ready]);
+  useEffect(() => {
+    setMap(null); setSelected(null);
+    const mine = ++gen.current; // a refresh still queued for the last project is dropped
+    if (slug && ready) loadMap(slug, () => mine === gen.current);
+  }, [slug, ready]);
   useEffect(() => { if (focus && map && !map.nodes.some((n) => n.id === focus)) setFocus(null); }, [map]);
   useEffect(() => {
     api("/api/rmap/proposals").then((r) => setWaiting(r.proposals.reduce((c, p) => (p.slug ? { ...c, [p.slug]: (c[p.slug] || 0) + 1 } : c), {})))
@@ -159,19 +166,27 @@ export function RmapPage({ version, toast, lines = [], open, onAsk, onOpenNote, 
 
   // Live refresh: the files changed (an edit here, the CLI, or the other Mac through Syncthing). "change" gets
   // every event this Mac has seen since, by its ingest sequence: late-synced ones from an offline Mac too.
-  const refresh = useCallback(async () => {
-    if (!slug) return;
-    const m = await loadMap(slug);
-    if (!m) return;
-    const after = lastSeq.current[slug] ?? m.seq;
-    let events = [], page = { next: null };
-    do {
-      page = await api(`${base(slug)}/events?after=${after}&limit=1000${page.next ? "&before=" + encodeURIComponent(page.next) : ""}`)
-        .catch(() => ({ events: [], next: null, seq: after }));
-      events = events.concat(page.events);
-      lastSeq.current[slug] = Math.max(lastSeq.current[slug] ?? 0, page.seq ?? after);
-    } while (page.next);
-    if (events.length) rmap.emit("change", { slug, events });
+  // Refreshes run one at a time (an edit's own refresh and the poll would otherwise race): each one waits for
+  // the last, a map that arrives for a superseded request is dropped, and an event is handed on once (by seq).
+  const refresh = useCallback(() => {
+    if (!slug) return Promise.resolve();
+    const s = slug, mine = ++gen.current;
+    const run = async () => {
+      if (mine !== gen.current) return; // a newer refresh is queued: it will read everything
+      const m = await loadMap(s, () => mine === gen.current);
+      if (!m || mine !== gen.current) return;
+      const after = lastSeq.current[s] ?? m.seq;
+      let events = [], page = { next: null };
+      do {
+        page = await api(`${base(s)}/events?after=${after}&limit=1000${page.next ? "&before=" + encodeURIComponent(page.next) : ""}`)
+          .catch(() => ({ events: [], next: null, seq: after }));
+        events = events.concat(page.events.filter((e) => e.seq > after));
+      } while (page.next);
+      lastSeq.current[s] = Math.max(after, page.seq ?? after, ...events.map((e) => e.seq));
+      if (events.length) rmap.emit("change", { slug: s, events });
+    };
+    queue.current = queue.current.then(run, run);
+    return queue.current;
   }, [slug]);
   useStamp(slug && `${base(slug)}/stamp`, map?.stamp, refresh);
 
@@ -186,7 +201,7 @@ export function RmapPage({ version, toast, lines = [], open, onAsk, onOpenNote, 
   const fold = useCallback((id) => setCollapsed((c) => { const x = new Set(c); if (x.has(id)) x.delete(id); else x.add(id); return x; }), []);
 
   const ctx = useMemo(() => meta && {
-    slug, map, meta, projects: projects || [], selected, select, layers, t, toast, onAsk, onOpenNote, onOpenPaper, version,
+    slug, map, meta, projects: projects || [], selected, select, layers, t: label, toast, onAsk, onOpenNote, onOpenPaper, version,
     view: { focus, setFocus, collapsed, setCollapsed, fold, pending, setPending, setSide },
     api: { apply, refresh, base: slug ? base(slug) : null, call: api },
   }, [slug, map, meta, projects, selected, layers, apply, refresh, focus, collapsed, pending, version]);
@@ -215,15 +230,15 @@ export function RmapPage({ version, toast, lines = [], open, onAsk, onOpenNote, 
           ${map.project.note && html`<button class="mp-link" onClick=${() => onOpenNote?.(map.project.note)}><${Icon} name="note" sm />${t("rmap.project.note")}</button>`}</div>`}</div>
       <div class="mp-tools">
         <div class="seg">
-          ${views.map((v) => html`<button class=${active === "view:" + v.id ? "on" : ""} onClick=${() => pick("view:" + v.id)}>${t(v.label)}</button>`)}
+          ${views.map((v) => html`<button class=${active === "view:" + v.id ? "on" : ""} onClick=${() => pick("view:" + v.id)}>${label(v.label)}</button>`)}
           ${projects.map((p) => html`<button class=${!view && slug === p.slug ? "on" : ""} onClick=${() => pick(p.slug)}
             title=${waiting[p.slug] ? t("rmap.prop.waiting", { n: waiting[p.slug] }) : p.warnings?.some((w) => w.kind === "same_title") ? t("rmap.same.title") : null}>${p.title}${waiting[p.slug] > 0 && html`<i class="mp-wait">${waiting[p.slug]}</i>`}</button>`)}
         </div>
         <button class="btn ghost sm" title=${t("rmap.project.new")} onClick=${() => setAdding(!adding)}><${Icon} name="plus" sm /></button>
         ${ctx && layerList.map((l) => html`<button class=${"mp-layer" + (layers[l.id] ?? l.default ? " on" : "")} style=${l.accent ? { "--acc": l.accent } : null}
-            onClick=${() => setLayers({ ...layers, [l.id]: !(layers[l.id] ?? l.default) })}>${t(l.label)}</button>`)}
+            onClick=${() => setLayers({ ...layers, [l.id]: !(layers[l.id] ?? l.default) })}>${label(l.label)}</button>`)}
         ${ctx && tools.map((tl) => tl.render ? html`<span key=${tl.id}>${tl.render(ctx)}</span>`
-          : html`<button class="btn ghost sm" key=${tl.id} title=${t(tl.label)} onClick=${() => tl.run(ctx)}>${tl.icon && html`<${Icon} name=${tl.icon} sm />`}${!tl.icon && t(tl.label)}</button>`)}
+          : html`<button class="btn ghost sm" key=${tl.id} title=${label(tl.label)} onClick=${() => tl.run(ctx)}>${tl.icon && html`<${Icon} name=${tl.icon} sm />`}${!tl.icon && label(tl.label)}</button>`)}
       </div>
     </div>
     ${adding && html`<${NewProject} lines=${lines} onCreated=${created} onCancel=${() => setAdding(false)} toast=${toast} />`}

@@ -5,7 +5,7 @@ import { html, Icon, api } from "/lib.js";
 import { C, Ring, Progress } from "/charts.js";
 import { daysTo, Skeleton, Empty, Collapse } from "/ui.js";
 import { ChatPanel } from "/chat.js";
-import { t as rmapT } from "/rmap/strings.js";
+import { label as rmapT } from "/rmap/strings.js";
 
 const KILL = { clear: ["未触发", "ok"], partial: ["部分触发", "warn"], triggered: ["已触发", "bad"] };
 const CONF = { high: 4, "medium-high": 3, medium: 2, "medium-low": 1, low: 1 };

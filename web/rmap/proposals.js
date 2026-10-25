@@ -1,8 +1,9 @@
 // The assistant's proposals for the map (a one-sentence update split into node changes + evidence + a log
-// line, or a first map drafted from a research-line note). Nothing is written until 确认写入.
+// line, or a first map drafted from a research-line note). Nothing is written until the user confirms.
+// i18n: done
 import { useEffect, useState } from "preact/hooks";
 import { html, Icon, api } from "/lib.js";
-import { t } from "/rmap/strings.js";
+import { t } from "/i18n.js";
 import { describe, titles, when } from "/rmap/describe.js";
 
 const SHOW = 10;

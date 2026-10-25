@@ -1,12 +1,20 @@
 // The single-project map: SVG on a grid canvas, laid out by layout.js. Click selects, double-click
 // edits the title, right-click opens the menu (status, add child, connect, collapse, focus, pin,
-// delete), dragging a node pins it. Layers registered by extensions draw on top (docs/research-map.md).
+// delete), dragging a node pins it. Keyboard: nodes are buttons (Tab reaches the selected one), arrows
+// move the selection, Enter renames, A (or ⌘↵) adds a child, F focuses, Esc leaves focus or link mode.
+// Layers registered by extensions draw on top (docs/research-map.md).
+// i18n: done
+// i18n-keys: rmap.status.{todo,active,verified,blocked,refuted,dropped}
+// i18n-keys: rmap.type.{question,hypothesis,subline,experiment,result,decision,kill,open}
+// i18n-keys: rmap.new.{question,hypothesis,subline,experiment,result,decision,kill,open}
+// i18n-keys: rmap.col.{question,hypothesis,subline,experiment,result}
+// i18n-keys: rmap.edge.{refines,depends,alternative,conflicts}
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { html, Icon, prefs, composing } from "/lib.js";
+import { t } from "/i18n.js";
 import { rmap } from "/rmap/registry.js";
-import { t } from "/rmap/strings.js";
 import { layoutMap, edgePath, NODE } from "/rmap/layout.js";
-import { useAutoFocus } from "/rmap/util.js";
+import { useAutoFocus } from "/rmap/dom.js";
 
 export const NEXT_TYPES = {
   question: ["hypothesis", "open"], hypothesis: ["subline", "experiment", "kill"], subline: ["experiment", "kill"],
@@ -30,13 +38,14 @@ export const columnLabel = (type) => (["question", "hypothesis", "subline", "exp
 const ownColumn = (meta, type) => meta.node_types.find((x) => x.key === type)?.col != null;
 const activeLayers = (ctx) => rmap.list("layer").filter((l) => ctx.layers[l.id] ?? l.default);
 
-function Node({ n, box, ctx, clip, selected, connecting, hidden, hasKids, collapsed, onDown, onMenu, onDbl, onFold, layers }) {
+function Node({ n, box, ctx, clip, selected, tabbable, connecting, hidden, hasKids, collapsed, onDown, onMenu, onDbl, onFold, onFocus, layers }) {
   const st = n.status || "todo";
   const extra = layers.map((l) => l.nodeClass?.(n, ctx)).filter(Boolean).join(" ");
   const sub = (ownColumn(ctx.meta, n.type) ? "" : t("rmap.type." + n.type) + " · ") + t("rmap.status." + st);
   return html`<g class=${`mp-node st-${st} ty-${n.type}${selected ? " sel" : ""}${connecting ? " target" : ""}${box.pinned ? " pinned" : ""}${hidden ? " folded" : ""} ${extra}`}
-      transform=${`translate(${box.x} ${box.y})`} data-id=${n.id}
-      onMouseDown=${onDown} onContextMenu=${onMenu} onDblClick=${onDbl}>
+      transform=${`translate(${box.x} ${box.y})`} data-id=${n.id} role="button" tabindex=${tabbable ? 0 : -1} aria-pressed=${selected ? "true" : "false"}
+      aria-label=${t("rmap.node.label", { type: t("rmap.type." + n.type), title: n.title, status: t("rmap.status." + st) })}
+      onMouseDown=${onDown} onContextMenu=${onMenu} onDblClick=${onDbl} onFocus=${onFocus}>
     <title>${n.title}</title>
     <rect class="mp-n-bg" width=${box.w} height=${box.h} rx="7" />
     ${st !== "todo" && html`<rect class="mp-n-bar" width="3" height=${box.h} clip-path=${`url(#${clip})`} />`}
@@ -115,6 +124,7 @@ export function MapView({ ctx }) {
   const [connect, setConnect] = useState(null); // {from, kind}
   const [drag, setDrag] = useState(null); // {id, x, y}
   const editRef = useAutoFocus(editing && editing.kind + editing.id, { select: true });
+  const cancelled = useRef(false); // Esc: WebKit may still fire blur as the input goes, which must not save
   const wrap = useRef();
   const svg = useRef();
   const { pending, setPending } = view; // node id to edit once it shows up after an add
@@ -128,7 +138,11 @@ export function MapView({ ctx }) {
   const byId = useMemo(() => new Map(map.nodes.map((n) => [n.id, n])), [map]);
 
   useEffect(() => {
-    if (pending && layout.boxes[pending]) { setEditing({ id: pending, kind: "node", value: byId.get(pending).title }); placePanel(pending); ctx.select(pending); setPending(null); }
+    if (pending && layout.boxes[pending]) {
+      cancelled.current = false;
+      setEditing({ id: pending, kind: "node", value: byId.get(pending).title });
+      placePanel(pending); ctx.select(pending); setPending(null);
+    }
   }, [layout, pending]);
 
   // keep the floating detail panel (narrow page) off the selected node: it opens on the other half
@@ -155,7 +169,7 @@ export function MapView({ ctx }) {
 
   const actions = {
     status: (n, s) => run([{ op: "node.update", id: n.id, set: { status: s } }]),
-    edit: (n) => setEditing({ id: n.id, kind: "node", value: n.title }),
+    edit: (n) => { cancelled.current = false; setEditing({ id: n.id, kind: "node", value: n.title }); },
     addChild: async (n, type) => {
       if (collapsed.has(n.id)) view.fold(n.id);
       const r = await run([{ op: "node.add", ref: "$n", parent: n.id, set: { type, title: t("rmap.new." + type) } }]);
@@ -177,7 +191,7 @@ export function MapView({ ctx }) {
     unpin: (n) => run([{ op: "node.update", id: n.id, set: { pin: null } }]),
     remove: (n) => { if (ctx.selected === n.id) ctx.select(null); run([{ op: "node.delete", id: n.id }]); },
     edgeKind: (e, kind) => run([{ op: "edge.update", id: e.id, set: { kind } }]),
-    edgeLabel: (e) => setEditing({ id: e.id, kind: "edge", value: e.label || "" }),
+    edgeLabel: (e) => { cancelled.current = false; setEditing({ id: e.id, kind: "edge", value: e.label || "" }); },
     edgeDelete: (e) => run([{ op: "edge.delete", id: e.id }]),
   };
 
@@ -218,7 +232,7 @@ export function MapView({ ctx }) {
   const saveEdit = async () => {
     const ed = editing;
     setEditing(null);
-    if (!ed) return;
+    if (!ed || cancelled.current) return;
     const v = ed.value.trim();
     if (ed.kind === "node") {
       const n = byId.get(ed.id);
@@ -231,18 +245,43 @@ export function MapView({ ctx }) {
   const editBox = editing && (editing.kind === "node" ? layout.boxes[editing.id]
     : (() => { const e = layout.edges.find((x) => x.id === editing.id); return e && { x: e.mid.x - 60, y: e.mid.y - 12, w: 120, h: 24 }; })());
 
+  // keyboard: only on the canvas itself or a node (not the zoom buttons, the menu or an input); Tab moves on
+  const focusNode = (id) => setTimeout(() => wrap.current?.querySelector(`.mp-node[data-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: false }));
+  const step = (from, key) => {
+    const ids = Object.keys(layout.boxes);
+    if (!from) return ids.sort((a, b) => layout.boxes[a].x - layout.boxes[b].x || layout.boxes[a].y - layout.boxes[b].y)[0];
+    const a = layout.boxes[from];
+    const [axis, sign] = { ArrowRight: ["x", 1], ArrowLeft: ["x", -1], ArrowDown: ["y", 1], ArrowUp: ["y", -1] }[key];
+    let best = null, score = Infinity;
+    for (const id of ids) {
+      const b = layout.boxes[id];
+      const d = (b[axis] - a[axis]) * sign, side = Math.abs(axis === "x" ? b.y - a.y : b.x - a.x);
+      if (id === from || d < (axis === "x" ? a.w / 2 : a.h / 2)) continue;
+      if (d + 2 * side < score) { score = d + 2 * side; best = id; }
+    }
+    return best;
+  };
   const keys = (e) => {
-    if (editing || e.target.tagName === "INPUT") return;
+    if (editing || !(e.target === wrap.current || e.target.closest?.(".mp-node"))) return;
     const n = ctx.selected && byId.get(ctx.selected);
+    const plain = !e.metaKey && !e.ctrlKey && !e.altKey;
     if (e.key === "Escape") { setConnect(null); setMenu(null); if (!connect && focus) setFocus(null); }
-    else if (e.key === "Enter" && n) { e.preventDefault(); actions.edit(n); }
-    else if (e.key.toLowerCase() === "f" && n && !e.metaKey && !e.ctrlKey) actions.focus(n);
-    else if (e.key === "Tab" && n && !e.metaKey) { e.preventDefault(); actions.addChild(n, NEXT_TYPES[n.type][0] || n.type); }
+    else if (e.key.startsWith("Arrow") && plain) {
+      e.preventDefault();
+      const id = step(n?.id, e.key);
+      if (id) { placePanel(id); ctx.select(id); focusNode(id); }
+    } else if (n && e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); actions.addChild(n, NEXT_TYPES[n.type][0] || n.type); }
+    else if (n && e.key === "Enter" && plain && !composing(e)) { e.preventDefault(); actions.edit(n); }
+    else if (n && plain && e.key.toLowerCase() === "a") { e.preventDefault(); actions.addChild(n, NEXT_TYPES[n.type][0] || n.type); }
+    else if (n && plain && e.key.toLowerCase() === "f") actions.focus(n);
+    else if (n && plain && e.key === " ") { e.preventDefault(); placePanel(n.id); ctx.select(n.id); }
   };
 
   const W = layout.width, H = layout.height;
-  const focusNode = focus && byId.get(focus);
-  return html`<div class="mp-map" ref=${wrap} tabIndex="0" onKeyDown=${keys}>
+  const focused = focus && byId.get(focus);
+  const shown = map.nodes.filter((n) => layout.boxes[n.id]);
+  const tabStop = layout.boxes[ctx.selected] ? ctx.selected : null; // one node in the Tab order: the selected one
+  return html`<div class="mp-map" ref=${wrap} tabIndex=${tabStop ? -1 : 0} aria-label=${t("rmap.title")} onKeyDown=${keys}>
     <div class="mp-scroll" ref=${scroller} style=${{ height: Math.max(400, Math.min(H * zoom + 24, window.innerHeight - 330)) + "px" }}
         onContextMenu=${(e) => menuAt(e, {})} onMouseDown=${(e) => { if (e.button === 0 && !e.target.closest(".mp-node, .mp-e-hit")) { ctx.select(null); setConnect(null); } }}>
       <svg ref=${svg} class=${"mp-svg" + (connect ? " connecting" : "")} width=${W * zoom} height=${H * zoom} viewBox=${`0 0 ${W} ${H}`}>
@@ -258,25 +297,30 @@ export function MapView({ ctx }) {
           </g>`)}
         </g>
         <g class="mp-nodes">
-          ${map.nodes.filter((n) => layout.boxes[n.id]).map((n) => html`<${Node} key=${n.id} n=${n} box=${boxOf(n.id)} ctx=${lctx} clip=${clip}
-            selected=${ctx.selected === n.id} connecting=${!!connect && connect.from !== n.id} layers=${layers}
+          ${shown.map((n) => html`<${Node} key=${n.id} n=${n} box=${boxOf(n.id)} ctx=${lctx} clip=${clip}
+            selected=${ctx.selected === n.id} tabbable=${tabStop === n.id} connecting=${!!connect && connect.from !== n.id} layers=${layers}
+            onFocus=${() => { if (ctx.selected !== n.id) { placePanel(n.id); ctx.select(n.id); } }}
             hidden=${layout.hidden[n.id] || 0} hasKids=${layout.hasKids.has(n.id)} collapsed=${collapsed.has(n.id)}
             onDown=${down(n)} onMenu=${(e) => { placePanel(n.id); ctx.select(n.id); menuAt(e, { node: n.id }); }}
             onDbl=${(e) => { e.stopPropagation(); actions.edit(n); }} onFold=${() => actions.fold(n)} />`)}
         </g>
         ${layers.filter((l) => l.node).map((l) => html`<g class=${"mp-layer-g " + l.id} key=${l.id}>
-          ${map.nodes.filter((n) => layout.boxes[n.id]).map((n) => l.node(n, boxOf(n.id), lctx))}</g>`)}
+          ${shown.map((n) => l.node(n, boxOf(n.id), lctx))}</g>`)}
         ${layers.filter((l) => l.svg && !l.under).map((l) => html`<g class=${"mp-layer-g " + l.id} key=${l.id}>${l.svg(lctx)}</g>`)}
       </svg>
       ${editBox && html`<input class="mp-edit" ref=${editRef} value=${editing.value}
         style=${{ left: editBox.x * zoom + "px", top: editBox.y * zoom + "px", width: editBox.w * zoom + "px", height: (editing.kind === "node" ? 28 : editBox.h) * zoom + "px" }}
         onInput=${(e) => setEditing({ ...editing, value: e.target.value })} onBlur=${saveEdit}
-        onKeyDown=${(e) => { if (e.key === "Enter" && !composing(e)) { e.preventDefault(); e.target.blur(); } if (e.key === "Escape") setEditing(null); }} />`}
+        onKeyDown=${(e) => {
+          e.stopPropagation();
+          if (e.key === "Enter" && !composing(e)) { e.preventDefault(); e.target.blur(); }
+          if (e.key === "Escape") { cancelled.current = true; setEditing(null); if (editing.kind === "node") focusNode(editing.id); }
+        }} />`}
     </div>
-    ${(connect || focusNode) && html`<div class="mp-banner">
+    ${(connect || focused) && html`<div class="mp-banner">
       ${connect ? html`<span>${t("rmap.connect.hint", { kind: t("rmap.edge." + connect.kind), from: byId.get(connect.from)?.title || "" })}</span>
           <button onClick=${() => setConnect(null)}>${t("rmap.cancel")}</button>`
-        : html`<span>${t("rmap.focus.on", { title: focusNode.title })}</span><button onClick=${() => setFocus(null)}>${t("rmap.focus.off")}</button>`}
+        : html`<span>${t("rmap.focus.on", { title: focused.title })}</span><button onClick=${() => setFocus(null)}>${t("rmap.focus.off")}</button>`}
     </div>`}
     <div class="mp-zoom">
       <button title=${t("rmap.zoom.out")} onClick=${() => setZoom(Math.max(0.4, +(zoom - 0.1).toFixed(2)))}><${Icon} name="minus" sm /></button>

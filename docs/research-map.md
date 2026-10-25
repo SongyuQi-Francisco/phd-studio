@@ -195,17 +195,23 @@ The workbench assistant never writes a map directly. Its tools (`app/studio_tool
   `new_project`; the page can also propose it as is (直接从笔记生成, `POST /seed`).
 
 Proposals (`app/rmap/proposals.py`) live per Mac in `state/<device>/rmap_proposals.json` (made and
-confirmed on the same Mac). Confirming writes the batch as `who: assistant`; if the map changed and the
-batch no longer fits, confirming fails with the reason and the proposal stays.
+confirmed on the same Mac). A proposal keeps its base: the clock stamps of every field it changes and of
+every record it deletes, and the existing nodes it hangs new things on, as they were when it was made.
+Confirming first compares them with the map now: if any field it changes was changed meanwhile (here, or
+synced from the other Mac), or a record it builds on is gone, nothing is written, the reason is shown and
+the proposal stays (the user discards it and asks again). Changes to other fields don't matter. Then the
+batch is written as `who: assistant`.
 
 ## Obsidian Canvas
 
-`app/rmap/canvas.py` writes `<project>/map.canvas` after every write it hears of (an `on_event`
-subscriber, so changes from the other Mac too) and when the map is read and the file is out of date (hand
-edits). Same layering as the page (on `dag_edges`) in a coarser grid, pinned positions carried over,
-evidence as wikilinks, colors by status, a header saying it is generated. The output is deterministic
-and only written when it changes, so both Macs produce the same file. Edits made to it in Obsidian are
-overwritten.
+`app/rmap/canvas.py` writes `<project>/map.canvas` after a write made on this Mac (an `on_event`
+subscriber that skips events from the other Mac: that Mac writes its own canvas and Syncthing brings it
+over), never on a read, and only when the content changes, so two Macs never race over the file. It takes
+a lock and a temp file of its own in the data dir, and removes Syncthing conflict copies of the canvas
+(it is generated). Same layering as the page (rows along `refines`, pinned positions carried over and
+kept clear), fixed-size cards with at most two evidence links (wikilinks; "n more"), colors by status, a
+header saying it is generated; labels in the vault language (`[profile] vault_language`). Edits made to it
+in Obsidian are overwritten by the next change.
 
 ## HTTP
 
@@ -267,12 +273,15 @@ every `.css` file is linked, before the page reads its first map; register throu
 | `rmap.tool` | `{id, label, icon, order, run(ctx)}` or `{…, render(ctx)}` | toolbar buttons and small controls (time scrubber) |
 | `rmap.view` | `{id, label, order, render(ctx)}` | whole-page views in the header's segmented control, before the projects (总图) |
 | `rmap.kpi` | `{id, order, render(ctx)}` | KPI tiles above the map |
-| `rmap.strings` | `{zh: {...}, en: {...}}` | the extension's own UI strings |
+| `rmap.strings` | `{zh: {...}, en: {...}}` | still accepted for an extension's labels; prefer its own locale module |
 
-Labels are string keys passed through `t()`. Registering the same id again replaces the item.
+Labels are i18n keys: an extension keeps its text in its own module, `web/locales/<lang>/<module>.json`
+(docs/i18n.md), and the page shows its labels with `label(key)` from `/rmap/strings.js` (which also finds
+keys given to `rmap.strings`). Registering the same id again replaces the item.
 CSS: the page root has class `rmap`; research map classes start with `mp-` and color tokens with `--mp-`
 (`--mp-verified`, `--mp-active`, `--mp-blocked`, `--mp-faded`, `--mp-peer`, …, set for light and dark).
-`web/rmap/util.js` has `safeUrl(u)`, `dagEdges(map, meta)` and `useAutoFocus`.
+`web/rmap/util.js` has `safeUrl(u)` and `dagEdges(map, meta)` (no imports: it runs outside the browser too);
+`web/rmap/dom.js` has `useAutoFocus`.
 
 Events: `rmap.on(name, fn)` returns an unsubscribe function. `load` `{slug, map}` after a map is read;
 `change` `{slug, events}` with the events this Mac saw since the last `change` (own edits, CLI, the other
@@ -289,22 +298,30 @@ Every hook gets `ctx`:
 | `layout` | in layer hooks: `{boxes: {node id: {x, y, w, h, col, pinned}}, edges, columns, width, height, hidden, hasKids, visible}` in SVG map coordinates (`web/rmap/layout.js`) |
 | `view` | `{focus, setFocus, collapsed, setCollapsed, fold(id)}`: focus and collapsed branches (collapse is kept per map on this Mac) |
 | `api` | `apply(ops, summary)` (a batch, then refresh), `refresh()`, `base` (the project's URL), `call` (`api` of lib.js) |
-| `t`, `toast`, `onAsk(prompt, label)`, `onOpenNote(path)`, `onOpenPaper(stem)` | strings, a toast, hand a task to the workbench assistant, open a vault note or a paper |
+| `t`, `toast`, `onAsk(prompt, label)`, `onOpenNote(path)`, `onOpenPaper(stem)` | text (`label()`: i18n keys, extensions' included), a toast, hand a task to the workbench assistant, open a vault note or a paper |
 
 ## The page
 
 `web/rmap/page.js` (shell, project switcher, proposals, KPI row, live refresh), `map.js` (the SVG map),
 `layout.js` (pure layout), `detail.js` (detail panel), `kpis.js`, `proposals.js`, `describe.js` (one line per
-event), `strings.js`, `util.js`.
+event), `strings.js` (extensions' labels), `util.js`, `dom.js`. Tests: `tests/test_rmap_view.py`, and
+`tests/js/rmap_layout.test.mjs` (the layout in node or JavaScriptCore).
 
-- Layout: left to right, on `dagEdges`. A node's column is the furthest of its type's column (问题 · 路径 ·
-  子线 · 实验 · 结果) and one past the nodes it refines; depends edges order the walk but keep nodes in their
-  column; rows come from a depth-first walk with parents centered on their children. Pinned nodes keep
-  their place and take no row.
+- Layout: left to right, on `dagEdges`. A node's column is the furthest of its type's column (question ·
+  hypothesis · branch · experiment · result) and one past the nodes it refines. Rows follow the refines
+  hierarchy only, depth first, with parents centered on their children; a depends edge is a cross-link,
+  drawn but never used to place a node (a node that only depends on another is a root of its own).
+  Pinned nodes keep their place; automatic nodes that would land on one move down until they are clear.
 - Editing: click selects; double-click renames (a node, or an edge's label); right-click opens status,
-  add child, link (细分 / 依赖 / 备选 / 冲突), collapse, focus, unpin, delete; dragging pins; Tab adds a
-  child of the next type, Enter renames, F focuses, Esc leaves focus or link mode. The detail panel edits
-  status, type, title, description (Markdown), evidence and links, and shows the node's history.
+  add child, link (refines / depends / alternative / conflicts), collapse, focus, unpin, delete; dragging
+  pins. The detail panel edits status, type, title, description (Markdown), evidence and links, and shows
+  the node's change log. Esc cancels an edit without saving.
+- Keyboard: nodes are buttons with a label (type, title, status); the selected one is in the Tab order,
+  so Tab moves into and out of the map as anywhere else. On the canvas or a node: arrows move the
+  selection, Enter renames, A (or ⌘↵) adds a child of the next type, F focuses, Space selects, Esc leaves
+  focus or link mode. Keys on the zoom buttons, the menu or an input do what those controls do.
+- Live refresh runs one refresh at a time: an edit's own refresh and the 2-second poll queue up, an
+  answer for a superseded request (or another project) is dropped, and each event reaches `change` once.
 - The core KPI tiles are registered like an extension's, with ids `depth`, `active` (with an 8-week trend
   rebuilt from the log), `verified`, `blank` (open paths and sub-lines with nothing attached). Register
   the same id to replace one (the peer layer redefines `blank` as "no peers").
@@ -312,6 +329,9 @@ event), `strings.js`, `util.js`.
 
 ## Strings
 
-All research map UI text is in `web/rmap/strings.js` (zh and en, `t(key, params)`), ready to move into the
-i18n framework of #49. In the Chinese UI technical terms stay English: Gate, Kill criteria, Claim Gate,
-baseline, ablation, metric names such as Recall@10.
+The research map's UI text is the `rmap` module of the i18n framework (#49, docs/i18n.md):
+`web/locales/zh/rmap.json` and `en/rmap.json` for the page, `app/locales/<lang>/rmap.json` for the server
+(proposal messages, and the canvas labels, which follow the vault language). Every file under `web/rmap/`
+is marked `// i18n: done`. Words follow docs/glossary.md (the 研究地图 table): in the Chinese UI technical
+terms stay English (Kill criteria, Gate, baseline, ablation, metric names such as Recall@10); English uses
+Hypothesis, Branch, Validated, Dead end, Falsified, Abandoned.

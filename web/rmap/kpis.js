@@ -1,10 +1,13 @@
-// The core KPI row of a map: 深度, 推进中分支, 已验证 x/y, 空白分支. Registered like any extension's tile, so a
-// later phase can replace one by registering the same id (the peer layer redefines "blank" with peers).
+// The core KPI row of a map: depth, active branches, validated x/y, empty branches. Registered like any
+// extension's tile, so a later phase can replace one by registering the same id (the peer layer redefines
+// "blank" with peers).
+// i18n: done
+// i18n-keys: rmap.col.{question,hypothesis,subline,experiment,result}
 import { useEffect, useState } from "preact/hooks";
 import { html } from "/lib.js";
 import { C, Ring, Sparkline } from "/charts.js";
+import { t } from "/i18n.js";
 import { rmap } from "/rmap/registry.js";
-import { t } from "/rmap/strings.js";
 import { layoutMap } from "/rmap/layout.js";
 
 const COLS = ["question", "hypothesis", "subline", "experiment", "result"];
@@ -85,7 +88,7 @@ export function blankBranches(map, meta) {
 
 function Blank({ ctx }) {
   const blank = blankBranches(ctx.map, ctx.meta);
-  return html`<${Tile} label=${t("rmap.kpi.blank")} value=${blank.length} sub=${blank.length ? blank.slice(0, 2).map((n) => n.title).join("、") : t("rmap.kpi.blank.none")} />`;
+  return html`<${Tile} label=${t("rmap.kpi.blank")} value=${blank.length} sub=${blank.length ? (blank.length > 1 ? t("rmap.join.list", { a: blank[0].title, b: blank[1].title }) : blank[0].title) : t("rmap.kpi.blank.none")} />`;
 }
 
 rmap.kpi({ id: "depth", order: 10, render: (ctx) => html`<${Depth} ctx=${ctx} />` });

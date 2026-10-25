@@ -1,12 +1,21 @@
 // Detail panel of the selected node: status, title, type, description, evidence, connections, history,
 // then the sections extensions register (peers, results). Every edit is one batch (local YAML, no approval).
-import { useEffect, useState } from "preact/hooks";
+// i18n: done
+// i18n-keys: rmap.status.{todo,active,verified,blocked,refuted,dropped}
+// i18n-keys: rmap.type.{question,hypothesis,subline,experiment,result,decision,kill,open}
+// i18n-keys: rmap.new.{question,hypothesis,subline,experiment,result,decision,kill,open}
+// i18n-keys: rmap.edge.{refines,depends,alternative,conflicts}
+// i18n-keys: rmap.evidence.{paper,note,file,url} rmap.stance.{supports,contradicts,context}
+// i18n-keys: rmap.who.{user,assistant,cli,import,system}
+import { useEffect, useRef, useState } from "preact/hooks";
 import { html, Icon, renderMarkdown, composing } from "/lib.js";
+import { t } from "/i18n.js";
 import { rmap } from "/rmap/registry.js";
-import { t } from "/rmap/strings.js";
+import { label } from "/rmap/strings.js";
 import { describe, titles, when } from "/rmap/describe.js";
 import { NEXT_TYPES } from "/rmap/map.js";
-import { useAutoFocus, safeUrl } from "/rmap/util.js";
+import { useAutoFocus } from "/rmap/dom.js";
+import { safeUrl } from "/rmap/util.js";
 
 const EV_ICON = { paper: "book", note: "note", file: "file", url: "external" };
 
@@ -24,7 +33,9 @@ function EvidenceAdd({ node, ctx, onDone }) {
     } catch (err) { ctx.toast(err.message); }
   };
   const ph = { paper: t("rmap.ev.ph.paper"), note: t("rmap.ev.ph.note"), file: t("rmap.ev.ph.file"), url: "https://…" }[f.type];
-  return html`<form class="mp-evadd" onSubmit=${save}>
+  // Enter that only confirms an IME candidate must not submit (WebKit sends it as keyCode 229)
+  const guard = (e) => { if (e.key === "Enter" && composing(e)) e.preventDefault(); if (e.key === "Escape") onDone(); };
+  return html`<form class="mp-evadd" onSubmit=${save} onKeyDown=${guard}>
     <div class="mp-evrow">
       <select value=${f.type} onChange=${(e) => setF({ ...f, type: e.target.value })}>
         ${kind.types.map((x) => html`<option value=${x}>${t("rmap.evidence." + x)}</option>`)}</select>
@@ -97,6 +108,7 @@ export function Detail({ ctx }) {
   const [title, setTitle] = useState(null);
   const [body, setBody] = useState(null);
   const [sure, setSure] = useState(false);
+  const cancelled = useRef(false);
   useEffect(() => { setTitle(null); setBody(null); setSure(false); }, [node?.id]);
   const titleRef = useAutoFocus(title !== null && node?.id, { select: true });
   const bodyRef = useAutoFocus(body !== null && node?.id);
@@ -105,8 +117,11 @@ export function Detail({ ctx }) {
 
   const set = (patch) => ctx.api.apply([{ op: "node.update", id: node.id, set: patch }]).catch((e) => ctx.toast(e.message));
   const st = node.status || "todo";
-  const saveTitle = () => { const v = (title ?? "").trim(); setTitle(null); if (v && v !== node.title) set({ title: v }); };
-  const saveBody = () => { const v = body ?? ""; setBody(null); if (v !== (node.body || "")) set({ body: v }); };
+  // Esc cancels: WebKit can still fire blur as the field goes away, and that must not save
+  const cancel = (fn) => { cancelled.current = true; fn(null); };
+  const edit = (fn, v) => { cancelled.current = false; fn(v); };
+  const saveTitle = () => { const v = (title ?? "").trim(); setTitle(null); if (!cancelled.current && v && v !== node.title) set({ title: v }); };
+  const saveBody = () => { const v = body ?? ""; setBody(null); if (!cancelled.current && v !== (node.body || "")) set({ body: v }); };
   const view = ctx.view;
   return html`<aside class="mp-detail">
     <div class="mp-dh">
@@ -115,23 +130,23 @@ export function Detail({ ctx }) {
       <span class=${"mp-pill st-" + st}><i />${t("rmap.status." + st)}</span>
       <button class="mp-close" title=${t("rmap.close")} onClick=${() => ctx.select(null)}><${Icon} name="x" sm /></button>
     </div>
-    ${title === null ? html`<h3 title=${t("rmap.dbl.edit")} onDblClick=${() => setTitle(node.title)}>${node.title}</h3>`
+    ${title === null ? html`<h3 title=${t("rmap.dbl.edit")} onDblClick=${() => edit(setTitle, node.title)}>${node.title}</h3>`
       : html`<input class="mp-title-edit" ref=${titleRef} value=${title} onInput=${(e) => setTitle(e.target.value)} onBlur=${saveTitle}
-          onKeyDown=${(e) => { if (e.key === "Enter" && !composing(e)) e.target.blur(); if (e.key === "Escape") setTitle(null); }} />`}
+          onKeyDown=${(e) => { if (e.key === "Enter" && !composing(e)) e.target.blur(); if (e.key === "Escape") cancel(setTitle); }} />`}
     <div class="mp-stpick">${ctx.meta.statuses.map((s) => html`<button class=${"st-" + s + (s === st ? " on" : "")} title=${t("rmap.status." + s)}
       onClick=${() => s !== st && set({ status: s })}><i />${t("rmap.status." + s)}</button>`)}</div>
 
     ${body === null
-      ? html`<div class=${"mp-desc" + (node.body ? "" : " none")} title=${t("rmap.dbl.edit")} onDblClick=${() => setBody(node.body || "")}>
+      ? html`<div class=${"mp-desc" + (node.body ? "" : " none")} title=${t("rmap.dbl.edit")} onDblClick=${() => edit(setBody, node.body || "")}>
           ${node.body ? html`<div class="md" dangerouslySetInnerHTML=${{ __html: renderMarkdown(node.body) }} />`
-            : html`<button class="mp-quiet" onClick=${() => setBody("")}>${t("rmap.desc.add")}</button>`}</div>`
+            : html`<button class="mp-quiet" onClick=${() => edit(setBody, "")}>${t("rmap.desc.add")}</button>`}</div>`
       : html`<textarea class="mp-body-edit" ref=${bodyRef} rows="5" value=${body} placeholder=${t("rmap.desc.ph")}
           onInput=${(e) => setBody(e.target.value)} onBlur=${saveBody}
-          onKeyDown=${(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) e.target.blur(); if (e.key === "Escape") setBody(null); }} />`}
+          onKeyDown=${(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !composing(e)) e.target.blur(); if (e.key === "Escape") cancel(setBody); }} />`}
 
     <${Evidence} node=${node} ctx=${ctx} />
     ${rmap.list("section").filter((s) => !s.when || s.when(node, ctx)).map((s) => html`<div class="mp-sec mp-ext" key=${s.id}>
-      ${s.label && html`<h4>${t(s.label)}</h4>`}${s.render(node, ctx)}</div>`)}
+      ${s.label && html`<h4>${label(s.label)}</h4>`}${s.render(node, ctx)}</div>`)}
     <${Links} node=${node} ctx=${ctx} />
     <${History} node=${node} ctx=${ctx} />
 

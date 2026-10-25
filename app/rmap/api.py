@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 
 from ..config import RMAP_DIR, STUDIO_DIR
-from . import canvas, lines, model, ops, project, proposals, registry
+from . import canvas, lines, model, ops, project, proposals, registry  # noqa: F401  (canvas: its event subscriber)
 from .registry import load_plugins
 
 EXT_DIR = STUDIO_DIR / "web" / "rmap" / "ext"
@@ -77,14 +77,7 @@ def create(body: dict[str, Any]) -> dict[str, Any]:
 
 @core.get("/projects/{slug}")
 def read(slug: str, deleted: bool = False) -> dict[str, Any]:
-    p = _run(project.get, slug)
-    m = p.read(include_deleted=deleted)
-    if not deleted:
-        try:  # the canvas follows changes that came without an event (hand edits, the other Mac)
-            canvas.write(p, m)
-        except OSError:
-            pass
-    return m
+    return _run(lambda: project.get(slug).read(include_deleted=deleted))
 
 
 @core.patch("/projects/{slug}")

@@ -5,6 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import shutil
+import subprocess
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -120,13 +123,51 @@ def test_a_proposal_that_no_longer_fits_stays_and_says_why(slug: str):
     h = node_id(slug, "H")
     prop = proposals.propose(ops_=[{"op": "node.update", "id": h, "set": {"status": "verified"}}], summary="x", slug=slug)
     ops.apply(slug, [{"op": "node.delete", "id": h}])
-    with pytest.raises(ValueError, match="地图在提议之后变了"):
+    with pytest.raises(ValueError, match="地图在提议之后改过了.*已被删除"):
         proposals.apply(prop["id"])
     assert [p["id"] for p in proposals.pending()] == [prop["id"]]
     proposals.discard(prop["id"])
     assert proposals.pending() == []
     with pytest.raises(KeyError):
         proposals.discard(prop["id"])
+
+
+def test_confirming_refuses_when_a_field_it_changes_was_changed_meanwhile(slug: str):
+    h = node_id(slug, "H")
+    prop = proposals.propose(ops_=[{"op": "node.update", "id": h, "set": {"status": "verified"}}], summary="x", slug=slug)
+    ops.apply(slug, [{"op": "node.update", "id": h, "set": {"status": "blocked"}}])  # e.g. synced from the other Mac
+    with pytest.raises(ValueError, match="status"):
+        proposals.apply(prop["id"])
+    assert next(n for n in project.get(slug).read()["nodes"] if n["id"] == h)["status"] == "blocked"
+    assert [p["id"] for p in proposals.pending()] == [prop["id"]]
+
+
+def test_confirming_goes_ahead_when_only_other_fields_changed(slug: str):
+    h = node_id(slug, "H")
+    prop = proposals.propose(ops_=[{"op": "node.update", "id": h, "set": {"status": "verified"}}], summary="x", slug=slug)
+    ops.apply(slug, [{"op": "node.update", "id": h, "set": {"title": "H renamed"}}])
+    proposals.apply(prop["id"])
+    n = next(n for n in project.get(slug).read()["nodes"] if n["id"] == h)
+    assert (n["title"], n["status"]) == ("H renamed", "verified")
+
+
+def test_confirming_refuses_a_delete_of_something_edited_meanwhile(slug: str):
+    h = node_id(slug, "H")
+    prop = proposals.propose(ops_=[{"op": "node.delete", "id": h}], summary="drop H", slug=slug)
+    ops.apply(slug, [{"op": "node.update", "id": h, "set": {"body": "new notes"}}])
+    with pytest.raises(ValueError, match="H"):
+        proposals.apply(prop["id"])
+    assert h in {n["id"] for n in project.get(slug).read()["nodes"]}
+
+
+def test_confirming_refuses_when_the_node_it_builds_on_is_gone(slug: str):
+    h = node_id(slug, "H")
+    prop = proposals.propose(ops_=[{"op": "node.add", "parent": h, "set": {"type": "experiment", "title": "X"}}],
+                             summary="add X", slug=slug)
+    assert prop["base"] == [{"kind": "node", "id": h, "title": "H", "fields": {}}]
+    ops.apply(slug, [{"op": "node.delete", "id": h}])
+    with pytest.raises(ValueError, match="已被删除"):
+        proposals.apply(prop["id"])
 
 
 def test_invalid_proposals_are_refused_up_front(slug: str):
@@ -203,28 +244,76 @@ def test_canvas_is_written_after_changes_and_only_when_it_changes(slug: str):
     assert {node_id(slug, "Q"), node_id(slug, "H")} <= ids and "rmap-header" in ids
     [edge] = data["edges"]
     assert (edge["fromNode"], edge["toNode"]) == (node_id(slug, "Q"), node_id(slug, "H"))
-    q, h = (next(n for n in data["nodes"] if n["id"] == node_id(slug, t)) for t in ("Q", "H"))
-    assert h["x"] > q["x"] and h["color"] == canvas.COLOR["active"]
+    q, h = (next(n for n in data["nodes"] if n["id"] == node_id(slug, t_)) for t_ in ("Q", "H"))
+    assert h["x"] > q["x"] and h["color"] == canvas.COLOR["active"] and "假设 · 进行中" in h["text"]
     mtime = path.stat().st_mtime_ns
     assert canvas.write(project.get(slug)) is False and path.stat().st_mtime_ns == mtime
     ops.apply(slug, [{"op": "attach.add", "kind": "evidence", "node": node_id(slug, "H"), "set": {"type": "paper", "target": "P 2024"}}])
     assert "[[P 2024]]" in path.read_text(encoding="utf-8")
 
 
-def test_canvas_follows_hand_edits_when_the_map_is_read(slug: str):
+def test_reading_or_syncing_never_rewrites_the_canvas(slug: str):
     from app.main import app
+    from app.rmap import watch
     path = config.RMAP_DIR / slug / "map.canvas"
-    path.write_text("{}", encoding="utf-8")  # edited in Obsidian
+    path.write_text("{}", encoding="utf-8")  # say, the other Mac's copy mid-sync
     TestClient(app).get(f"/api/rmap/projects/{slug}")
+    assert path.read_text(encoding="utf-8") == "{}"
+    p = project.get(slug)
+    with p.event_store("2026-02").editing() as data:  # events synced in from the other Mac
+        data["events"].append({"id": "evremote", "at": "2026-02-01T09:00:00", "hlc": "9999999999999.0000.othermac",
+                               "who": "user", "device": "othermac", "kind": "log", "action": "note", "summary": "remote"})
+    watch.once({})
+    p.read()
+    assert path.read_text(encoding="utf-8") == "{}"
+    ops.apply(slug, [{"op": "log", "text": "local"}])  # a write here brings it up to date
     assert json.loads(path.read_text(encoding="utf-8"))["nodes"]
 
 
-def test_canvas_is_deterministic_and_respects_pins(slug: str):
+def test_canvas_conflict_copies_are_removed_and_temp_files_stay_out_of_the_vault(slug: str):
+    folder = config.RMAP_DIR / slug
+    copy = folder / "map.sync-conflict-20261026-120000-ABCDEFG.canvas"
+    copy.write_text("{}", encoding="utf-8")
+    ops.apply(slug, [{"op": "node.update", "id": node_id(slug, "H"), "set": {"status": "verified"}}])
+    assert not copy.exists()
+    assert not [f for f in folder.rglob("*.tmp")] and not list((config.DATA_DIR / "rmap").glob("*.canvas*.tmp"))
+
+
+def test_canvas_labels_follow_the_vault_language(slug: str, monkeypatch: pytest.MonkeyPatch):
+    from app import i18n
+    monkeypatch.setattr(i18n, "vault_lang", lambda: "en")
+    text = canvas.render(project.get(slug).read())
+    assert "Hypothesis · In progress" in text and "Generated by PhD Studio" in text
+
+
+def boxes_overlap(a: dict, b: dict) -> bool:
+    return a["x"] < b["x"] + b["width"] and b["x"] < a["x"] + a["width"] and a["y"] < b["y"] + b["height"] and b["y"] < a["y"] + a["height"]
+
+
+def test_canvas_nodes_never_overlap_with_evidence_depends_and_pins(slug: str):
+    q, h = node_id(slug, "Q"), node_id(slug, "H")
+    r = ops.apply(slug, [
+        {"op": "node.add", "ref": "$h2", "parent": q, "set": {"type": "hypothesis", "title": "H2"}},
+        {"op": "node.add", "ref": "$x1", "parent": h, "set": {"type": "experiment", "title": "X1"}},
+        {"op": "node.add", "ref": "$x2", "parent": "$h2", "set": {"type": "experiment", "title": "X2"}},
+        {"op": "edge.add", "from": "$x1", "to": "$x2", "kind": "depends"},  # a cross-link between branches
+        *[{"op": "attach.add", "kind": "evidence", "node": h, "set": {"type": "paper", "target": f"P{i}"}} for i in range(5)],
+    ])
+    x1 = r["refs"]["$x1"]
+    # pin X1 where the page would put the first row of the third column
+    ops.apply(slug, [{"op": "node.update", "id": x1, "set": {"pin": {"x": 22 + 2 * 212, "y": 44}}}])
+    data = json.loads((config.RMAP_DIR / slug / "map.canvas").read_text(encoding="utf-8"))
+    cards = [n for n in data["nodes"] if n["id"] != "rmap-header"]
+    assert len({n["height"] for n in cards}) == 1
+    assert not [(a["id"], b["id"]) for i, a in enumerate(cards) for b in cards[i + 1:] if boxes_overlap(a, b)]
+    pinned = next(n for n in cards if n["id"] == x1)
+    assert (pinned["x"], pinned["y"]) == (2 * (canvas.W + canvas.GX), 0)  # the page's padding is taken off
+    assert "+" not in pinned["text"] and "还有 3 条证据" in next(n for n in cards if n["id"] == h)["text"]
+
+
+def test_canvas_is_deterministic(slug: str):
     m = project.get(slug).read()
     assert canvas.render(m) == canvas.render(project.get(slug).read())
-    ops.apply(slug, [{"op": "node.update", "id": node_id(slug, "H"), "set": {"pin": {"x": 0, "y": 600}}}])
-    pos = canvas.positions(project.get(slug).read())
-    assert pos[node_id(slug, "H")][1] > 600
 
 
 def test_lateral_edges_and_cycles_do_not_break_the_canvas(slug: str):
@@ -311,26 +400,28 @@ def test_proposal_and_seed_routes(line_note):
 # ---------- UI strings ----------
 
 
-def _keys(js: str, lang: str) -> set[str]:
-    start = js.index(f"  {lang}: {{")
-    end = js.index("\n  },", start)
-    return set(re.findall(r'^\s+"(rmap\.[^"]+)":', js[start:end], re.M))
+def _keys(lang: str, tree: str = "web") -> set[str]:
+    """The research map's keys in one language (web/locales/<lang>/rmap.json, or app/locales for the server)."""
+    data = json.loads((PROJECT / tree / "locales" / lang / "rmap.json").read_text(encoding="utf-8"))
+    return {f"rmap.{k}" for k in data}
 
 
-def test_every_ui_string_exists_in_both_languages():
-    js = (PROJECT / "web" / "rmap" / "strings.js").read_text(encoding="utf-8")
-    zh, en = _keys(js, "zh"), _keys(js, "en")
-    assert zh and zh == en
-    used = set()
-    for f in (PROJECT / "web" / "rmap").glob("*.js"):
-        used |= {k for k in re.findall(r't\("(rmap\.[A-Za-z0-9_.]+)"', f.read_text(encoding="utf-8")) if not k.endswith(".")}
-    assert used - zh == set()
+def test_the_map_text_lives_in_its_locale_module_in_both_languages():
+    assert _keys("zh") and _keys("zh") == _keys("en")
+    assert _keys("zh", "app") == _keys("en", "app")
+    shim = (PROJECT / "web" / "rmap" / "strings.js").read_text(encoding="utf-8")
+    assert '"rmap.' not in shim  # no text of its own any more: only the extensions' label() shim
+    import sys
+    sys.path.insert(0, str(PROJECT / "scripts"))
+    import i18n_scan
+    report = i18n_scan.scan([str(PROJECT / "web" / "rmap")])
+    assert all(r["done"] and not r["lines"] and not r["errors"] for r in report.values()), report
+    assert len(report) == len(list((PROJECT / "web" / "rmap").glob("*.js")))
 
 
 def test_strings_cover_the_whole_vocabulary():
     from app.rmap import evidence, model
-    js = (PROJECT / "web" / "rmap" / "strings.js").read_text(encoding="utf-8")
-    zh = _keys(js, "zh")
+    zh = _keys("zh")
     want = ({f"rmap.status.{s}" for s in model.STATUSES} | {f"rmap.type.{k}" for k in model.NODE_TYPES}
             | {f"rmap.new.{k}" for k in model.NODE_TYPES} | {f"rmap.edge.{k}" for k in model.EDGE_KINDS}
             | {f"rmap.who.{w}" for w in model.WHO} | {f"rmap.evidence.{x}" for x in evidence.TYPES}
@@ -338,3 +429,22 @@ def test_strings_cover_the_whole_vocabulary():
             | {f"rmap.field.{f}" for f in (*model.NODE_FIELDS, *model.EDGE_FIELDS, *model.PROJECT_FIELDS)}
             | {f"rmap.col.{k}" for k, v in model.NODE_TYPES.items() if v["col"] is not None} | {"rmap.kind.evidence"})
     assert want - zh == set()
+
+
+# ---------- web/rmap/layout.js in a JavaScript engine ----------
+
+JSC = Path("/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc")
+
+
+@pytest.mark.parametrize("engine", ["node", "jsc"])
+def test_map_layout_in_a_javascript_engine(engine, tmp_path):
+    exe = shutil.which("node") if engine == "node" else (str(JSC) if JSC.exists() else None)
+    if not exe:
+        pytest.skip(f"{engine} is not installed")
+    src = (PROJECT / "web" / "rmap" / "layout.js").read_text(encoding="utf-8").replace('from "./util.js"', 'from "./util.mjs"')
+    (tmp_path / "layout.mjs").write_text(src, encoding="utf-8")
+    shutil.copy(PROJECT / "web" / "rmap" / "util.js", tmp_path / "util.mjs")
+    shutil.copy(PROJECT / "tests" / "js" / "rmap_layout.test.mjs", tmp_path / "test.mjs")
+    args = [exe, "-m", "test.mjs"] if engine == "jsc" else [exe, "test.mjs"]
+    r = subprocess.run(args, cwd=tmp_path, capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0 and r.stdout.strip().endswith("ok"), r.stdout + r.stderr

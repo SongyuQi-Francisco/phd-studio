@@ -2,8 +2,10 @@
 from a research-line note). Nothing reaches the map until the user confirms the proposal on the map page.
 
 A proposal is checked when it is made (ops.simulate: the same validation as a real write) and stored per
-Mac in state/<device>/rmap_proposals.json, where it is made and confirmed. If the map changed in between
-and the batch no longer fits, confirming fails with the reason and the proposal stays.
+Mac in state/<device>/rmap_proposals.json, where it is made and confirmed. It also keeps the clock stamps
+of every field it changes and of every record it deletes, as they were when it was shown: if any of them
+moved before the user confirms (an edit here, or one synced from the other Mac), confirming fails with
+what changed, and the proposal stays, so nothing newer is overwritten by an older view.
 """
 from __future__ import annotations
 
@@ -13,9 +15,11 @@ import secrets
 import threading
 from typing import Any
 
+from .. import i18n
 from ..config import STATE_DIR
 from ..store import now
 from . import model, ops, project
+from .records import child_live, clocks, last_write, live_ids, own_live
 
 PROPOSALS_FILE = STATE_DIR / "rmap_proposals.json"
 MAX_PENDING = 30
@@ -53,12 +57,63 @@ def propose(*, ops_: list[dict[str, Any]], summary: str, slug: str | None = None
     sim = ops.simulate(slug, ops_, who="assistant", summary=summary)
     rec = {"id": "rp" + secrets.token_hex(4), "slug": slug, "create": create, "kind": kind, "source": source,
            "summary": summary, "ops": ops_, "events": sim["events"], "created_at": now(),
-           "stamp": project.get(slug).stamp() if slug else None}
+           "base": _base(slug, sim["events"]) if slug else []}
     with _lock:
         rows = _load()
         rows.append(rec)
         _save(rows[-MAX_PENDING:])
     return rec
+
+
+def _records(slug: str) -> tuple[dict[tuple[str, str], dict[str, Any]], set[str]]:
+    """(kind, id) -> raw record with its clock, tombstones included; and the live node ids."""
+    m = project.get(slug).read(include_deleted=True)
+    out = {("node", n["id"]): n for n in m["nodes"]}
+    out.update({("edge", e["id"]): e for e in m["edges"]})
+    out[("project", project.PROJECT_ID)] = m["project"]
+    for kind, recs in m["attachments"].items():
+        out.update({(kind, r["id"]): r for r in recs})
+    return out, live_ids(m["nodes"])
+
+
+def _base(slug: str, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """What the proposal was made against: the stamps of the fields it changes, of the records it deletes
+    (all of the record: "*"), and of the existing nodes it hangs new things on (only that they live)."""
+    recs, _ = _records(slug)
+    base: dict[tuple[str, str], dict[str, str]] = {}
+    for ev in events:
+        key = (ev["kind"], ev.get("target") or "")
+        rec = recs.get(key)
+        if ev["action"] == "update" and rec is not None:
+            base.setdefault(key, {}).update({f: clocks(rec).get(f, "") for f in ev.get("changes") or {}})
+        elif ev["action"] == "delete" and rec is not None:
+            base.setdefault(key, {})["*"] = last_write(rec)
+        elif ev["action"] == "add":
+            for nid in ev.get("nodes") or []:
+                if ("node", nid) in recs:
+                    base.setdefault(("node", nid), {})
+    return [{"kind": k, "id": i, "title": (recs[(k, i)].get("title") if k == "node" else None), "fields": f}
+            for (k, i), f in base.items()]
+
+
+def stale(rec: dict[str, Any]) -> list[str]:
+    """What moved since the proposal was shown: lines like 「Tool use helps」.status (empty if nothing)."""
+    if not rec.get("slug"):
+        return []
+    recs, live = _records(rec["slug"])
+    out = []
+    for b in rec.get("base") or []:
+        cur = recs.get((b["kind"], b["id"]))
+        name = i18n.t("rmap.record", kind=b["kind"], title=b.get("title") or b["id"])
+        alive = cur is not None and (own_live(cur) if b["kind"] in ("node", "project") else child_live(cur, live))
+        if not alive:
+            out.append(i18n.t("rmap.gone", record=name))
+            continue
+        moved = [f for f, stamp in b["fields"].items()
+                 if (last_write(cur) if f == "*" else clocks(cur).get(f, "")) != stamp]
+        if moved:
+            out.append(i18n.t("rmap.moved", record=name, fields=", ".join("*" if f == "*" else f for f in moved)))
+    return out
 
 
 def pending(slug: str | None = None) -> list[dict[str, Any]]:
@@ -87,6 +142,9 @@ def apply(pid: str) -> dict[str, Any]:
     with _lock:
         rec = _take(pid)
         slug = rec.get("slug")
+        moved = stale(rec)
+        if moved:
+            raise ValueError(i18n.t("rmap.stale", what="; ".join(moved)))
         try:
             if slug:
                 result = ops.apply(slug, rec["ops"], who="assistant", summary=rec["summary"])
@@ -96,8 +154,7 @@ def apply(pid: str) -> dict[str, Any]:
                                           description=create.get("description"), who="assistant")["slug"]
                 result = ops.apply(slug, rec["ops"], who="assistant", summary=rec["summary"])
         except (KeyError, ValueError) as e:
-            msg = e.args[0] if e.args else str(e)
-            raise ValueError(f"地图在提议之后变了，这条提议对不上了：{msg}") from e
+            raise ValueError(i18n.t("rmap.stale", what=e.args[0] if e.args else str(e))) from e
         _save([r for r in _load() if r.get("id") != pid])
     return {"slug": slug, **result}
 

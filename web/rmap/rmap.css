@@ -95,6 +95,9 @@
 .mp-n-fold path { fill: none; stroke: var(--text-2); stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
 .mp-n-fold text { font: 600 9px var(--mp-mono); fill: var(--text-2); }
 .mp-svg.connecting .mp-node { cursor: crosshair; }
+.mp-node { outline: none; }
+.mp-node:focus-visible .mp-n-bg { stroke: var(--mp-active); stroke-width: 2; stroke-dasharray: none; }
+.mp-map:focus-visible { outline: 2px solid color-mix(in srgb, var(--mp-active) 60%, transparent); outline-offset: -2px; }
 
 .mp-e-line { fill: none; stroke: var(--st); stroke-width: 1.4; opacity: .85; }
 .mp-e.st-todo .mp-e-line { stroke: var(--mp-todo); opacity: .7; }
