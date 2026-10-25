@@ -330,7 +330,7 @@ function ScholarEditor({ list, onClose, toast, onChanged, R }) {
     <div class="head"><h2>学者名单</h2><span class="muted small">名单存在你的 vault 里，两台电脑同步</span><span class="spacer" />
       <button class="abtn" onClick=${onClose}><${Icon} name="x" sm /></button></div>
     <div class="tk-search">
-      <input placeholder="按姓名在 OpenAlex 里找学者，如 Yongfeng Zhang" value=${q} onInput=${(e) => setQ(e.target.value)} onKeyDown=${(e) => e.key === "Enter" && q.trim() && search()} />
+      <input placeholder="按姓名在 OpenAlex 里找学者，如 Ada Example" value=${q} onInput=${(e) => setQ(e.target.value)} onKeyDown=${(e) => e.key === "Enter" && q.trim() && search()} />
       <button class="btn primary" disabled=${!q.trim() || busy} onClick=${search}>${busy ? "查询中…" : "查找"}</button></div>
     ${res && res.length === 0 && html`<div class="muted small pad">没找到</div>`}
     ${res && res.map((c) => html`<div class="tk-erow">
@@ -623,7 +623,7 @@ function Follows({ toast, onOpenPaper, onAsk, version, onChanged }) {
     <div class="tk-addfollow">
       <div class="seg"><button class=${kind === "keyword" ? "on" : ""} onClick=${() => setKind("keyword")}>关键词</button>
         <button class=${kind === "person" ? "on" : ""} onClick=${() => setKind("person")}>学者</button></div>
-      <input placeholder=${kind === "keyword" ? "如：graph neural network recommendation（多个词同时出现；\"引号\" 表示整词组）" : "如：Julian McAuley"} value=${value}
+      <input placeholder=${kind === "keyword" ? "如：keyword1 keyword2（多个词同时出现；\"引号\" 表示整词组）" : "如：Ada Example"} value=${value}
         onInput=${(e) => setValue(e.target.value)} onKeyDown=${(e) => e.key === "Enter" && value.trim() && add()} />
       <button class="btn primary" disabled=${!value.trim()} onClick=${add}>关注</button>
     </div>

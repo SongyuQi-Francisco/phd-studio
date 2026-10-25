@@ -301,9 +301,9 @@ def test_paper_meta_and_item_from_a_note(zot, note):
 
 
 def test_author_names_lose_affiliations_and_footnote_marks():
-    names = ("Subrat Panda (MindTwin)", "Alan Turing*", "Wei Li†", "Plato")
-    assert [zotero_push._creator(n)["lastName"] for n in names] == ["Panda", "Turing", "Li", "Plato"]
-    assert zotero_push._creator("Subrat Panda (MindTwin)")["firstName"] == "Subrat"
+    names = ("Ada Example (Example Lab)", "Alan Turing*", "Wei Li†", "Plato")
+    assert [zotero_push._creator(n)["lastName"] for n in names] == ["Example", "Turing", "Li", "Plato"]
+    assert zotero_push._creator("Ada Example (Example Lab)")["firstName"] == "Ada"
 
 
 SIGIR = {"type": "proceedings-article", "title": ["A SIGIR Paper"],
