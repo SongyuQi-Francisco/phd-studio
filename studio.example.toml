@@ -8,6 +8,7 @@ reading_queue = "Reading Queue.md"             # hand-written queue; a generated
 reading_list = "reading.yaml"                  # the reading list itself (inbox / T1-T3 / reading / done)
 plan = "plan.yaml"                             # targets, milestones, watched venues
 ideas = "ideas.yaml"                           # idea inbox
+# venue_overrides = "venue_details.yaml"       # venue details the assistant re-checked and you confirmed (default: next to plan)
 rules = "AGENTS.md"                            # vault rules Claude must follow when editing
 zotero = "~/Zotero"                            # Zotero data dir (read-only)
 secrets = "~/.config/secrets"                  # claude.env / deepseek.env live here
@@ -39,3 +40,8 @@ lines = ["Project A", "Project B"]
 venues = ["SIGIR", "KDD", "ACL", "NeurIPS"]
 # Current projects, used in prompts like “和我的课题有什么关系”.
 current_focus = "Project A (target venue, deadline); Project B"
+
+[venues]
+# Warn that a venue's tracks / page limits / review rules may be out of date this many months after
+# they were last verified (also when a newer edition or new deadlines show up in ccfddl).
+stale_months = 6

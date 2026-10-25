@@ -31,6 +31,14 @@ _paths = _cfg.get("paths", {})
 PROFILE: dict[str, Any] = _cfg.get("profile", {})
 
 
+def _months(value: Any, default: int) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else default
+
+
+# [venues] stale_months: venue details count as out of date this many months after they were last verified.
+VENUE_STALE_MONTHS = _months(_cfg.get("venues", {}).get("stale_months"), 6)
+
+
 def _p(value: str) -> Path:
     return Path(os.path.expanduser(value)).resolve()
 
@@ -41,6 +49,10 @@ VAULT_PDFS_DIR = VAULT_DIR / _paths.get("pdfs", "PDFs")
 READING_QUEUE = VAULT_DIR / _paths.get("reading_queue", "Reading Queue.md")
 READING_LIST = VAULT_DIR / _paths.get("reading_list", "reading.yaml")
 PLAN_FILE = VAULT_DIR / _paths.get("plan", "plan.yaml")
+# Venue details the assistant re-checked and the user confirmed: a sync-safe store merged on top of
+# data/venue_details.json. Default: next to plan.yaml.
+VENUE_OVERRIDES_FILE = (VAULT_DIR / _paths["venue_overrides"] if _paths.get("venue_overrides")
+                        else PLAN_FILE.parent / "venue_details.yaml")
 IDEAS_FILE = VAULT_DIR / _paths.get("ideas", "ideas.yaml")
 IDEAS_DIR = VAULT_DIR / _paths.get("ideas_dir", "Ideas")
 IDEA_TEMPLATE = _paths.get("idea_template", "Templates/Idea Note Template.md")
