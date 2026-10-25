@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 
 from ..config import RMAP_DIR, STUDIO_DIR
-from . import model, ops, project, registry
+from . import canvas, lines, model, ops, project, proposals, registry  # noqa: F401  (canvas: its event subscriber)
 from .registry import load_plugins
 
 EXT_DIR = STUDIO_DIR / "web" / "rmap" / "ext"
@@ -174,6 +174,38 @@ def delete_attachment(slug: str, kind: str, aid: str) -> dict[str, Any]:
     if kind not in registry.kinds():
         raise HTTPException(404, f"没有这种挂载：{kind}")
     return _run(ops.apply, slug, [{"op": "attach.delete", "kind": kind, "id": aid}])
+
+
+# ---- the assistant's proposals and first maps drafted from research-line notes ----
+
+
+@core.get("/proposals")
+def list_proposals(slug: str | None = None) -> dict[str, Any]:
+    return {"proposals": proposals.pending(slug)}
+
+
+@core.post("/proposals/{pid}/apply")
+def apply_proposal(pid: str) -> dict[str, Any]:
+    return _run(proposals.apply, pid)
+
+
+@core.delete("/proposals/{pid}")
+def discard_proposal(pid: str) -> dict[str, Any]:
+    _run(proposals.discard, pid)
+    return {"ok": True}
+
+
+@core.get("/lines")
+def research_lines() -> dict[str, Any]:
+    """Research lines with a note, and the map each one has (for drafting a first map)."""
+    return {"lines": lines.line_notes()}
+
+
+@core.post("/seed")
+def seed(body: dict[str, Any]) -> dict[str, Any]:
+    """Draft a first map straight from a research-line note (no assistant) as a proposal to confirm."""
+    d = _run(lines.draft, body.get("line") or "")
+    return _run(proposals.propose, ops_=d["ops"], summary=d["summary"], create=d["create"], kind="seed", source="note")
 
 
 for _mod in load_plugins():

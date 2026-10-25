@@ -1,8 +1,8 @@
 """In-process MCP tools that let the Studio assistant change the workbench itself:
 reading list, milestones, submission targets, watched venues, ideas.
 
-These write only the app's own YAML stores (direct, no approval card), except venue_details_propose, which
-only records a proposal the user confirms in the venue sheet. Every
+These write only the app's own YAML stores (direct, no approval card), except venue_details_propose and
+map_propose, which only record a proposal the user confirms (venue sheet, research map page). Every
 change is reported to the UI through `emit` so the pages refresh and the chat
 shows what was done.
 """
@@ -16,6 +16,7 @@ from typing import Any
 from claude_agent_sdk import SdkMcpTool, create_sdk_mcp_server, tool
 
 from . import idea_ops, plan, reading, tracking, venue_check, venues
+from .rmap import lines as rmap_lines, project as rmap_project, proposals as rmap_proposals
 
 SERVER = "studio"
 
@@ -37,7 +38,52 @@ def _err(msg: str) -> dict[str, Any]:
 
 
 # What the non-Claude models may call (through ro_tools): queries only.
-READ_ONLY = ("reading_list", "idea_list", "timeline", "venue_search", "tracker_latest")
+READ_ONLY = ("reading_list", "idea_list", "timeline", "venue_search", "tracker_latest", "map_read")
+
+MAP_OPS = ("ops 是一批操作（按顺序；新节点用 ref=\"$名字\"，后面的操作可用 $名字 指它）："
+           "{op:node.add, ref, parent:<节点 id 或 $名字>, edge:refines|depends, set:{type, title, status, body}}；"
+           "{op:node.update, id, set:{status|title|body|type}}；{op:node.delete, id}；"
+           "{op:edge.add, from, to, kind:refines|depends|alternative|conflicts, label}；{op:edge.delete, id}；"
+           "{op:attach.add, kind:evidence, node, set:{type:paper|note|file|url, target, title, note, stance:supports|contradicts|context}}。"
+           "type: question 问题 / hypothesis 路径或假设 / subline 子线 / experiment 实验 / result 结果 / decision 决策 / kill Kill criteria / open 开放问题；"
+           "status: todo 未开始 / active 进行中 / verified 已验证 / blocked 没打通 / refuted 证伪 / dropped 放弃。"
+           "证据 target：paper=论文笔记名，note/file=vault 相对路径，url=链接。")
+
+
+def _map_slug(key: str) -> str | None:
+    """A map by slug, title or research line name."""
+    slugs = rmap_project.slugs()
+    if key in slugs:
+        return key
+    key = key.strip().lower()
+    for x in slugs:
+        sm = rmap_project.summary(rmap_project.get(x))
+        if key in {str(v).lower() for v in (sm.get("title"), sm.get("line")) if v}:
+            return x
+    return None
+
+
+def _map_brief(slug: str) -> dict[str, Any]:
+    """A compact map for the model: nodes with their parents, other edges, evidence, the latest log lines."""
+    m = rmap_project.get(slug).read()
+    parents: dict[str, list[str]] = {}
+    other = []
+    for e in m["edges"]:
+        if e["kind"] == "refines":
+            parents.setdefault(e["to"], []).append(e["from"])
+        else:
+            other.append({k: e[k] for k in ("id", "from", "to", "kind") if k in e} | ({"label": e["label"]} if e.get("label") else {}))
+    ev: dict[str, list[str]] = {}
+    for a in m["attachments"].get("evidence", []):
+        ev.setdefault(a["node"], []).append(a.get("title") or a["target"])
+    nodes = [{"id": n["id"], "type": n["type"], "status": n.get("status", "todo"), "title": n["title"],
+              **({"parents": parents[n["id"]]} if n["id"] in parents else {}),
+              **({"evidence": ev[n["id"]]} if n["id"] in ev else {}),
+              **({"body": n["body"][:300]} if n.get("body") else {})} for n in m["nodes"]]
+    log = [{"at": e["at"], "who": e.get("who"), "text": e.get("summary")}
+           for e in rmap_project.get(slug).events(kind="log", limit=8)["events"]]
+    return {"project": {"slug": slug, **{k: m["project"].get(k) for k in ("title", "line", "note")}},
+            "nodes": nodes, "edges": other, "recent_log": log}
 
 
 def build(emit: Callable[[dict[str, Any]], Awaitable[None]]):
@@ -268,7 +314,56 @@ def _tools(emit: Callable[[dict[str, Any]], Awaitable[None]]) -> list[SdkMcpTool
         now = datetime.now(timezone.utc).date().isoformat()
         return _ok({"today": now, "events": tl["events"], "targets": tl["targets"]})
 
+    @tool("map_read", "读研究地图。不给 project 就列出所有课题地图（slug、标题、研究线、各状态节点数）；"
+                      "给 project（slug 或标题或研究线名）就返回这张图：节点（id、type、status、title、parents、证据）、"
+                      "细分之外的连线、最近几条日志。改地图前先读。",
+          _obj({"project": S}, []))
+    async def map_read(a):
+        slugs = rmap_project.slugs()
+        if not a.get("project"):
+            return _ok([rmap_project.summary(rmap_project.get(x)) for x in slugs])
+        hit = _map_slug(a["project"])
+        if not hit:
+            return _err(f"没有这张地图：{a['project']}（现有：{', '.join(slugs) or '无'}）")
+        return _ok(_map_brief(hit))
+
+    @tool("map_propose",
+          "提交研究地图的改动提案。只记成提案，不会改地图：用户在研究地图页看清单确认后才写入。"
+          "一句话进展（如「消融做完了，工具调用在长会话上没帮助」）：先 map_read，再拆成节点改动（改状态、加实验或结果节点、连线）"
+          "+ 证据（attach.add evidence，挂论文笔记或 vault 笔记）+ summary（这句进展整理成一句日志）。"
+          "给已有地图用 project=slug；起草一张新地图用 new_project={title, line, note}（note=研究线笔记的 vault 路径）。"
+          + MAP_OPS + " 节点 id 只能用 map_read 里的或本批 $名字，不要编。",
+          _obj({"project": S, "new_project": {"type": "object"}, "summary": S, "ops": {"type": "array", "items": {"type": "object"}}},
+               ["summary", "ops"]))
+    async def map_propose(a):
+        slug = None
+        if a.get("project"):
+            slug = _map_slug(a["project"])
+            if not slug:
+                return _err(f"没有这张地图：{a['project']}（新地图用 new_project）")
+        try:
+            prop = rmap_proposals.propose(ops_=a.get("ops") or [], summary=a.get("summary") or "", slug=slug,
+                                          create=a.get("new_project") or None,
+                                          kind="seed" if a.get("new_project") else "update")
+        except (KeyError, ValueError) as e:
+            return _err(e.args[0] if e.args else str(e))
+        n = sum(1 for e in prop["events"] if e["kind"] != "log")
+        title = (prop.get("create") or {}).get("title") or rmap_project.summary(rmap_project.get(prop["slug"]))["title"]
+        await changed("rmap", f"研究地图：{title} 的{'第一版草稿' if prop['create'] else '更新提议'}待你确认（{n} 处改动）", prop)
+        return _ok({"proposal": prop["id"], "changes": rmap_proposals.describe(prop),
+                    "note": "已提交，等用户在研究地图页确认后才会写入；你不能应用它。"})
+
+    @tool("map_seed_draft", "从一条研究线的笔记（One-line Pitch、Hypotheses、First Experiment、Kill Criteria、Related、"
+                            "带日期的状态小节）生成第一版地图的草稿 ops，不提交。你再读笔记和 Evidence 补全、改短标题、按最新状态改节点状态，"
+                            "然后用 map_propose(new_project=…, ops=…) 提交给用户确认。line=研究线名或笔记名。",
+          _obj({"line": S}, ["line"]))
+    async def map_seed_draft(a):
+        try:
+            return _ok(rmap_lines.draft(a["line"]))
+        except KeyError as e:
+            return _err(e.args[0])
+
     tools = [reading_push, reading_list, reading_update, milestone_add, milestone_update, target_add,
              target_update, venue_search, venue_watch, idea_add, idea_update, idea_merge, idea_list, follow,
-             tracker_latest, timeline, venue_details_propose]
+             tracker_latest, timeline, venue_details_propose, map_read, map_propose, map_seed_draft]
     return tools

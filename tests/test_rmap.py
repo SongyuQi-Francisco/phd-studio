@@ -129,7 +129,7 @@ def test_lock_and_temp_files_stay_out_of_the_vault(slug: str):
     assert p.map._lock.parent == config.DATA_DIR / "rmap" and p.map._tmp.parent == config.DATA_DIR / "rmap"
     vault_files = {f.relative_to(config.RMAP_DIR).as_posix() for f in config.RMAP_DIR.rglob("*") if f.is_file()}
     month = all_events(slug)[0]["at"][:7]
-    assert vault_files == {f"{slug}/map.yaml", f"{slug}/evidence.yaml", f"{slug}/events/{month}.yaml"}
+    assert vault_files == {f"{slug}/map.yaml", f"{slug}/evidence.yaml", f"{slug}/events/{month}.yaml", f"{slug}/map.canvas"}
 
 
 # ---------- nodes, edges, attachments ----------

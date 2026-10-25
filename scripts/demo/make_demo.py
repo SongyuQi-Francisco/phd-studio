@@ -5,8 +5,9 @@
     STUDIO_CONFIG=<out>/studio.toml STUDIO_DEVICE=demo uv run uvicorn app.main:app --port 8790
 
 Everything personal is invented: the profile, the three research lines ("Project Atlas / Beacon /
-Cobalt"), the roadmap, ideas, milestones and targets, the scholars and labs on the tracking page
-(made-up names, initials avatars, no photos), their papers and the weekly runs. The papers on the
+Cobalt") and the research maps of the first two, the roadmap, ideas, milestones and targets, the
+scholars and labs on the tracking page (made-up names, initials avatars, no photos), their papers and
+the weekly runs. The papers on the
 reading list are well-known public ones (arXiv PDFs are downloaded once into <out>/downloads).
 The venue catalog is the public CORE + ccfddl data the app downloads itself (or copied from
 --venues-from). Nothing is read from studio.toml, the user's vault, Zotero or state.
@@ -777,6 +778,124 @@ def fictional_papers(rng: random.Random) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------- helpers
 
 
+# ---------------------------------------------------------------- research maps (研究地图)
+
+# Each step: (days ago, log line or None, ops). Ids are $refs; one project per entry. Project Cobalt gets no
+# map, so the page offers to draft one from its note.
+RMAP_ATLAS = [
+    (-52, "开题：把 Atlas 拆成问题和三条路径", [
+        {"op": "node.add", "ref": "$q", "set": {"type": "question", "status": "active",
+         "title": "Can RAG citations be checked sentence by sentence?",
+         "body": "Every sentence of the answer should point at a passage that supports it; a cheap verifier flags the ones that don't."}},
+        {"op": "node.add", "ref": "$h1", "parent": "$q", "set": {"type": "hypothesis", "status": "active", "title": "A cheap verifier flags unsupported sentences"}},
+        {"op": "node.add", "ref": "$h2", "parent": "$q", "set": {"type": "hypothesis", "status": "todo", "title": "Errors come from generation, not retrieval"}},
+        {"op": "node.add", "ref": "$h4", "parent": "$q", "set": {"type": "hypothesis", "status": "todo", "title": "Train the generator to cite (RL reward)"}},
+        {"op": "edge.add", "from": "$h4", "to": "$h1", "kind": "alternative"},
+        {"op": "attach.add", "kind": "evidence", "node": "$q", "set": {"type": "note", "target": "Ideas/Project Atlas.md", "title": "Project Atlas", "stance": "context"}},
+        {"op": "attach.add", "kind": "evidence", "node": "$q", "set": {"type": "paper", "target": "RAG 2020", "stance": "context"}},
+    ]),
+    (-45, None, [
+        {"op": "node.add", "ref": "$s1", "parent": "$h1", "set": {"type": "subline", "status": "active", "title": "Late-interaction reranker as verifier"}},
+        {"op": "node.add", "ref": "$s2", "parent": "$h1", "set": {"type": "subline", "status": "active", "title": "NLI model as verifier (baseline)"}},
+        {"op": "node.add", "ref": "$k1", "parent": "$h1", "set": {"type": "kill", "status": "todo", "title": "K1 reranker below NLI after 2 weeks"}},
+        {"op": "node.add", "ref": "$k2", "parent": "$h2", "set": {"type": "kill", "status": "todo", "title": "K2 >40% misses from retrieval"}},
+        {"op": "attach.add", "kind": "evidence", "node": "$h1", "set": {"type": "paper", "target": "Self-RAG 2023", "stance": "supports"}},
+    ]),
+    (-38, "RL 这条先不做：奖励太稀疏，和 verifier 冲突", [
+        {"op": "node.update", "id": "$h4", "set": {"status": "dropped"}},
+        {"op": "node.add", "ref": "$x1", "parent": "$s1", "set": {"type": "experiment", "status": "active", "title": "Annotate 300 answers, 2 annotators"}},
+    ]),
+    (-31, "标注完成：300 条答案，κ = 0.71", [
+        {"op": "node.update", "id": "$x1", "set": {"status": "verified"}},
+        {"op": "node.add", "ref": "$r1", "parent": "$x1", "set": {"type": "result", "status": "verified", "title": "κ = 0.71 on 300 answers"}},
+        {"op": "node.add", "ref": "$x2", "parent": "$s1", "set": {"type": "experiment", "status": "active", "title": "Reranker vs NLI agreement"}},
+        {"op": "edge.add", "from": "$x1", "to": "$x2", "kind": "depends"},
+        {"op": "attach.add", "kind": "evidence", "node": "$x1", "set": {"type": "note", "target": "Evidence/Verification Log.md", "title": "Verification Log", "stance": "supports"}},
+    ]),
+    (-24, "Pilot：attribution metric 和人工判断一致", [
+        {"op": "node.add", "ref": "$h3", "parent": "$q", "set": {"type": "hypothesis", "status": "verified", "title": "Attribution metric tracks human judgment"}},
+        {"op": "node.add", "ref": "$x6", "parent": "$h3", "set": {"type": "experiment", "status": "verified", "title": "Pilot on 100 answers"}},
+        {"op": "node.add", "ref": "$r4", "parent": "$x6", "set": {"type": "result", "status": "verified", "title": "Spearman 0.62 vs human"}},
+    ]),
+    (-17, "Reranker 比 NLI 高 6 个点，K1 没触发，verifier 保留", [
+        {"op": "node.update", "id": "$x2", "set": {"status": "verified"}},
+        {"op": "node.add", "ref": "$r2", "parent": "$x2", "set": {"type": "result", "status": "verified", "title": "Reranker +6 pts over NLI"}},
+        {"op": "node.update", "id": "$s2", "set": {"status": "refuted"}},
+        {"op": "node.add", "ref": "$d1", "parent": "$h1", "set": {"type": "decision", "status": "verified", "title": "Keep the verifier line"}},
+        {"op": "node.update", "id": "$h1", "set": {"status": "verified"}},
+    ]),
+    (-9, "错误归因：31% 来自检索，离 K2 的线很近", [
+        {"op": "node.update", "id": "$h2", "set": {"status": "active"}},
+        {"op": "node.add", "ref": "$x5", "parent": "$h2", "set": {"type": "experiment", "status": "verified", "title": "Error attribution on 300 answers"}},
+        {"op": "node.add", "ref": "$r3", "parent": "$x5", "set": {"type": "result", "status": "verified", "title": "31% trace to retrieval misses"}},
+        {"op": "node.update", "id": "$k2", "set": {"status": "active"}},
+        {"op": "node.update", "id": "$h2", "set": {"status": "blocked"}},
+        {"op": "attach.add", "kind": "evidence", "node": "$h2", "set": {"type": "paper", "target": "DPR 2020", "stance": "context"}},
+    ]),
+    (-3, "下一步：检索侧消融；先查有没有现成 benchmark", [
+        {"op": "node.add", "ref": "$x4", "parent": "$h2", "set": {"type": "experiment", "status": "active", "title": "Retrieval-side ablation"}},
+        {"op": "node.add", "ref": "$x3", "parent": "$s1", "set": {"type": "experiment", "status": "todo", "title": "Latency under 50 ms per answer"}},
+        {"op": "node.add", "ref": "$o1", "parent": "$q", "set": {"type": "open", "status": "todo", "title": "Does a benchmark already cover this? (K3)"}},
+        {"op": "edge.add", "from": "$o1", "to": "$h3", "kind": "conflicts", "label": "K3"},
+    ]),
+]
+RMAP_BEACON = [
+    (-40, "Beacon 开题", [
+        {"op": "node.add", "ref": "$q", "set": {"type": "question", "status": "active", "title": "Exact recall at 128K+ for a fraction of the cost?"}},
+        {"op": "node.add", "ref": "$h1", "parent": "$q", "set": {"type": "hypothesis", "status": "active", "title": "Block-sparse + learned global tokens"}},
+        {"op": "node.add", "ref": "$h2", "parent": "$q", "set": {"type": "hypothesis", "status": "todo", "title": "Sliding window is enough"}},
+        {"op": "edge.add", "from": "$h2", "to": "$h1", "kind": "alternative"},
+        {"op": "attach.add", "kind": "evidence", "node": "$h1", "set": {"type": "paper", "target": "FlashAttention 2022", "stance": "context"}},
+        {"op": "attach.add", "kind": "evidence", "node": "$h2", "set": {"type": "paper", "target": "Longformer 2020", "stance": "supports"}},
+    ]),
+    (-26, None, [
+        {"op": "node.add", "ref": "$s1", "parent": "$h1", "set": {"type": "subline", "status": "active", "title": "Kernel at 128K"}},
+        {"op": "node.add", "ref": "$s2", "parent": "$h1", "set": {"type": "subline", "status": "active", "title": "Needle recall"}},
+        {"op": "node.add", "ref": "$k1", "parent": "$h1", "set": {"type": "kill", "status": "active", "title": "K1 under 2x at 128K: stop"}},
+        {"op": "node.add", "ref": "$x2", "parent": "$s2", "set": {"type": "experiment", "status": "active", "title": "Needle-in-a-haystack 32K / 128K"}},
+    ]),
+    (-6, "Kernel 1.7x（Gate 是 2x），单针召回差 2 个点以内", [
+        {"op": "node.add", "ref": "$x1", "parent": "$s1", "set": {"type": "experiment", "status": "active", "title": "Speed vs FlashAttention-2"}},
+        {"op": "node.add", "ref": "$r1", "parent": "$x1", "set": {"type": "result", "status": "blocked", "title": "1.7x so far (Gate: 2x)"}},
+        {"op": "node.update", "id": "$x2", "set": {"status": "verified"}},
+        {"op": "node.add", "ref": "$r2", "parent": "$x2", "set": {"type": "result", "status": "verified", "title": "Within 2 pts of dense"}},
+        {"op": "attach.add", "kind": "evidence", "node": "$x2", "set": {"type": "paper", "target": "Lost in the Middle 2023", "stance": "context"}},
+    ]),
+]
+
+
+def research_maps() -> None:
+    """Fictional maps for Atlas and Beacon, written step by step with backdated times (so the change log and
+    the 8-week trend look lived in)."""
+    from app import config
+    from app.rmap import clock as rclock, ops as rops
+    shutil.rmtree(config.RMAP_DIR, ignore_errors=True)
+    shutil.rmtree(config.DATA_DIR / "rmap", ignore_errors=True)  # this device's clock and ingest log go with them
+    real_now, real_ms = rops.now, rclock.wall_ms
+
+    def at(off: int, hour: int) -> None:  # the log's times and its clock stamps, both backdated
+        rops.now = lambda: stamp(off, hour)
+        rclock.wall_ms = lambda: int(datetime.fromisoformat(stamp(off, hour)).timestamp() * 1000)
+    try:
+        for title, steps in (("Project Atlas", RMAP_ATLAS), ("Project Beacon", RMAP_BEACON)):
+            at(steps[0][0] - 1, 9)
+            slug = rops.create_project(title, line=title, note=f"Ideas/{title}.md")["slug"]
+            refs: dict[str, str] = {}
+            for off, summary, batch in steps:
+                at(off, 10)
+                batch = json.loads(json.dumps(batch))
+                for op in batch:
+                    for k in ("id", "parent", "from", "to", "node"):
+                        if isinstance(op.get(k), str) and op[k] in refs:
+                            op[k] = refs[op[k]]
+                    if op.get("ref") in refs:
+                        op.pop("ref")
+                refs.update(rops.apply(slug, batch, summary=summary)["refs"])
+            print(f"research map: {title} ({len(refs)} nodes and attachments)")
+    finally:
+        rops.now, rclock.wall_ms = real_now, real_ms
+
+
 def write(path: Path, text: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
@@ -1094,6 +1213,9 @@ def build(out: Path, secrets: Path, venues_from: Path | None, fetch_pdfs: bool) 
         write(tracking.FEED_CACHE / f"{f['id']}.openreview.json", "[]")
     feed_extras(follows)
     tracking.export_follows()
+
+    # -- research maps
+    research_maps()
 
     # -- settings: per-machine, as a fresh install has them
     config.save_settings({"translate_engine": "deepseek" if (secrets / "deepseek.env").exists() else "google"})

@@ -14,6 +14,7 @@ import { DirectionPage, LinePanel, keepLines } from "/direction.js";
 import { NoteSheet } from "/note.js";
 import { ZoteroButton, ZoteroSettings } from "/zotero.js";
 import { ReminderRow } from "/reminders.js";
+import { RmapPage, seedPrompt } from "/rmap/page.js";
 
 // ---------------- library ----------------
 
@@ -398,6 +399,7 @@ const STUDIO_CHIPS = [
   { label: "最近截稿", prompt: "未来 60 天我关注的会议有哪些截稿？按时间列出，标出和我投稿目标相关的。" },
   { label: "加里程碑", prompt: "帮我加一个里程碑：", fill: true, write: true },
   { label: "记想法", prompt: "记一个想法：", fill: true, write: true },
+  { get label() { return t("rmap.chip.update"); }, get prompt() { return t("rmap.chip.update_prompt"); }, fill: true, write: true },
 ];
 
 function App() {
@@ -413,6 +415,7 @@ function App() {
   const [tab, setTab] = useState("claude");
   const [assistant, setAssistant] = useState(prefs.get("assistant", true));
   const [venueKey, setVenueKey] = useState(null);
+  const [rmapOpen, setRmapOpen] = useState(null); // research map to show when the page opens (from a 方向 card)
   const [notePath, setNotePath] = useState(null);
   const [ideaOpen, setIdeaOpen] = useState(false);
   const [status, setStatus] = useState(null);
@@ -459,6 +462,7 @@ function App() {
     return () => window.removeEventListener("keydown", k);
   }, []);
   useEffect(() => prefs.set("assistant", assistant), [assistant]);
+  useEffect(() => { if (view !== "rmap") setRmapOpen(null); }, [view]); // the rail reopens the map last looked at
   // A clicked reminder notification (app/desktop.py → app/notify.py) opens its event.
   useEffect(() => {
     window.studioOpen = (d) => { setNotePath(null); setSettingsOpen(false); go(d.view === "plan" ? "plan" : "timeline"); if (d.venue) setVenueKey(d.venue); };
@@ -598,7 +602,10 @@ function App() {
   else if (view === "track") page = html`<${TrackPage} version=${dataVersion} onAsk=${ask} toast=${toast} onOpenPaper=${openPaper}
       onOpenNote=${setNotePath} onChanged=${bump} />`;
   else if (view === "direction") page = html`<${DirectionPage} version=${dataVersion} onOpenNote=${setNotePath} onOpenVenue=${setVenueKey}
-      onLine=${openLine} activeLine=${studioSide ? sideLine : null} />`;
+      onLine=${openLine} activeLine=${studioSide ? sideLine : null}
+      onMap=${(l) => { if (l.map) { setRmapOpen(l.map.slug); go("rmap"); } else ask(seedPrompt(l), t("rmap.seed.ask.label")); }} />`;
+  else if (view === "rmap") page = html`<${RmapPage} version=${dataVersion} toast=${toast} lines=${status?.lines || []} open=${rmapOpen}
+      onAsk=${ask} onOpenNote=${setNotePath} onOpenPaper=${openPaper} />`;
   else page = html`<${OverviewPage} version=${dataVersion} onOpenVenue=${setVenueKey} go=${go} />`;
 
   return html`<div class=${"shell" + (reading || studioSide ? "" : " no-side")}>
@@ -609,6 +616,7 @@ function App() {
       ${nav("timeline", "calendar", "时间线 · 会议与规划")}
       ${nav("ideas", "bulb", "想法 (⌘I 随手记)")}
       ${nav("direction", "compass", "方向 · 研究线与路线图")}
+      ${nav("rmap", "topology", t("rmap.rail"))}
       ${nav("track", "radar", "追踪 · 同行动态与捕捉")}
       <button class=${"rail-btn" + (drawer ? " on" : "")} title="论文库 (⌘K)" onClick=${() => setDrawer(!drawer)}><${Icon} name="library" /></button>
       ${stem && !reading && html`<button class="rail-btn" title="回到正在读的论文" onClick=${() => setView("reader")}><${Icon} name="book" /></button>`}
@@ -645,7 +653,8 @@ function App() {
         <${ChatPanel} stem="studio" paper=${null} attachments=${studioAtt} setAttachments=${setStudioAtt}
           registerSend=${(api_) => (studioRef.current = api_)} claudeOk=${claudeOk} title="工作台助手"
           chips=${STUDIO_CHIPS} emptyHint="跟我说要做的事：加里程碑、设投稿目标、记想法、把论文推进清单、查会议截稿……"
-          onStudioChanged=${(area) => { bump(); if (area === "venues") toast("助手提交了会议核对结果，等你确认", { action: { label: "去看看", run: () => go("timeline") } }); }} />
+          onStudioChanged=${(area) => { bump(); if (area === "venues") toast("助手提交了会议核对结果，等你确认", { action: { label: "去看看", run: () => go("timeline") } });
+            if (area === "rmap") toast(t("rmap.prop.toast"), { action: { label: t("rmap.prop.go"), run: () => go("rmap") } }); }} />
       </div>
       ${lineChats.map((l) => html`<div key=${l.key} style=${{ display: sideLine === l.key ? "contents" : "none" }}>
         <${LinePanel} line=${l} claudeOk=${claudeOk} registerSend=${(api_) => (lineRefs.current[l.key] = api_)} toast=${toast}

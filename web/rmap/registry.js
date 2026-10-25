@@ -1,4 +1,5 @@
-// Extension registry of the research map page (研究地图). Later phases add files under web/rmap/ext/
+// Extension registry of the research map page. Later phases add files under web/rmap/ext/
+// i18n: done
 // (listed by GET /api/rmap/ext and imported by the page shell) and register here instead of editing
 // the core files. See docs/research-map.md, "Front-end extension points", for the full contract.
 //
@@ -9,7 +10,7 @@
 //   rmap.view({ id: "overview", label: "rmap.view.overview", order: 0, render: (ctx) => html });
 //   rmap.kpi({ id: "depth", order: 10, render: (ctx) => html });
 //   rmap.on("change", ({ slug, events }) => ...);   // also "load", "select", "view"
-//   rmap.strings({ zh: { "rmap.layer.peers": "同行层" }, en: { "rmap.layer.peers": "Peers" } });
+//   labels are i18n keys from the extension's own web/locales/<lang>/<module>.json (rmap.strings({zh, en}) still works)
 import { addStrings } from "/rmap/strings.js";
 
 const SLOTS = ["layer", "section", "tool", "view", "kpi"];
@@ -41,7 +42,7 @@ export const rmap = {
   section: (spec) => put("section", spec),
   // Toolbar items: a button (run) or a small component (render).
   tool: (spec) => put("tool", spec),
-  // Whole-page views in the header's segmented control, next to the projects (e.g. 总图).
+  // Whole-page views in the header's segmented control, next to the projects (e.g. the all-projects map).
   view: (spec) => put("view", spec),
   // KPI tiles above the map.
   kpi: (spec) => put("kpi", spec),

@@ -1,15 +1,23 @@
-// Research map page shell (研究地图): project switcher + registered views, toolbar, KPI row, the map,
-// the node detail panel, live refresh, and the extension loader. Extensions plug in through
-// /rmap/registry.js; every hook gets the same `ctx` (see docs/research-map.md).
+// Research map page: project switcher + registered views, toolbar and layer toggles, the assistant's
+// proposals, the KPI row, the map, the node detail panel, live refresh, and the extension loader.
+// Extensions plug in through /rmap/registry.js; every hook gets the same `ctx` (see docs/research-map.md).
+// i18n: done
+// i18n-keys: rmap.status.{todo,active,verified,blocked,refuted,dropped}
 import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { html, Icon, api, prefs, renderMarkdown } from "/lib.js";
+import { html, Icon, api, prefs } from "/lib.js";
+import { t } from "/i18n.js";
 import { Empty } from "/ui.js";
 import { rmap, loadExtensions } from "/rmap/registry.js";
-import { safeUrl } from "/rmap/util.js";
-import { t } from "/rmap/strings.js";
+import { label } from "/rmap/strings.js";
+import { MapView } from "/rmap/map.js";
+import { Detail } from "/rmap/detail.js";
+import { Proposals } from "/rmap/proposals.js";
+import { useAutoFocus } from "/rmap/dom.js";
+import "/rmap/kpis.js";
 
 const POLL_MS = 2000;
 const base = (slug) => `/api/rmap/projects/${encodeURIComponent(slug)}`;
+const STATUS_LEGEND = ["active", "verified", "blocked", "todo", "dropped"];
 
 function ensureCss(href) {
   if (document.querySelector(`link[href="${href}"]`)) return;
@@ -24,7 +32,7 @@ function useRegistry() {
   useEffect(() => rmap.watch(setV), []);
 }
 
-// Poll the map's change stamp (cheap: file sizes and times) while the page is visible; onChange gets the new stamp.
+// Poll a change stamp (cheap: file sizes and times) while the page is visible; onChange gets the new stamp.
 export function useStamp(url, stamp, onChange) {
   const cb = useRef(onChange);
   cb.current = onChange;
@@ -34,7 +42,7 @@ export function useStamp(url, stamp, onChange) {
     const tick = async () => {
       if (busy || document.hidden) return;
       busy = true;
-      try { const r = await api(url); if (r.stamp !== stamp) cb.current(r.stamp); } catch {} finally { busy = false; }
+      try { const r = await api(url); if (r.stamp !== stamp) await cb.current(r.stamp); } catch {} finally { busy = false; }
     };
     const id = setInterval(tick, POLL_MS);
     document.addEventListener("visibilitychange", tick);
@@ -42,86 +50,87 @@ export function useStamp(url, stamp, onChange) {
   }, [url, stamp]);
 }
 
-export const statusLabel = (s) => t("rmap.status." + (s || "todo"));
-export const typeLabel = (k) => t("rmap.type." + k);
-
 function NewProject({ lines, onCreated, onCancel, toast }) {
   const [title, setTitle] = useState("");
   const [line, setLine] = useState("");
+  const ref = useAutoFocus(1);
   const create = async (e) => {
     e.preventDefault();
     try { onCreated(await api("/api/rmap/projects", { json: { title, line: line || null } })); } catch (err) { toast(err.message); }
   };
   return html`<form class="mp-new" onSubmit=${create}>
-    <input autoFocus placeholder=${t("rmap.project.title")} value=${title} onInput=${(e) => setTitle(e.target.value)} />
-    <select value=${line} onChange=${(e) => setLine(e.target.value)}>
+    <input ref=${ref} placeholder=${t("rmap.project.title")} value=${title} onInput=${(e) => setTitle(e.target.value)} />
+    <select value=${line} onChange=${(e) => { setLine(e.target.value); if (!title) setTitle(e.target.value); }}>
       <option value="">${t("rmap.project.line")}</option>
       ${lines.map((l) => html`<option value=${l}>${l}</option>`)}
     </select>
-    <button class="btn" disabled=${!title.trim()}>${t("rmap.project.create")}</button>
+    <button class="btn primary" disabled=${!title.trim()}>${t("rmap.project.create")}</button>
     ${onCancel && html`<button type="button" class="btn ghost" onClick=${onCancel}>${t("rmap.project.cancel")}</button>`}
   </form>`;
 }
 
-// Placeholder map: one column per node type. The SVG map view replaces it (it lays nodes out, draws edges and layers).
-function TypeColumns({ ctx }) {
-  const cols = ctx.meta.node_types.filter((nt) => ctx.map.nodes.some((n) => n.type === nt.key));
-  return html`<div class="mp-cols">
-    ${cols.map((nt) => html`<div class="mp-col"><div class="mp-cap">${typeLabel(nt.key)}</div>
-      ${ctx.map.nodes.filter((n) => n.type === nt.key).map((n) => html`<button class=${"mp-card st-" + (n.status || "todo") + (ctx.selected === n.id ? " sel" : "")}
-          onClick=${() => ctx.select(n.id)}>
-        <b>${n.title}</b><span class="mp-st"><i />${statusLabel(n.status)}</span></button>`)}
+// Research lines without a map yet: let the assistant draft one, or draft it straight from the note.
+export const seedPrompt = (l) => t("rmap.seed.prompt", { line: l.line || l.name, path: l.path });
+
+function SeedLines({ toast, onAsk, onSeeded, compact }) {
+  const [lines, setLines] = useState(null);
+  const [busy, setBusy] = useState(null);
+  useEffect(() => { api("/api/rmap/lines").then((r) => setLines(r.lines.filter((l) => !l.map))).catch(() => setLines([])); }, []);
+  if (!lines?.length) return null;
+  const direct = async (l) => {
+    setBusy(l.path);
+    try { await api("/api/rmap/seed", { json: { line: l.path } }); onSeeded(); toast(t("rmap.seed.ready")); }
+    catch (e) { toast(e.message); } finally { setBusy(null); }
+  };
+  return html`<div class=${"mp-seed" + (compact ? " compact" : "")}>
+    <div class="mp-seed-h">${t("rmap.seed.title")}</div>
+    ${lines.map((l) => html`<div class="mp-seed-row" key=${l.path}>
+      <span class="mp-seed-n">${l.line || l.name}</span>
+      ${onAsk && html`<button class="btn sm" onClick=${() => onAsk(seedPrompt(l), t("rmap.seed.ask.label"))}><${Icon} name="sparkle" sm />${t("rmap.seed.ask")}</button>`}
+      <button class="btn ghost sm" disabled=${busy === l.path} onClick=${() => direct(l)}>${t("rmap.seed.direct")}</button>
     </div>`)}
   </div>`;
 }
 
-export function Evidence({ node, ctx }) {
-  const items = (ctx.map.attachments.evidence || []).filter((a) => a.node === node.id);
-  if (!items.length) return null;
-  const open = (a) => {
-    if (a.type === "url") { const u = safeUrl(a.target); if (u) window.open(u, "_blank", "noopener"); }
-    else if (a.type === "paper") ctx.onOpenPaper?.(a.target);
-    else ctx.onOpenNote?.(a.target);
-  };
-  return html`<div class="mp-sec"><h4>${t("rmap.evidence")}<small>${items.length}</small></h4>
-    <div class="mp-chips">${items.map((a) => html`<button class=${"mp-chip " + (a.stance || "supports")} title=${a.note || a.target} onClick=${() => open(a)}>
-      <${Icon} name=${a.type === "url" ? "external" : a.type === "paper" ? "book" : "note"} sm />${a.title || a.target}</button>`)}</div>
+function Legend({ ctx }) {
+  const layers = rmap.list("layer").filter((l) => l.legend && (ctx.layers[l.id] ?? l.default));
+  return html`<div class="mp-legend">
+    ${STATUS_LEGEND.map((s) => html`<span class=${"st-" + s}><i />${t("rmap.status." + s)}</span>`)}
+    <span class="mp-lg-e k-depends"><svg width="22" height="8"><path d="M1 4h20" /></svg>${t("rmap.edge.depends")}</span>
+    <span class="mp-lg-e k-alternative"><svg width="22" height="8"><path d="M1 4h20" /></svg>${t("rmap.edge.alternative")}</span>
+    <span class="mp-lg-e k-conflicts"><svg width="22" height="8"><path d="M1 4h20" /></svg>${t("rmap.edge.conflicts")}</span>
+    ${layers.map((l) => html`<span key=${l.id}>${l.legend(ctx)}</span>`)}
+    <span class="mp-lg-keys">${t("rmap.keys")}</span>
   </div>`;
 }
 
-function Detail({ ctx }) {
-  const node = ctx.map.nodes.find((n) => n.id === ctx.selected);
-  if (!node) return html`<aside class="mp-detail empty"><span class="muted">${t("rmap.select.hint")}</span></aside>`;
-  return html`<aside class="mp-detail">
-    <div class="mp-dh"><span class="mp-type">${typeLabel(node.type)}</span>
-      <span class=${"mp-pill st-" + (node.status || "todo")}><i />${statusLabel(node.status)}</span></div>
-    <h3>${node.title}</h3>
-    ${node.body && html`<div class="md mp-body" dangerouslySetInnerHTML=${{ __html: renderMarkdown(node.body) }} />`}
-    <${Evidence} node=${node} ctx=${ctx} />
-    ${rmap.list("section").filter((s) => !s.when || s.when(node, ctx)).map((s) => html`<div class="mp-sec" key=${s.id}>
-      ${s.label && html`<h4>${t(s.label)}</h4>`}${s.render(node, ctx)}</div>`)}
-  </aside>`;
-}
-
-// The map area. Exported so the map view can wrap the same shell; `Canvas` defaults to the placeholder.
-export function RmapPage({ version, toast, lines = [], onAsk, onOpenNote, onOpenPaper, Canvas = TypeColumns }) {
+export function RmapPage({ version, toast, lines = [], open, onAsk, onOpenNote, onOpenPaper }) {
   useRegistry();
   const [projects, setProjects] = useState(null);
   const [meta, setMeta] = useState(null);
-  const [active, setActive] = useState(prefs.get("rmap:active", null)); // project slug, or "view:<id>"
+  const [active, setActive] = useState(open || prefs.get("rmap:active", null)); // project slug, or "view:<id>"
   const [map, setMap] = useState(null);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState(null);
   const [adding, setAdding] = useState(false);
   const [layers, setLayers] = useState(prefs.get("rmap:layers", {}));
+  const [focus, setFocus] = useState(null);
+  const [collapsed, setCollapsed] = useState(new Set());
+  const [pending, setPending] = useState(null); // a node just added, to rename in place once it is drawn
+  const [propV, setPropV] = useState(0); // bumped when a proposal is made from this page
+  const [side, setSide] = useState("right"); // where the floating detail panel goes in a narrow page: away from the node
   const [ready, setReady] = useState(false); // extensions loaded: they hear the first "load" too
   const lastSeq = useRef({}); // slug -> this Mac's ingest sequence already handed to "change" subscribers
+  const queue = useRef(Promise.resolve()); // refreshes, one after another
+  const gen = useRef(0); // the latest map request; older answers are dropped
+  const [waiting, setWaiting] = useState({}); // slug -> proposals waiting for a confirm, for the project switcher
 
   useEffect(() => {
     ensureCss("/rmap/rmap.css");
     Promise.all([loadExtensions(api), api("/api/rmap/meta")])
       .then(([, m]) => { setMeta(m); setReady(true); }).catch((e) => setError(e.message));
   }, []);
+  useEffect(() => { if (open) setActive(open); }, [open]);
   const loadProjects = useCallback(() => api("/api/rmap/projects").then((r) => { setProjects(r.projects); return r.projects; }), []);
   useEffect(() => { loadProjects().catch((e) => setError(e.message)); }, [version]);
 
@@ -130,37 +139,58 @@ export function RmapPage({ version, toast, lines = [], onAsk, onOpenNote, onOpen
   const slug = !view && projects ? (projects.some((p) => p.slug === active) ? active : projects[0]?.slug || null) : null;
   useEffect(() => { if (active) prefs.set("rmap:active", active); }, [active]);
   useEffect(() => prefs.set("rmap:layers", layers), [layers]);
+  // collapse is remembered per map on this Mac; focus is for the moment
+  useEffect(() => { setCollapsed(new Set(slug ? prefs.get("rmap:collapsed:" + slug, []) : [])); setFocus(null); }, [slug]);
+  useEffect(() => { if (slug) prefs.set("rmap:collapsed:" + slug, [...collapsed]); }, [collapsed]);
 
-  const loadMap = useCallback(async (s) => {
+  const loadMap = useCallback(async (s, current = () => true) => {
     try {
       const m = await api(base(s));
-      setMap(m); setError("");
+      if (!current()) return null; // a newer request (or another project) took over meanwhile
+      setMap((old) => (old?.slug === s && old.stamp === m.stamp ? old : m)); setError("");
       if (lastSeq.current[s] == null) lastSeq.current[s] = m.seq;
       rmap.emit("load", { slug: s, map: m });
       return m;
     } catch (e) { setError(e.message); return null; }
   }, []);
-  useEffect(() => { setMap(null); setSelected(null); if (slug && ready) loadMap(slug); }, [slug, ready]);
+  useEffect(() => {
+    setMap(null); setSelected(null);
+    const mine = ++gen.current; // a refresh still queued for the last project is dropped
+    if (slug && ready) loadMap(slug, () => mine === gen.current);
+  }, [slug, ready]);
+  useEffect(() => { if (focus && map && !map.nodes.some((n) => n.id === focus)) setFocus(null); }, [map]);
+  useEffect(() => {
+    api("/api/rmap/proposals").then((r) => setWaiting(r.proposals.reduce((c, p) => (p.slug ? { ...c, [p.slug]: (c[p.slug] || 0) + 1 } : c), {})))
+      .catch(() => {});
+  }, [version, propV, map?.stamp]);
 
   // Live refresh: the files changed (an edit here, the CLI, or the other Mac through Syncthing). "change" gets
   // every event this Mac has seen since, by its ingest sequence: late-synced ones from an offline Mac too.
-  const refresh = useCallback(async () => {
-    if (!slug) return;
-    const m = await loadMap(slug);
-    if (!m) return;
-    const after = lastSeq.current[slug] ?? m.seq;
-    let events = [], page = { next: null };
-    do {
-      page = await api(`${base(slug)}/events?after=${after}&limit=1000${page.next ? "&before=" + encodeURIComponent(page.next) : ""}`)
-        .catch(() => ({ events: [], next: null, seq: after }));
-      events = events.concat(page.events);
-      lastSeq.current[slug] = Math.max(lastSeq.current[slug] ?? 0, page.seq ?? after);
-    } while (page.next);
-    if (events.length) rmap.emit("change", { slug, events });
+  // Refreshes run one at a time (an edit's own refresh and the poll would otherwise race): each one waits for
+  // the last, a map that arrives for a superseded request is dropped, and an event is handed on once (by seq).
+  const refresh = useCallback(() => {
+    if (!slug) return Promise.resolve();
+    const s = slug, mine = ++gen.current;
+    const run = async () => {
+      if (mine !== gen.current) return; // a newer refresh is queued: it will read everything
+      const m = await loadMap(s, () => mine === gen.current);
+      if (!m || mine !== gen.current) return;
+      const after = lastSeq.current[s] ?? m.seq;
+      let events = [], page = { next: null };
+      do {
+        page = await api(`${base(s)}/events?after=${after}&limit=1000${page.next ? "&before=" + encodeURIComponent(page.next) : ""}`)
+          .catch(() => ({ events: [], next: null, seq: after }));
+        events = events.concat(page.events.filter((e) => e.seq > after));
+      } while (page.next);
+      lastSeq.current[s] = Math.max(after, page.seq ?? after, ...events.map((e) => e.seq));
+      if (events.length) rmap.emit("change", { slug: s, events });
+    };
+    queue.current = queue.current.then(run, run);
+    return queue.current;
   }, [slug]);
   useStamp(slug && `${base(slug)}/stamp`, map?.stamp, refresh);
 
-  // One batch of changes; the result's events go to "change" subscribers right away.
+  // One batch of changes; then the map is re-read and "change" subscribers get the new events.
   const apply = useCallback(async (ops, summary) => {
     const r = await api(`${base(slug)}/batch`, { json: { ops, summary } });
     await refresh();
@@ -168,19 +198,25 @@ export function RmapPage({ version, toast, lines = [], onAsk, onOpenNote, onOpen
   }, [slug, refresh]);
   const select = useCallback((id) => { setSelected(id); rmap.emit("select", { slug, node: id }); }, [slug]);
   const pick = (key) => { setActive(key); if (key.startsWith("view:")) rmap.emit("view", { id: key.slice(5) }); };
+  const fold = useCallback((id) => setCollapsed((c) => { const x = new Set(c); if (x.has(id)) x.delete(id); else x.add(id); return x; }), []);
 
   const ctx = useMemo(() => meta && {
-    slug, map, meta, projects: projects || [], selected, select, layers, t, toast, onAsk, onOpenNote, onOpenPaper,
+    slug, map, meta, projects: projects || [], selected, select, layers, t: label, toast, onAsk, onOpenNote, onOpenPaper, version,
+    view: { focus, setFocus, collapsed, setCollapsed, fold, pending, setPending, setSide },
     api: { apply, refresh, base: slug ? base(slug) : null, call: api },
-  }, [slug, map, meta, projects, selected, layers, apply, refresh]);
+  }, [slug, map, meta, projects, selected, layers, apply, refresh, focus, collapsed, pending, version]);
+
+  const created = async (p) => { setAdding(false); await loadProjects(); setActive(p.slug); };
+  const applied = async (s) => { const ps = await loadProjects(); if (s && ps.some((p) => p.slug === s)) setActive(s); if (s === slug) refresh(); };
 
   if (!projects || !meta || !ready) return html`<div class="page rmap"><div class="page-inner wide"><p class="muted">${error || t("rmap.loading")}</p></div></div>`;
 
-  const created = async (p) => { setAdding(false); await loadProjects(); setActive(p.slug); };
   if (!projects.length && !views.length) return html`<div class="page rmap"><div class="page-inner wide">
     <div class="page-head"><h1>${t("rmap.title")}</h1></div>
-    <${Empty} icon="compass" title=${t("rmap.empty.title")} hint=${t("rmap.empty.hint")}>
+    <${Proposals} slug=${null} map=${null} version=${version + ":" + propV} toast=${toast} onApplied=${applied} />
+    <${Empty} icon="topology" title=${t("rmap.empty.title")} hint=${t("rmap.empty.hint")}>
       <${NewProject} lines=${lines} onCreated=${created} toast=${toast} /></${Empty}>
+    <${SeedLines} toast=${toast} onAsk=${onAsk} onSeeded=${() => setPropV((n) => n + 1)} />
   </div></div>`;
 
   const layerList = rmap.list("layer");
@@ -190,24 +226,29 @@ export function RmapPage({ version, toast, lines = [], onAsk, onOpenNote, onOpen
     <div class="page-head">
       <div><h1>${t("rmap.title")}</h1>
         ${map && html`<div class="sub"><span>${map.project.title}</span>${map.project.line && html`<span class="tag">${map.project.line}</span>`}
-          <span>${t("rmap.nodes", { n: map.nodes.length })}</span></div>`}</div>
+          <span class="mp-num">${t("rmap.nodes", { n: map.nodes.length })}</span>
+          ${map.project.note && html`<button class="mp-link" onClick=${() => onOpenNote?.(map.project.note)}><${Icon} name="note" sm />${t("rmap.project.note")}</button>`}</div>`}</div>
       <div class="mp-tools">
         <div class="seg">
-          ${views.map((v) => html`<button class=${active === "view:" + v.id ? "on" : ""} onClick=${() => pick("view:" + v.id)}>${t(v.label)}</button>`)}
-          ${projects.map((p) => html`<button class=${!view && slug === p.slug ? "on" : ""} onClick=${() => pick(p.slug)}>${p.title}</button>`)}
+          ${views.map((v) => html`<button class=${active === "view:" + v.id ? "on" : ""} onClick=${() => pick("view:" + v.id)}>${label(v.label)}</button>`)}
+          ${projects.map((p) => html`<button class=${!view && slug === p.slug ? "on" : ""} onClick=${() => pick(p.slug)}
+            title=${waiting[p.slug] ? t("rmap.prop.waiting", { n: waiting[p.slug] }) : p.warnings?.some((w) => w.kind === "same_title") ? t("rmap.same.title") : null}>${p.title}${waiting[p.slug] > 0 && html`<i class="mp-wait">${waiting[p.slug]}</i>`}</button>`)}
         </div>
         <button class="btn ghost sm" title=${t("rmap.project.new")} onClick=${() => setAdding(!adding)}><${Icon} name="plus" sm /></button>
         ${ctx && layerList.map((l) => html`<button class=${"mp-layer" + (layers[l.id] ?? l.default ? " on" : "")} style=${l.accent ? { "--acc": l.accent } : null}
-            onClick=${() => setLayers({ ...layers, [l.id]: !(layers[l.id] ?? l.default) })}>${t(l.label)}</button>`)}
+            onClick=${() => setLayers({ ...layers, [l.id]: !(layers[l.id] ?? l.default) })}>${label(l.label)}</button>`)}
         ${ctx && tools.map((tl) => tl.render ? html`<span key=${tl.id}>${tl.render(ctx)}</span>`
-          : html`<button class="btn ghost sm" key=${tl.id} title=${t(tl.label)} onClick=${() => tl.run(ctx)}>${tl.icon && html`<${Icon} name=${tl.icon} sm />`}${!tl.icon && t(tl.label)}</button>`)}
+          : html`<button class="btn ghost sm" key=${tl.id} title=${label(tl.label)} onClick=${() => tl.run(ctx)}>${tl.icon && html`<${Icon} name=${tl.icon} sm />`}${!tl.icon && label(tl.label)}</button>`)}
       </div>
     </div>
     ${adding && html`<${NewProject} lines=${lines} onCreated=${created} onCancel=${() => setAdding(false)} toast=${toast} />`}
+    ${adding && html`<${SeedLines} compact toast=${toast} onAsk=${onAsk} onSeeded=${() => { setAdding(false); setPropV((n) => n + 1); }} />`}
+    <${Proposals} slug=${slug} map=${map} version=${version + ":" + propV} toast=${toast} onApplied=${applied} />
     ${view ? view.render(ctx) : error ? html`<p class="muted">${t("rmap.error", { msg: error })}</p>` : !map ? html`<p class="muted">${t("rmap.loading")}</p>` : html`
+      ${map.warnings.filter((w) => w.kind === "cycle").map((w) => html`<div class="mp-warn" key="cycle">${t("rmap.cycle.warn", { n: w.edges.length })}</div>`)}
       ${kpis.length > 0 && html`<div class="kpis mp-kpis">${kpis.map((k) => html`<div class="kpi" key=${k.id}>${k.render(ctx)}</div>`)}</div>`}
-      <div class="mp-body-grid">
-        <div class="mp-canvas"><${Canvas} ctx=${ctx} /></div>
+      <div class=${"mp-body-grid side-" + side}>
+        <div class="mp-canvas"><${MapView} ctx=${ctx} /><${Legend} ctx=${ctx} /></div>
         <${Detail} ctx=${ctx} />
       </div>`}
   </div></div>`;
