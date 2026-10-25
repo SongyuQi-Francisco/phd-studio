@@ -33,6 +33,8 @@ def new_id(prefix: str) -> str:
 
 
 class Store:
+    loader = yaml.SafeLoader  # subclasses may use the faster CSafeLoader
+
     def __init__(self, path: Path, collections: tuple[str, ...], header: str, name: str | None = None):
         """name: what the lock and temp file in the data dir are called (default: the file's own name);
         give one when several stores share a file name in different folders (research maps)."""
@@ -47,7 +49,7 @@ class Store:
         if not path.exists():
             return {c: [] for c in self.collections}
         try:
-            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            data = yaml.load(path.read_text(encoding="utf-8"), Loader=self.loader) or {}
         except yaml.YAMLError:
             data = {}
         return {c: [self._clean(r) for r in data.get(c) or [] if isinstance(r, dict) and r.get("id")]
@@ -75,12 +77,18 @@ class Store:
                     m = mine.get(r["id"])
                     if m is None:
                         data[c].append(r)
-                    elif r.get("updated_at", "") > m.get("updated_at", ""):
-                        m.clear()
-                        m.update(r)
+                    else:
+                        self._merge_record(m, r)
             CONFLICTS_DIR.mkdir(parents=True, exist_ok=True)
             shutil.move(str(copy), CONFLICTS_DIR / copy.name)
         return bool(copies)
+
+    @staticmethod
+    def _merge_record(mine: dict[str, Any], theirs: dict[str, Any]) -> None:
+        """Fold the conflict copy's version of a record into ours: the newer updated_at wins, whole."""
+        if theirs.get("updated_at", "") > mine.get("updated_at", ""):
+            mine.clear()
+            mine.update(theirs)
 
     @contextmanager
     def _locked(self) -> Iterator[None]:

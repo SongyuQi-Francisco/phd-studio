@@ -10,8 +10,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 
 from ..config import RMAP_DIR, STUDIO_DIR
-from . import model, ops, project
-from .registry import KINDS, load_plugins
+from . import model, ops, project, registry
+from .registry import load_plugins
 
 EXT_DIR = STUDIO_DIR / "web" / "rmap" / "ext"
 
@@ -37,9 +37,9 @@ def meta() -> dict[str, Any]:
     """Vocabulary for the front end: node types (with column hints), statuses, edge kinds, attachment kinds."""
     return {"node_types": [{"key": k, **v} for k, v in model.NODE_TYPES.items()], "statuses": list(model.STATUSES),
             "faded": list(model.FADED), "closed": list(model.CLOSED), "edge_kinds": list(model.EDGE_KINDS),
-            "flow": list(model.FLOW),
-            "kinds": [{"name": k.name, "fields": list(k.fields), "required": list(k.required),
-                       "node_types": list(k.node_types), **k.extra} for k in KINDS.values()]}
+            "flow": list(model.FLOW), "max_ops": ops.MAX_OPS, "max_import_ops": ops.MAX_IMPORT_OPS,
+            "kinds": [{"name": k.name, "fields": list(k.fields), "required": list(k.required), "log": k.log,
+                       "node_types": list(k.node_types), **k.extra} for k in registry.kinds().values()]}
 
 
 @core.get("/ext")
@@ -60,8 +60,13 @@ def stamp_all() -> dict[str, str]:
 
 @core.get("/projects")
 def projects(archived: bool = False) -> dict[str, Any]:
-    out = [project.summary(project.get(s)) for s in project.slugs()]
-    return {"projects": [p for p in out if archived or not p.get("archived")], "stamp": project.stamp_of(RMAP_DIR)}
+    return {"projects": project.listing(archived), "stamp": project.stamp_of(RMAP_DIR)}
+
+
+@core.get("/entities")
+def entities(key: str | None = None) -> dict[str, Any]:
+    """Where each entity ("paper:…", "dataset:…") appears across all maps (shared stations, shared peers)."""
+    return {"entities": project.entities(key)}
 
 
 @core.post("/projects")
@@ -88,10 +93,12 @@ def stamp(slug: str) -> dict[str, str]:
 
 
 @core.get("/projects/{slug}/events")
-def events(slug: str, before: str | None = None, since: str | None = None, node: str | None = None,
-           kind: str | None = None, limit: int = Query(100, ge=1, le=1000)) -> dict[str, Any]:
+def events(slug: str, before: str | None = None, since: str | None = None, after: int | None = None,
+           node: str | None = None, kind: str | None = None, limit: int = Query(100, ge=1, le=1000)) -> dict[str, Any]:
+    """Newest first. Pages: pass `next` back as `before`. before / since: a cursor or a date. after: this
+    Mac's ingest sequence (`seq` of an earlier answer): every event seen since, synced-late ones included."""
     p = _run(project.get, slug)
-    return {"events": p.events(before=before, since=since, node=node, kind=kind, limit=limit)}
+    return _run(p.events, before=before, since=since, after=after, node=node, kind=kind, limit=limit)
 
 
 @core.post("/projects/{slug}/batch")
@@ -138,7 +145,7 @@ def delete_edge(slug: str, eid: str) -> dict[str, Any]:
 
 @core.get("/projects/{slug}/attachments/{kind}")
 def attachments(slug: str, kind: str, node: str | None = None) -> dict[str, Any]:
-    if kind not in KINDS:
+    if kind not in registry.kinds():
         raise HTTPException(404, f"没有这种挂载：{kind}")
     m = _run(lambda: project.get(slug).read())
     return {kind: [a for a in m["attachments"][kind] if not node or a.get("node") == node]}
@@ -146,7 +153,7 @@ def attachments(slug: str, kind: str, node: str | None = None) -> dict[str, Any]
 
 @core.post("/projects/{slug}/attachments/{kind}")
 def add_attachment(slug: str, kind: str, body: dict[str, Any]) -> dict[str, Any]:
-    if kind not in KINDS:
+    if kind not in registry.kinds():
         raise HTTPException(404, f"没有这种挂载：{kind}")
     fields = {k: v for k, v in body.items() if k not in ("node", "who")}
     r = _run(ops.apply, slug, [{"op": "attach.add", "ref": "$new", "kind": kind, "node": body.get("node"), "set": fields}],
@@ -156,7 +163,7 @@ def add_attachment(slug: str, kind: str, body: dict[str, Any]) -> dict[str, Any]
 
 @core.patch("/projects/{slug}/attachments/{kind}/{aid}")
 def update_attachment(slug: str, kind: str, aid: str, body: dict[str, Any]) -> dict[str, Any]:
-    if kind not in KINDS:
+    if kind not in registry.kinds():
         raise HTTPException(404, f"没有这种挂载：{kind}")
     patch = {k: v for k, v in body.items() if k != "who"}
     return _run(ops.apply, slug, [{"op": "attach.update", "kind": kind, "id": aid, "set": patch}], who=_who(body))
@@ -164,7 +171,7 @@ def update_attachment(slug: str, kind: str, aid: str, body: dict[str, Any]) -> d
 
 @core.delete("/projects/{slug}/attachments/{kind}/{aid}")
 def delete_attachment(slug: str, kind: str, aid: str) -> dict[str, Any]:
-    if kind not in KINDS:
+    if kind not in registry.kinds():
         raise HTTPException(404, f"没有这种挂载：{kind}")
     return _run(ops.apply, slug, [{"op": "attach.delete", "kind": kind, "id": aid}])
 

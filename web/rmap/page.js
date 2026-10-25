@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks"
 import { html, Icon, api, prefs, renderMarkdown } from "/lib.js";
 import { Empty } from "/ui.js";
 import { rmap, loadExtensions } from "/rmap/registry.js";
+import { safeUrl } from "/rmap/util.js";
 import { t } from "/rmap/strings.js";
 
 const POLL_MS = 2000;
@@ -78,7 +79,7 @@ export function Evidence({ node, ctx }) {
   const items = (ctx.map.attachments.evidence || []).filter((a) => a.node === node.id);
   if (!items.length) return null;
   const open = (a) => {
-    if (a.type === "url") window.open(a.target, "_blank", "noopener");
+    if (a.type === "url") { const u = safeUrl(a.target); if (u) window.open(u, "_blank", "noopener"); }
     else if (a.type === "paper") ctx.onOpenPaper?.(a.target);
     else ctx.onOpenNote?.(a.target);
   };
@@ -113,9 +114,14 @@ export function RmapPage({ version, toast, lines = [], onAsk, onOpenNote, onOpen
   const [selected, setSelected] = useState(null);
   const [adding, setAdding] = useState(false);
   const [layers, setLayers] = useState(prefs.get("rmap:layers", {}));
-  const lastAt = useRef({}); // slug -> newest event time seen, for the "change" feed
+  const [ready, setReady] = useState(false); // extensions loaded: they hear the first "load" too
+  const lastSeq = useRef({}); // slug -> this Mac's ingest sequence already handed to "change" subscribers
 
-  useEffect(() => { ensureCss("/rmap/rmap.css"); loadExtensions(api); api("/api/rmap/meta").then(setMeta).catch(() => {}); }, []);
+  useEffect(() => {
+    ensureCss("/rmap/rmap.css");
+    Promise.all([loadExtensions(api), api("/api/rmap/meta")])
+      .then(([, m]) => { setMeta(m); setReady(true); }).catch((e) => setError(e.message));
+  }, []);
   const loadProjects = useCallback(() => api("/api/rmap/projects").then((r) => { setProjects(r.projects); return r.projects; }), []);
   useEffect(() => { loadProjects().catch((e) => setError(e.message)); }, [version]);
 
@@ -129,28 +135,29 @@ export function RmapPage({ version, toast, lines = [], onAsk, onOpenNote, onOpen
     try {
       const m = await api(base(s));
       setMap(m); setError("");
+      if (lastSeq.current[s] == null) lastSeq.current[s] = m.seq;
       rmap.emit("load", { slug: s, map: m });
       return m;
     } catch (e) { setError(e.message); return null; }
   }, []);
-  useEffect(() => { setMap(null); setSelected(null); if (slug) loadMap(slug); }, [slug]);
+  useEffect(() => { setMap(null); setSelected(null); if (slug && ready) loadMap(slug); }, [slug, ready]);
 
-  // Live refresh: the files changed (an edit here, the CLI, or the other Mac through Syncthing).
+  // Live refresh: the files changed (an edit here, the CLI, or the other Mac through Syncthing). "change" gets
+  // every event this Mac has seen since, by its ingest sequence: late-synced ones from an offline Mac too.
   const refresh = useCallback(async () => {
     if (!slug) return;
     const m = await loadMap(slug);
     if (!m) return;
-    const since = lastAt.current[slug];
-    if (since) {
-      const { events } = await api(`${base(slug)}/events?since=${encodeURIComponent(since)}&limit=200`).catch(() => ({ events: [] }));
-      if (events.length) rmap.emit("change", { slug, events });
-    }
+    const after = lastSeq.current[slug] ?? m.seq;
+    let events = [], page = { next: null };
+    do {
+      page = await api(`${base(slug)}/events?after=${after}&limit=1000${page.next ? "&before=" + encodeURIComponent(page.next) : ""}`)
+        .catch(() => ({ events: [], next: null, seq: after }));
+      events = events.concat(page.events);
+      lastSeq.current[slug] = Math.max(lastSeq.current[slug] ?? 0, page.seq ?? after);
+    } while (page.next);
+    if (events.length) rmap.emit("change", { slug, events });
   }, [slug]);
-  useEffect(() => {
-    if (!slug || !map) return;
-    if (!lastAt.current[slug]) api(`${base(slug)}/events?limit=1`).then(({ events }) => { lastAt.current[slug] = events[0]?.at || "0"; }).catch(() => {});
-  }, [slug, map]);
-  useEffect(() => rmap.on("change", ({ slug: s, events }) => { if (events[0]) lastAt.current[s] = events[0].at; }), []);
   useStamp(slug && `${base(slug)}/stamp`, map?.stamp, refresh);
 
   // One batch of changes; the result's events go to "change" subscribers right away.
@@ -167,7 +174,7 @@ export function RmapPage({ version, toast, lines = [], onAsk, onOpenNote, onOpen
     api: { apply, refresh, base: slug ? base(slug) : null, call: api },
   }, [slug, map, meta, projects, selected, layers, apply, refresh]);
 
-  if (!projects || !meta) return html`<div class="page rmap"><div class="page-inner wide"><p class="muted">${error || t("rmap.loading")}</p></div></div>`;
+  if (!projects || !meta || !ready) return html`<div class="page rmap"><div class="page-inner wide"><p class="muted">${error || t("rmap.loading")}</p></div></div>`;
 
   const created = async (p) => { setAdding(false); await loadProjects(); setActive(p.slug); };
   if (!projects.length && !views.length) return html`<div class="page rmap"><div class="page-inner wide">

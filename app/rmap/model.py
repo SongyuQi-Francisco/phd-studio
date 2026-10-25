@@ -8,6 +8,8 @@ import math
 import re
 from typing import Any
 
+from . import registry
+
 # Node types, in the left-to-right order of the map's columns. `col` is the column hint for the layout
 # (None: wherever the graph puts it, next to its parent).
 NODE_TYPES: dict[str, dict[str, Any]] = {
@@ -83,7 +85,8 @@ def _pin(v: Any) -> dict[str, float] | None:
 
 
 def _ext(v: Any, old: Any) -> dict[str, Any] | None:
-    """`ext` holds extension data per extension key; a patch replaces only the keys it names (None drops one)."""
+    """`ext` holds extension data per extension key; a patch replaces only the keys it names (None drops one).
+    A plugin that registered the key (registry.ext_field) validates its value; other values must be small JSON."""
     if not isinstance(v, dict):
         raise ValueError("ext 应为对象")
     out = dict(old) if isinstance(old, dict) else {}
@@ -93,11 +96,11 @@ def _ext(v: Any, old: Any) -> dict[str, Any] | None:
         if val is None:
             out.pop(k, None)
         else:
-            out[k] = val
+            out[k] = registry.clean_ext(k, val)
     return out or None
 
 
-NODE_FIELDS = ("type", "title", "status", "body", "pin", "order", "tags", "ext")
+NODE_FIELDS = ("type", "title", "status", "body", "pin", "order", "tags", "entity", "ext")
 EDGE_FIELDS = ("kind", "label")
 PROJECT_FIELDS = ("title", "line", "note", "description", "archived")
 
@@ -127,6 +130,8 @@ def node_patch(patch: dict[str, Any], old: dict[str, Any] | None = None) -> dict
             out[k] = _tags(v or []) or None
         elif k == "ext":
             out[k] = _ext(v, (old or {}).get("ext"))
+        elif k == "entity":
+            out[k] = registry.entity(v)
     if old is None:
         if not out.get("title"):
             raise ValueError("节点需要标题")
@@ -166,9 +171,11 @@ def project_patch(patch: dict[str, Any]) -> dict[str, Any]:
 
 def slugify(title: str) -> str:
     """Folder name for a project: lower-case letters and digits (any script) joined by '-'."""
-    s = re.sub(r"[^\w]+", "-", title.lower(), flags=re.UNICODE).strip("-_")
-    return s[:48].strip("-_")
+    s = re.sub(r"[^\w]+", "-", title.lower(), flags=re.UNICODE).replace("_", "-").strip("-")
+    return re.sub(r"-{2,}", "-", s)[:48].strip("-")
 
 
 def valid_slug(slug: str) -> bool:
-    return bool(re.fullmatch(r"[^\W_][\w-]{0,47}", slug, flags=re.UNICODE))
+    """Lower case only: the Mac's disk ignores case, so Foo and foo would be one folder with two locks."""
+    return (slug == slug.lower() and "_" not in slug
+            and bool(re.fullmatch(r"[^\W_][\w-]{0,47}", slug, flags=re.UNICODE)))

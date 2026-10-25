@@ -29,7 +29,10 @@ WEB_DIR = STUDIO_DIR / "web"
 async def lifespan(_app: FastAPI):
     reaper = asyncio.create_task(registry.reap_idle())
     venues.refresh_in_background()
+    from .rmap import watch as rmap_watch  # research maps: hand events synced from the other Mac to subscribers
+    rmap_watch.start()
     yield
+    rmap_watch.stop()
     reaper.cancel()
     bilingual.stop_all()
     await registry.close_all()
