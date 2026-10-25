@@ -5,6 +5,7 @@ import { html, Icon, api } from "/lib.js";
 import { C, Ring, Progress } from "/charts.js";
 import { daysTo, Skeleton, Empty, Collapse } from "/ui.js";
 import { ChatPanel } from "/chat.js";
+import { t as rmapT } from "/rmap/strings.js";
 
 const KILL = { clear: ["未触发", "ok"], partial: ["部分触发", "warn"], triggered: ["已触发", "bad"] };
 const CONF = { high: 4, "medium-high": 3, medium: 2, "medium-low": 1, low: 1 };
@@ -33,7 +34,7 @@ function MiniRing({ d, color, label, sub, onClick }) {
   return onClick ? html`<button class="mring" onClick=${onClick} title=${title}>${body}</button>` : html`<div class="mring static" title=${title}>${body}</div>`;
 }
 
-function LineCard({ l, onOpenNote, onLine, onOpenVenue, i, active }) {
+function LineCard({ l, onOpenNote, onLine, onOpenVenue, onMap, i, active }) {
   const [more, setMore] = useState(false);
   const ms = l.milestones.filter((m) => m.status !== "done").slice(0, 2);
   const hit = l.kills.filter((k) => k.state !== "clear").length;
@@ -72,6 +73,9 @@ function LineCard({ l, onOpenNote, onLine, onOpenVenue, i, active }) {
     <div class="row-wrap line-actions">
       ${(l.pitch || l.latest_status || l.kills.length > 0) && html`<button class="chip" onClick=${() => setMore(!more)}><${Icon} name=${more ? "up" : "down"} sm />${more ? "收起" : "详情"}</button>`}
       ${l.path && html`<button class="chip" onClick=${() => onOpenNote(l.path)}><${Icon} name="note" sm />笔记</button>`}
+      ${onMap && (l.map || l.path) && html`<button class="chip" onClick=${() => onMap(l)}
+          title=${l.map ? rmapT("rmap.line.nodes", { n: l.map.nodes, v: l.map.verified }) : rmapT("rmap.seed.title")}>
+        <${Icon} name="topology" sm />${l.map ? html`${rmapT("rmap.line.open")}<b class="chip-n">${l.map.nodes}</b>` : rmapT("rmap.line.seed")}</button>`}
       <button class="chip" onClick=${() => onLine(l, "discuss")} title="这条线的专属对话，跨天保留上下文"><${Icon} name="sparkle" sm />${turns ? html`继续讨论<b class="chip-n">${turns}</b>` : "和助手讨论"}</button>
       <button class="chip" onClick=${() => onLine(l, "packet")} title="按模板起草一份导师汇报包，写入 Review Packets 前先给你看差异"><${Icon} name="file" sm />起草导师汇报包</button>
       ${l.packet && html`<button class="chip quiet" onClick=${() => onOpenNote(l.packet.path)} title=${l.packet.path}>上次汇报 ${ago(l.packet.date)}</button>`}
@@ -107,7 +111,7 @@ function Roadmap({ r, onOpenNote }) {
   </section>`;
 }
 
-export function DirectionPage({ version, onOpenNote, onLine, activeLine, onOpenVenue }) {
+export function DirectionPage({ version, onOpenNote, onLine, activeLine, onOpenVenue, onMap }) {
   const [d, setD] = useState(null);
   useEffect(() => { api("/api/direction").then(setD); }, [version]);
   if (!d) return html`<${Skeleton} tiles=${0} rows=${3} />`;
@@ -121,7 +125,7 @@ export function DirectionPage({ version, onOpenNote, onLine, activeLine, onOpenV
     ${d.roadmap.phases.length > 0 && html`<${Roadmap} r=${d.roadmap} onOpenNote=${onOpenNote} />`}
     <h3 class="sec">研究线</h3>
     ${lines.length === 0 && html`<div class="card"><${Empty} icon="compass" title="还没有研究线" hint="在 vault 的 Ideas 文件夹里建 type: research-line 的笔记，这里会出现它的阶段、目标倒计时和 Kill criteria。" /></div>`}
-    <div class="lines stagger">${lines.map((l, i) => html`<${LineCard} l=${l} i=${i} onOpenNote=${onOpenNote} onLine=${onLine} onOpenVenue=${onOpenVenue}
+    <div class="lines stagger">${lines.map((l, i) => html`<${LineCard} l=${l} i=${i} onOpenNote=${onOpenNote} onLine=${onLine} onOpenVenue=${onOpenVenue} onMap=${onMap}
       active=${activeLine === l.chat_key} />`)}</div>
     <div class="two-col">
       <section class="card">

@@ -98,6 +98,8 @@ def lines() -> list[dict[str, Any]]:
     out.sort(key=lambda x: (x["kind"] != "research-line", str(x["status"]) in ("paused", "archived"),
                             x["priority"] if isinstance(x["priority"], int) else 9, x["name"]))
     line_chat.annotate(out)  # chat key, chat size and last review packet per research line
+    from .rmap import lines as rmap_lines  # research map of each line (研究地图), if it has one
+    rmap_lines.annotate(out)
     return out
 
 

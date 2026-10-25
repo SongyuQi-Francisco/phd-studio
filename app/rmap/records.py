@@ -90,3 +90,10 @@ class FieldStore(Store):
     @staticmethod
     def _merge_record(mine: dict[str, Any], theirs: dict[str, Any]) -> None:
         merge(mine, theirs)
+
+    @staticmethod
+    def _clean(r: dict[str, Any]) -> dict[str, Any]:
+        out = Store._clean(r)
+        if "clock" in out:  # after the fields, so the YAML still reads top-down
+            out["clock"] = out.pop("clock")
+        return out

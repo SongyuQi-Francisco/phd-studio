@@ -20,7 +20,7 @@ Research Maps/
     evidence.yaml             evidence attachments
     <kind>.yaml               one file per registered attachment kind (peers, results, ...)
     events/2026-10.yaml       the change log, one file per month
-    map.canvas                Obsidian Canvas view: generated, read-only (second PR)
+    map.canvas                Obsidian Canvas view: generated, read-only
 ```
 
 Folder names are lower case (the Mac's disk ignores case, so `Foo` and `foo` would be one folder with two
@@ -179,6 +179,34 @@ Operations: `node.add / update / delete`, `edge.add / update / delete`, `attach.
 (a results CSV is still one atomic batch). The CLI (#48) and the assistant's confirmed proposals use the
 same call.
 
+## The assistant: proposals
+
+The workbench assistant never writes a map directly. Its tools (`app/studio_tools.py`):
+
+- `map_read(project?)`: the list of maps, or one map in a compact form (nodes with parents and evidence,
+  the other edges, the latest log lines). Also offered to the read-only (non-Claude) models.
+- `map_propose(project | new_project, summary, ops)`: checks the batch (`simulate`) and stores it as a
+  proposal; the page shows it as a list of changes with 确认写入 / 放弃. A one-sentence progress update is
+  split into node changes + evidence + the sentence as the log line (`summary`).
+- `map_seed_draft(line)`: a first map drafted from a research-line note (`app/rmap/lines.py`): the working
+  title as the question and the pitch as its description, Hypotheses as paths, First Experiment, Kill
+  criteria (status from the note's "partially triggered / triggered" mentions), Related notes as
+  evidence, the latest dated status in the summary. The assistant refines it and proposes it with
+  `new_project`; the page can also propose it as is (直接从笔记生成, `POST /seed`).
+
+Proposals (`app/rmap/proposals.py`) live per Mac in `state/<device>/rmap_proposals.json` (made and
+confirmed on the same Mac). Confirming writes the batch as `who: assistant`; if the map changed and the
+batch no longer fits, confirming fails with the reason and the proposal stays.
+
+## Obsidian Canvas
+
+`app/rmap/canvas.py` writes `<project>/map.canvas` after every write it hears of (an `on_event`
+subscriber, so changes from the other Mac too) and when the map is read and the file is out of date (hand
+edits). Same layering as the page (on `dag_edges`) in a coarser grid, pinned positions carried over,
+evidence as wikilinks, colors by status, a header saying it is generated. The output is deterministic
+and only written when it changes, so both Macs produce the same file. Edits made to it in Obsidian are
+overwritten.
+
 ## HTTP
 
 All under `/api/rmap` (`app/rmap/api.py`). Edits from the page are the user's own, like the reading list
@@ -198,6 +226,8 @@ and the plan: no approval card. The assistant only proposes; the user confirms.
 | `POST /projects/{slug}/nodes` · `PATCH` · `DELETE /nodes/{id}` | `POST` takes node fields + `parent`, `edge` |
 | `POST /projects/{slug}/edges` · `PATCH` · `DELETE /edges/{id}` | |
 | `GET` · `POST /projects/{slug}/attachments/{kind}` · `PATCH` · `DELETE …/{id}` | any registered kind |
+| `GET /proposals?slug=` · `POST /proposals/{id}/apply` · `DELETE /proposals/{id}` | the assistant's proposals (for a map, plus the ones that would create one) |
+| `GET /lines` · `POST /seed {line}` | research lines with a note and their map · a first map drafted from a note, as a proposal |
 
 Live refresh: the change stamp hashes the names, sizes and times of the map's YAML files (conflict
 copies included, the generated canvas not), so an edit here, a `studio map` command or a file synced
@@ -242,7 +272,7 @@ every `.css` file is linked, before the page reads its first map; register throu
 Labels are string keys passed through `t()`. Registering the same id again replaces the item.
 CSS: the page root has class `rmap`; research map classes start with `mp-` and color tokens with `--mp-`
 (`--mp-verified`, `--mp-active`, `--mp-blocked`, `--mp-faded`, `--mp-peer`, …, set for light and dark).
-`web/rmap/util.js` has `safeUrl(u)` and `dagEdges(map, meta)`.
+`web/rmap/util.js` has `safeUrl(u)`, `dagEdges(map, meta)` and `useAutoFocus`.
 
 Events: `rmap.on(name, fn)` returns an unsubscribe function. `load` `{slug, map}` after a map is read;
 `change` `{slug, events}` with the events this Mac saw since the last `change` (own edits, CLI, the other
@@ -256,9 +286,29 @@ Every hook gets `ctx`:
 | `meta`, `projects` | `/meta`; the project list with counts |
 | `selected`, `select(id)` | the selected node |
 | `layers` | `{layer id: on}` |
-| `layout` | in layer hooks: `{boxes: {node id: {x, y, w, h, col}}, width, height}` in SVG map coordinates |
+| `layout` | in layer hooks: `{boxes: {node id: {x, y, w, h, col, pinned}}, edges, columns, width, height, hidden, hasKids, visible}` in SVG map coordinates (`web/rmap/layout.js`) |
+| `view` | `{focus, setFocus, collapsed, setCollapsed, fold(id)}`: focus and collapsed branches (collapse is kept per map on this Mac) |
 | `api` | `apply(ops, summary)` (a batch, then refresh), `refresh()`, `base` (the project's URL), `call` (`api` of lib.js) |
 | `t`, `toast`, `onAsk(prompt, label)`, `onOpenNote(path)`, `onOpenPaper(stem)` | strings, a toast, hand a task to the workbench assistant, open a vault note or a paper |
+
+## The page
+
+`web/rmap/page.js` (shell, project switcher, proposals, KPI row, live refresh), `map.js` (the SVG map),
+`layout.js` (pure layout), `detail.js` (detail panel), `kpis.js`, `proposals.js`, `describe.js` (one line per
+event), `strings.js`, `util.js`.
+
+- Layout: left to right, on `dagEdges`. A node's column is the furthest of its type's column (问题 · 路径 ·
+  子线 · 实验 · 结果) and one past the nodes it refines; depends edges order the walk but keep nodes in their
+  column; rows come from a depth-first walk with parents centered on their children. Pinned nodes keep
+  their place and take no row.
+- Editing: click selects; double-click renames (a node, or an edge's label); right-click opens status,
+  add child, link (细分 / 依赖 / 备选 / 冲突), collapse, focus, unpin, delete; dragging pins; Tab adds a
+  child of the next type, Enter renames, F focuses, Esc leaves focus or link mode. The detail panel edits
+  status, type, title, description (Markdown), evidence and links, and shows the node's history.
+- The core KPI tiles are registered like an extension's, with ids `depth`, `active` (with an 8-week trend
+  rebuilt from the log), `verified`, `blank` (open paths and sub-lines with nothing attached). Register
+  the same id to replace one (the peer layer redefines `blank` as "no peers").
+- The 方向 page's research-line cards link to their map (by `line` or `note` path), or draft one.
 
 ## Strings
 
