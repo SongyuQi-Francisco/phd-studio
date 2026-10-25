@@ -27,6 +27,7 @@ extra_read_dirs = []                           # other folders Claude may read, 
 # review_packets = "Review Packets"             # advisor packets are written here
 # templates = "Templates"                       # default: the folder of idea_template
 # review_template = "Templates/Review Packet Template.md"  # default: found in templates, else a built-in one
+research_maps = "Research Maps"                # research maps (研究地图): one folder per project, see docs/research-map.md
 
 [profile]
 # Who you are and what you work on; goes into Claude's system prompt.

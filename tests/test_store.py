@@ -252,3 +252,52 @@ def test_concurrent_adds_do_not_lose_records(st: Store):
     rows = st.load()["things"]
     assert len(rows) == 60
     assert len({r["id"] for r in rows}) == 60
+
+
+# ---------- options ----------
+
+
+def test_editing_can_skip_the_write_when_nothing_changed(st: Store):
+    st.add("things", {"name": "a"}, "t")
+    mtime = st.path.stat().st_mtime_ns
+    with st.editing(skip_unchanged=True) as data:
+        assert data["things"][0]["name"] == "a"
+    assert st.path.stat().st_mtime_ns == mtime
+    with st.editing(skip_unchanged=True) as data:
+        data["things"][0]["name"] = "b"
+    assert st.load()["things"][0]["name"] == "b"
+
+
+def test_skip_unchanged_still_saves_a_merged_conflict_copy(st: Store):
+    write_yaml(st.path, things=[{"id": "t1", "name": "a", "updated_at": "2026-10-24T10:00:00"}])
+    write_yaml(conflict_copy(st), things=[{"id": "t2", "name": "b", "updated_at": "2026-10-24T10:00:00"}])
+    with st.editing(skip_unchanged=True):
+        pass
+    assert {r["id"] for r in read_yaml(st)["things"]} == {"t1", "t2"}
+
+
+def test_no_file_is_created_for_an_unchanged_missing_store(st: Store):
+    with st.editing(skip_unchanged=True):
+        pass
+    assert not st.path.exists()
+
+
+def test_a_failed_edit_writes_nothing(st: Store):
+    st.add("things", {"name": "a"}, "t")
+    before = st.path.read_bytes()
+    with pytest.raises(RuntimeError):
+        with st.editing() as data:
+            data["things"][0]["name"] = "half done"
+            raise RuntimeError("boom")
+    assert st.path.read_bytes() == before
+
+
+def test_stores_with_the_same_file_name_can_have_their_own_lock_and_temp_file():
+    a = Store(config.VAULT_DIR / "A" / "map.yaml", ("things",), "", name="rmap-a")
+    b = Store(config.VAULT_DIR / "B" / "map.yaml", ("things",), "", name="rmap-b")
+    default = Store(config.VAULT_DIR / "C" / "map.yaml", ("things",), "")
+    assert a._lock != b._lock and a._tmp != b._tmp
+    assert default._lock.name == "map.lock" and default._tmp.name == "map.yaml.tmp"
+    a.add("things", {"n": 1}, "t")
+    b.add("things", {"n": 2}, "t")
+    assert [r["n"] for r in a.load()["things"]] == [1] and [r["n"] for r in b.load()["things"]] == [2]

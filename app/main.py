@@ -29,7 +29,10 @@ WEB_DIR = STUDIO_DIR / "web"
 async def lifespan(_app: FastAPI):
     reaper = asyncio.create_task(registry.reap_idle())
     venues.refresh_in_background()
+    from .rmap import watch as rmap_watch  # research maps: hand events synced from the other Mac to subscribers
+    rmap_watch.start()
     yield
+    rmap_watch.stop()
     reaper.cancel()
     bilingual.stop_all()
     await registry.close_all()
@@ -604,4 +607,6 @@ from .reminders_api import router as reminders_router  # noqa: E402  (Settings �
 app.include_router(reminders_router)
 from .model_api import router as model_router  # noqa: E402  (model picker: providers, per-conversation binding)
 app.include_router(model_router)
+from .rmap.api import router as rmap_router  # noqa: E402  (研究地图: research maps, extension plugins)
+app.include_router(rmap_router)
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")

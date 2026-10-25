@@ -67,6 +67,8 @@ EVIDENCE = _paths.get("evidence", "")
 REVIEW_PACKETS = _paths.get("review_packets", "")
 TEMPLATES = _paths.get("templates", "")
 REVIEW_TEMPLATE = _paths.get("review_template", "")  # advisor packet template; default: found in TEMPLATES
+# Research maps (研究地图): one folder per project under this vault folder; see docs/research-map.md.
+RMAP_DIR = VAULT_DIR / _paths.get("research_maps", "Research Maps")
 ZOTERO_DIR = _p(_paths.get("zotero", "~/Zotero"))
 SECRETS_DIR = _p(_paths.get("secrets", "~/.config/secrets"))
 _cli = os.path.expanduser(_paths.get("claude_cli", ""))

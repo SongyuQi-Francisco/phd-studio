@@ -15,7 +15,8 @@ REAL_PLACES = [Path.home() / "Library" / "Application Support" / "PhD Studio", P
 
 @pytest.mark.parametrize("name", ["VAULT_DIR", "PAPERS_DIR", "VAULT_PDFS_DIR", "READING_QUEUE", "READING_LIST", "PLAN_FILE",
                                   "IDEAS_FILE", "VENUE_OVERRIDES_FILE", "AGENTS_MD", "DATA_DIR", "PDF_CACHE_DIR", "TEXT_DIR", "CROPS_DIR",
-                                  "BILINGUAL_DIR", "STATE_DIR", "CHATS_DIR", "SETTINGS_FILE", "ZOTERO_DIR", "SECRETS_DIR"])
+                                  "BILINGUAL_DIR", "STATE_DIR", "CHATS_DIR", "SETTINGS_FILE", "ZOTERO_DIR", "SECRETS_DIR",
+                                  "RMAP_DIR"])
 def test_config_paths_live_inside_the_sandbox(name):
     path = getattr(config, name)
     assert path.is_relative_to(ROOT), f"{name} = {path}"
