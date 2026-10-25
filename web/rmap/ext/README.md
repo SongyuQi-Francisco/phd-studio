@@ -10,7 +10,7 @@ import { html } from "/lib.js";
 import { rmap } from "/rmap/registry.js";
 
 rmap.strings({ zh: { "rmap.layer.peers": "同行层" }, en: { "rmap.layer.peers": "Peers" } });
-rmap.layer({ id: "peers", label: "rmap.layer.peers", accent: "var(--rm-peer)", node: (n, box, ctx) => html`<g>…</g>` });
+rmap.layer({ id: "peers", label: "rmap.layer.peers", accent: "var(--mp-peer)", node: (n, box, ctx) => html`<g>…</g>` });
 ```
 
 The full contract (slots, `ctx`, events, back-end plugins) is in `docs/research-map.md`.

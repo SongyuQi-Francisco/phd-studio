@@ -185,6 +185,8 @@ every `.css` file is linked; register through `rmap`:
 | `rmap.strings` | `{zh: {...}, en: {...}}` | the extension's own UI strings |
 
 Labels are string keys passed through `t()`. Registering the same id again replaces the item.
+CSS: the page root has class `rmap`; research map classes start with `mp-` and color tokens with `--mp-`
+(`--mp-verified`, `--mp-active`, `--mp-blocked`, `--mp-faded`, `--mp-peer`, …, set for light and dark).
 
 Events: `rmap.on(name, fn)` returns an unsubscribe function. `load` `{slug, map}` after a map is read;
 `change` `{slug, events}` with new log events (own edits, CLI, the other Mac); `select` `{slug, node}`;

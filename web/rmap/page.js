@@ -51,7 +51,7 @@ function NewProject({ lines, onCreated, onCancel, toast }) {
     e.preventDefault();
     try { onCreated(await api("/api/rmap/projects", { json: { title, line: line || null } })); } catch (err) { toast(err.message); }
   };
-  return html`<form class="rm-new" onSubmit=${create}>
+  return html`<form class="mp-new" onSubmit=${create}>
     <input autoFocus placeholder=${t("rmap.project.title")} value=${title} onInput=${(e) => setTitle(e.target.value)} />
     <select value=${line} onChange=${(e) => setLine(e.target.value)}>
       <option value="">${t("rmap.project.line")}</option>
@@ -65,11 +65,11 @@ function NewProject({ lines, onCreated, onCancel, toast }) {
 // Placeholder map: one column per node type. The SVG map view replaces it (it lays nodes out, draws edges and layers).
 function TypeColumns({ ctx }) {
   const cols = ctx.meta.node_types.filter((nt) => ctx.map.nodes.some((n) => n.type === nt.key));
-  return html`<div class="rm-cols">
-    ${cols.map((nt) => html`<div class="rm-col"><div class="rm-cap">${typeLabel(nt.key)}</div>
-      ${ctx.map.nodes.filter((n) => n.type === nt.key).map((n) => html`<button class=${"rm-card st-" + (n.status || "todo") + (ctx.selected === n.id ? " sel" : "")}
+  return html`<div class="mp-cols">
+    ${cols.map((nt) => html`<div class="mp-col"><div class="mp-cap">${typeLabel(nt.key)}</div>
+      ${ctx.map.nodes.filter((n) => n.type === nt.key).map((n) => html`<button class=${"mp-card st-" + (n.status || "todo") + (ctx.selected === n.id ? " sel" : "")}
           onClick=${() => ctx.select(n.id)}>
-        <b>${n.title}</b><span class="rm-st"><i />${statusLabel(n.status)}</span></button>`)}
+        <b>${n.title}</b><span class="mp-st"><i />${statusLabel(n.status)}</span></button>`)}
     </div>`)}
   </div>`;
 }
@@ -82,22 +82,22 @@ export function Evidence({ node, ctx }) {
     else if (a.type === "paper") ctx.onOpenPaper?.(a.target);
     else ctx.onOpenNote?.(a.target);
   };
-  return html`<div class="rm-sec"><h4>${t("rmap.evidence")}<small>${items.length}</small></h4>
-    <div class="rm-chips">${items.map((a) => html`<button class=${"rm-chip " + (a.stance || "supports")} title=${a.note || a.target} onClick=${() => open(a)}>
+  return html`<div class="mp-sec"><h4>${t("rmap.evidence")}<small>${items.length}</small></h4>
+    <div class="mp-chips">${items.map((a) => html`<button class=${"mp-chip " + (a.stance || "supports")} title=${a.note || a.target} onClick=${() => open(a)}>
       <${Icon} name=${a.type === "url" ? "external" : a.type === "paper" ? "book" : "note"} sm />${a.title || a.target}</button>`)}</div>
   </div>`;
 }
 
 function Detail({ ctx }) {
   const node = ctx.map.nodes.find((n) => n.id === ctx.selected);
-  if (!node) return html`<aside class="rm-detail empty"><span class="muted">${t("rmap.select.hint")}</span></aside>`;
-  return html`<aside class="rm-detail">
-    <div class="rm-dh"><span class="rm-type">${typeLabel(node.type)}</span>
-      <span class=${"rm-pill st-" + (node.status || "todo")}><i />${statusLabel(node.status)}</span></div>
+  if (!node) return html`<aside class="mp-detail empty"><span class="muted">${t("rmap.select.hint")}</span></aside>`;
+  return html`<aside class="mp-detail">
+    <div class="mp-dh"><span class="mp-type">${typeLabel(node.type)}</span>
+      <span class=${"mp-pill st-" + (node.status || "todo")}><i />${statusLabel(node.status)}</span></div>
     <h3>${node.title}</h3>
-    ${node.body && html`<div class="md rm-body" dangerouslySetInnerHTML=${{ __html: renderMarkdown(node.body) }} />`}
+    ${node.body && html`<div class="md mp-body" dangerouslySetInnerHTML=${{ __html: renderMarkdown(node.body) }} />`}
     <${Evidence} node=${node} ctx=${ctx} />
-    ${rmap.list("section").filter((s) => !s.when || s.when(node, ctx)).map((s) => html`<div class="rm-sec" key=${s.id}>
+    ${rmap.list("section").filter((s) => !s.when || s.when(node, ctx)).map((s) => html`<div class="mp-sec" key=${s.id}>
       ${s.label && html`<h4>${t(s.label)}</h4>`}${s.render(node, ctx)}</div>`)}
   </aside>`;
 }
@@ -184,13 +184,13 @@ export function RmapPage({ version, toast, lines = [], onAsk, onOpenNote, onOpen
       <div><h1>${t("rmap.title")}</h1>
         ${map && html`<div class="sub"><span>${map.project.title}</span>${map.project.line && html`<span class="tag">${map.project.line}</span>`}
           <span>${t("rmap.nodes", { n: map.nodes.length })}</span></div>`}</div>
-      <div class="rm-tools">
+      <div class="mp-tools">
         <div class="seg">
           ${views.map((v) => html`<button class=${active === "view:" + v.id ? "on" : ""} onClick=${() => pick("view:" + v.id)}>${t(v.label)}</button>`)}
           ${projects.map((p) => html`<button class=${!view && slug === p.slug ? "on" : ""} onClick=${() => pick(p.slug)}>${p.title}</button>`)}
         </div>
         <button class="btn ghost sm" title=${t("rmap.project.new")} onClick=${() => setAdding(!adding)}><${Icon} name="plus" sm /></button>
-        ${ctx && layerList.map((l) => html`<button class=${"rm-layer" + (layers[l.id] ?? l.default ? " on" : "")} style=${l.accent ? { "--acc": l.accent } : null}
+        ${ctx && layerList.map((l) => html`<button class=${"mp-layer" + (layers[l.id] ?? l.default ? " on" : "")} style=${l.accent ? { "--acc": l.accent } : null}
             onClick=${() => setLayers({ ...layers, [l.id]: !(layers[l.id] ?? l.default) })}>${t(l.label)}</button>`)}
         ${ctx && tools.map((tl) => tl.render ? html`<span key=${tl.id}>${tl.render(ctx)}</span>`
           : html`<button class="btn ghost sm" key=${tl.id} title=${t(tl.label)} onClick=${() => tl.run(ctx)}>${tl.icon && html`<${Icon} name=${tl.icon} sm />`}${!tl.icon && t(tl.label)}</button>`)}
@@ -198,9 +198,9 @@ export function RmapPage({ version, toast, lines = [], onAsk, onOpenNote, onOpen
     </div>
     ${adding && html`<${NewProject} lines=${lines} onCreated=${created} onCancel=${() => setAdding(false)} toast=${toast} />`}
     ${view ? view.render(ctx) : error ? html`<p class="muted">${t("rmap.error", { msg: error })}</p>` : !map ? html`<p class="muted">${t("rmap.loading")}</p>` : html`
-      ${kpis.length > 0 && html`<div class="kpis rm-kpis">${kpis.map((k) => html`<div class="kpi" key=${k.id}>${k.render(ctx)}</div>`)}</div>`}
-      <div class="rm-body-grid">
-        <div class="rm-canvas"><${Canvas} ctx=${ctx} /></div>
+      ${kpis.length > 0 && html`<div class="kpis mp-kpis">${kpis.map((k) => html`<div class="kpi" key=${k.id}>${k.render(ctx)}</div>`)}</div>`}
+      <div class="mp-body-grid">
+        <div class="mp-canvas"><${Canvas} ctx=${ctx} /></div>
         <${Detail} ctx=${ctx} />
       </div>`}
   </div></div>`;
