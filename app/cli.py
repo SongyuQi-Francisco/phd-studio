@@ -91,8 +91,10 @@ def _remind(a: argparse.Namespace) -> int:
         print(json.dumps(st, ensure_ascii=False, indent=2))
         return 0
     cfg, ag = st["settings"], st["agent"]
-    print(f"reminders {'on' if cfg['enabled'] else 'off'} · leads {cfg['leads']} · device {st['designated'] or '-'}"
-          f" (this Mac: {st['device']}) · LaunchAgent {'installed' if ag['installed'] else 'not installed'}")
+    names = {d["id"]: d["name"] for d in st["devices"]}
+    print(f"reminders {'on' if cfg['enabled'] else 'off'} · leads {cfg['leads']} at {cfg['time']}"
+          f" · sending Mac {names.get(st['designated'], st['designated'] or '-')} (this Mac: {st['device_name']})"
+          f" · LaunchAgent {'installed' if ag['installed'] else 'not installed'}")
     for u in st["upcoming"]:
         print(f"  {u['on']}  {u['title']}  ({u['subtitle']})")
     return 0

@@ -1,4 +1,4 @@
-"""The LaunchAgent that runs the reminder check a few times a day, with or without the workbench open.
+"""The LaunchAgent that runs the reminder check every hour, with or without the workbench open.
 
 ~/Library/LaunchAgents/local.phd-studio.reminders.plist. Installed and removed only from the button in
 Settings (POST /api/reminders/agent), never automatically: it changes the user's system setup.
@@ -11,22 +11,29 @@ What it runs:
   and notifications carry the app's name and icon, and a click opens the app.
 - Otherwise the project venv's Python: `.venv/bin/python -m app.cli remind --check`. Never
   sys.executable: inside the desktop app that is the native stub, which would just open a window.
+  With the project on the Desktop, macOS may stop that Python from reading it; status() reports
+  launchd's run count and last exit code, and the checker its own last outcome, so Settings shows it.
+
+Nothing from the installing process's environment goes into the plist, and only a workbench running
+on the project's own studio.toml may install: one started with another STUDIO_CONFIG (a sandbox, a
+test) would otherwise repoint the one agent at that config.
 """
 from __future__ import annotations
 
 import os
 import plistlib
+import re
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
-from .config import STUDIO_DIR
+from .config import CONFIG_FILE, STUDIO_DIR
 
 LABEL = "local.phd-studio.reminders"
 AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
 LOG = Path.home() / "Library" / "Logs" / "PhD Studio Reminders.log"
-CHECK_TIMES = ((9, 0), (13, 0), (18, 0))
+EVERY = "每小时整点"  # StartCalendarInterval below; reminders.CHECK_EVERY assumes it
 TASK = "remind --check"
 APP_NAMES = ("PhD Studio.app",)
 
@@ -76,9 +83,6 @@ def find_app() -> tuple[Path, Path] | None:
 def definition(found: tuple[Path, Path] | None | bool = True) -> dict[str, Any]:
     """The plist. found: find_app()'s result if already known (True = look it up)."""
     env = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "PYTHONUNBUFFERED": "1"}
-    for k in ("STUDIO_CONFIG", "STUDIO_DEVICE"):  # keep a non-default config / device name
-        if os.environ.get(k):
-            env[k] = os.environ[k]
     found = find_app() if found is True else found
     d: dict[str, Any] = {"Label": LABEL}
     if found:  # the stub changes into the project itself, as the app
@@ -90,7 +94,7 @@ def definition(found: tuple[Path, Path] | None | bool = True) -> dict[str, Any]:
     return {
         **d,
         "EnvironmentVariables": env,
-        "StartCalendarInterval": [{"Hour": h, "Minute": m} for h, m in CHECK_TIMES],
+        "StartCalendarInterval": [{"Minute": 0}],  # hourly; launchd runs a missed one on wake
         "RunAtLoad": True,  # also at login
         "ProcessType": "Background",
         "AssociatedBundleIdentifiers": ["local.phd-studio"],  # Login Items lists it under PhD Studio
@@ -107,29 +111,48 @@ def _domain() -> str:
     return f"gui/{os.getuid()}"
 
 
+def _job() -> dict[str, Any]:
+    """launchd's view of the job: loaded, how many runs, last exit code (None = never exited)."""
+    r = _launchctl("print", f"{_domain()}/{LABEL}")
+    if r.returncode:
+        return {"loaded": False}
+    runs = re.search(r"^\s*runs = (\d+)", r.stdout, re.M)
+    code = re.search(r"^\s*last exit code = (-?\d+)", r.stdout, re.M)
+    return {"loaded": True, "runs": int(runs.group(1)) if runs else None, "last_exit": int(code.group(1)) if code else None}
+
+
+def official_config() -> bool:
+    """This workbench runs on the project's own studio.toml (not a STUDIO_CONFIG sandbox)."""
+    return CONFIG_FILE.resolve() == (STUDIO_DIR / "studio.toml").resolve()
+
+
 def status() -> dict[str, Any]:
     p = plist_path()
     found = find_app() if sys.platform == "darwin" else None
     out: dict[str, Any] = {
         "supported": sys.platform == "darwin", "installed": p.exists(), "loaded": False, "path": str(p),
-        "times": [f"{h:02d}:{m:02d}" for h, m in CHECK_TIMES], "log": str(LOG),
+        "every": EVERY, "log": str(LOG), "can_install": official_config(),
         "runner": "app" if found else "python", "app": str(found[0]) if found else None,
     }
     if p.exists():
         try:
-            args = plistlib.loads(p.read_bytes()).get("ProgramArguments") or []
+            installed = plistlib.loads(p.read_bytes())
         except (OSError, plistlib.InvalidFileException):
-            args = []
+            installed = {}
+        args = installed.get("ProgramArguments") or []
         out["program"] = args[0] if args else None
         out["program_ok"] = bool(args) and Path(args[0]).exists()
-        out["current"] = args == definition(found)["ProgramArguments"]  # points at this checkout's app / venv
-        out["loaded"] = _launchctl("print", f"{_domain()}/{LABEL}").returncode == 0
+        out["installed_at"] = p.stat().st_mtime
+        out["current"] = installed == definition(found)  # this checkout's app / venv, same settings
+        out.update(_job())
     return out
 
 
 def install() -> dict[str, Any]:
     if sys.platform != "darwin":
         raise RuntimeError("后台提醒只支持 macOS")
+    if not official_config():
+        raise RuntimeError(f"这个工作台用的是另一份配置（{CONFIG_FILE}），不能从这里安装后台检查；请在正式的工作台里装")
     d = definition()
     if not Path(d["ProgramArguments"][0]).exists():
         raise RuntimeError(f"找不到 {d['ProgramArguments'][0]}：先在项目里运行 uv sync")

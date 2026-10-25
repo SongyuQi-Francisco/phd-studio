@@ -3,15 +3,22 @@
 Events are plan.timeline()'s: watched-venue deadlines (shown in local time), submission targets and
 milestones/Gates. At each lead time (default 14, 7, 3 and 1 days before, and on the day) one
 notification. A check (`studio remind --check`) sends what has come due; a LaunchAgent the user
-installs from Settings runs it a few times a day, so it works with the workbench closed.
+installs from Settings runs it every hour, so it works with the workbench closed.
+
+When a reminder comes due (due_times): at the daily reminder time (default 09:00) on its day; the
+day-of one also at least DAY_OF_MARGIN before the deadline. One that would land in quiet hours
+waits until they end, unless the deadline passes first: then it moves to just before they start.
 
 Never twice for the same event and lead time:
 - Settings and the log of sent reminders live in the vault next to plan.yaml (reminders.yaml, a
-  sync-safe Store), so both Macs see the same ones. Only the designated device sends, and the shared
-  log keeps a newly designated device from repeating what the old one already sent.
-- state/<device>/reminders.json keeps this device's own record of what it sent and its last check, so
-  a lost Syncthing conflict or a failed vault write cannot cause a repeat on this Mac.
-- An event's key includes its date: a moved deadline or milestone starts its reminders again.
+  sync-safe Store), so both Macs see the same ones. Only the designated Mac sends, and the shared
+  log keeps a newly designated Mac from repeating what the old one already sent. Macs are told apart
+  by a generated id kept in the data dir, not by the hostname, which changes with networks.
+- The data dir (per machine, not synced) keeps this Mac's own record of what it sent and of its
+  last check, so a lost Syncthing conflict or a failed vault write cannot cause a repeat here.
+- A venue deadline's key is venue + abstract/paper + date, not its title (the title of the same
+  deadline changes when ccfddl replaces the official-site fallback). A milestone's key has its date.
+  A moved deadline or milestone starts its reminders again.
 - When several lead times are due at once (the Mac was off), only the nearest one is sent.
 """
 from __future__ import annotations
@@ -19,16 +26,19 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import re
+import secrets
 from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from typing import Any, Callable, Iterator
 
 from . import notify, plan
-from .config import DATA_DIR, DEVICE, PLAN_FILE, STATE_DIR
+from .config import DATA_DIR, DEVICE, PLAN_FILE
 from .store import Store
 
 FILE = PLAN_FILE.with_name("reminders.yaml")
-LOCAL_FILE = STATE_DIR / "reminders.json"
+LOCAL_FILE = DATA_DIR / "reminders.json"
+MACHINE_FILE = DATA_DIR / "machine-id"
 LOCK = DATA_DIR / "reminders-check.lock"
 
 TYPES = ("target", "milestone", "venue")
@@ -39,8 +49,12 @@ DEFAULTS: dict[str, Any] = {
     "quiet": False,
     "quiet_start": "22:00",
     "quiet_end": "08:00",
-    "device": "",  # the one Mac that sends; set to this Mac when reminders are turned on
+    "time": "09:00",  # when a day's reminders come due
+    "device": "",  # machine_id() of the one Mac that sends; this Mac when reminders are turned on
 }
+OPEN_TARGET = ("planning", "writing")  # a submitted / accepted target no longer needs its deadlines
+DAY_OF_MARGIN = timedelta(hours=3)
+CHECK_EVERY = timedelta(hours=1)  # the LaunchAgent's interval (remind_agent.py)
 MAX_LEAD = 90
 MAX_PER_RUN = 4  # more than this at once: the most urgent ones, then one summary
 KEEP_SENT_DAYS = 30  # sent-log entries are dropped this long after their event
@@ -51,6 +65,21 @@ store = Store(FILE, ("settings", "devices", "sent"),
 
 KIND_LABEL = {"milestone": "里程碑", "gate": "Gate", "kill": "Kill 点", "deadline": "截止"}
 WEEKDAYS = "一二三四五六日"
+
+
+# ---------- this Mac ----------
+
+def machine_id() -> str:
+    """A stable id for this Mac, made once and kept in its (unsynced) data dir."""
+    try:
+        mid = MACHINE_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        mid = ""
+    if not re.fullmatch(r"[0-9a-f]{12}", mid):
+        mid = secrets.token_hex(6)
+        MACHINE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        MACHINE_FILE.write_text(mid + "\n", encoding="utf-8")
+    return mid
 
 
 # ---------- settings ----------
@@ -89,7 +118,7 @@ def _validate(patch: dict[str, Any]) -> dict[str, Any]:
             if not types or not any(types.values()):
                 raise ValueError("remind about at least one kind of event")
             out[k] = types
-        elif k in ("quiet_start", "quiet_end"):
+        elif k in ("quiet_start", "quiet_end", "time"):
             out[k] = _hhmm(v)
         else:
             out[k] = str(v or "").strip()
@@ -105,7 +134,7 @@ def save_settings(patch: dict[str, Any]) -> dict[str, Any]:
             data["settings"].append(rec)
         rec.update(clean)
         if rec.get("enabled") and not rec.get("device"):
-            rec["device"] = DEVICE
+            rec["device"] = machine_id()
         rec["updated_at"] = _stamp()
     return settings()
 
@@ -124,7 +153,10 @@ def _local(dt: datetime, tz: tzinfo | None) -> datetime:
 def events() -> list[dict[str, Any]]:
     """The timeline's upcoming events, normalised for reminders (key, type, title, at, open, …)."""
     tl = plan.timeline(days_back=1, days_ahead=MAX_LEAD + 400)
-    targets = {t["id"]: t for t in tl["targets"]}
+    open_targets: dict[str, list[dict[str, Any]]] = {}
+    for t in tl["targets"]:  # every target, not just the one the timeline shows per venue
+        if t.get("status", "planning") in OPEN_TARGET:
+            open_targets.setdefault(t["venue"], []).append(t)
     dates = {m["id"]: m.get("date") for m in tl["milestones"]}
     out: list[dict[str, Any]] = []
     for e in tl["events"]:
@@ -136,11 +168,13 @@ def events() -> list[dict[str, Any]]:
                         "at": at, "kind": e.get("kind") or "milestone", "line": e.get("line"),
                         "open": {"view": "plan", "milestone": e["id"]}})
         else:
-            tgt = e.get("target")
-            if tgt and (targets.get(tgt["id"]) or {}).get("status") in ("submitted", "accepted"):
-                continue  # already sent in: no deadline reminders for it
-            out.append({"key": f"v:{e['venue']}:{e['title']}:{e['at']}", "type": "target" if tgt else "venue",
-                        "title": e["title"], "at": at, "venue": e["venue"], "target": tgt,
+            # A submitted or accepted target does not silence the venue (next year's edition, another
+            # paper aimed there): its deadlines stay reminders for a watched venue.
+            tgts = open_targets.get(e["venue"], [])
+            stage = e.get("stage") or ("abstract" if "摘要" in e["title"] else "deadline")
+            out.append({"key": f"v:{e['venue']}:{stage}:{at.astimezone(timezone.utc).date()}",
+                        "type": "target" if tgts else "venue", "title": e["title"], "at": at, "venue": e["venue"],
+                        "targets": [{"id": t["id"], "title": t["title"], "line": t.get("line")} for t in tgts],
                         "ccf": e.get("ccf"), "core": e.get("core"),
                         "open": {"view": "timeline", "venue": e["venue"]}})
     return out
@@ -148,12 +182,6 @@ def events() -> list[dict[str, Any]]:
 
 def sent_id(key: str, lead: int) -> str:
     return "s" + hashlib.sha1(f"{key}#{lead}".encode()).hexdigest()[:12]
-
-
-def _lead_for(days_left: int, leads: list[int]) -> int | None:
-    """The nearest lead time that has come due, or None when the event is further off than all."""
-    due = [x for x in leads if x >= days_left]
-    return min(due) if due else None
 
 
 def in_quiet(cfg: dict[str, Any], now: datetime, tz: tzinfo | None = None) -> bool:
@@ -166,37 +194,81 @@ def in_quiet(cfg: dict[str, Any], now: datetime, tz: tzinfo | None = None) -> bo
     return start <= t < end if start < end else (t >= start or t < end)
 
 
+def _wall(day: date, hhmm: str, tz: tzinfo | None) -> datetime:
+    """That local wall-clock time on that day."""
+    naive = datetime.combine(day, time.fromisoformat(hhmm))
+    return naive.replace(tzinfo=tz) if tz else naive.astimezone()
+
+
+def _quiet_period(cfg: dict[str, Any], t: datetime, tz: tzinfo | None) -> tuple[datetime, datetime] | None:
+    """(start, end) of the quiet hours t falls in, or None."""
+    if not in_quiet(cfg, t, tz):
+        return None
+    lt = _local(t, tz)
+    day, qs, qe = lt.date(), cfg["quiet_start"], cfg["quiet_end"]
+    if time.fromisoformat(qs) < time.fromisoformat(qe):
+        return _wall(day, qs, tz), _wall(day, qe, tz)
+    if lt.time() >= time.fromisoformat(qs):
+        return _wall(day, qs, tz), _wall(day + timedelta(days=1), qe, tz)
+    return _wall(day - timedelta(days=1), qs, tz), _wall(day, qe, tz)
+
+
+def due_times(e: dict[str, Any], cfg: dict[str, Any], tz: tzinfo | None = None) -> dict[int, datetime]:
+    """When each lead time's reminder for the event comes due."""
+    at = e["at"]
+    day = _local(at, tz).date()
+    out = {}
+    for lead in cfg["leads"]:
+        t = _wall(day - timedelta(days=lead), cfg["time"], tz)
+        if lead == 0:  # on the day, and before the deadline even when it is early in the morning
+            t = max(min(t, at - DAY_OF_MARGIN), _wall(day, "00:00", tz))
+        quiet = _quiet_period(cfg, t, tz)
+        if quiet:  # after quiet hours; before them when the deadline would pass meanwhile
+            t = quiet[1] if quiet[1] < at else quiet[0] - CHECK_EVERY
+        out[lead] = t
+    return out
+
+
 def due(evs: list[dict[str, Any]], cfg: dict[str, Any], now: datetime, sent: set[str],
         tz: tzinfo | None = None) -> list[dict[str, Any]]:
-    """Reminders to send now, most urgent first. Pure: no clock, no files."""
+    """Reminders to send now, most urgent first: per event, the nearest lead time that has come due.
+    Pure: no clock, no files."""
     today = _local(now, tz).date()
-    out = []
+    out, seen = [], set()
     for e in evs:
         if not cfg["types"].get(e["type"], True) or e["at"] <= now:
             continue
-        days_left = (_local(e["at"], tz).date() - today).days
-        lead = _lead_for(days_left, cfg["leads"])
-        if lead is None or sent_id(e["key"], lead) in sent:
+        reached = [lead for lead, t in due_times(e, cfg, tz).items() if t <= now]
+        if not reached:
             continue
-        out.append({**e, "lead": lead, "days_left": days_left, "id": sent_id(e["key"], lead)})
+        lead = min(reached)
+        sid = sent_id(e["key"], lead)
+        if sid in sent or sid in seen:  # seen: two tracks with the same deadline are one reminder
+            continue
+        seen.add(sid)
+        out.append({**e, "lead": lead, "days_left": (_local(e["at"], tz).date() - today).days, "id": sid})
     out.sort(key=lambda r: r["at"])
     return out
 
 
 def schedule(evs: list[dict[str, Any]], cfg: dict[str, Any], now: datetime, sent: set[str],
              tz: tzinfo | None = None, days: int = 30) -> list[dict[str, Any]]:
-    """Upcoming reminders within `days`, by local date: what is due now, then each later lead time."""
-    today = _local(now, tz).date()
-    out = [{**r, "on": today.isoformat()} for r in due(evs, cfg, now, sent, tz)]
+    """Reminders coming within `days`, in order: what is due now, then each later lead time."""
+    out = [{**r, "due": now} for r in due(evs, cfg, now, sent, tz)]
+    seen = {r["id"] for r in out}
     for e in evs:
         if not cfg["types"].get(e["type"], True) or e["at"] <= now:
             continue
-        day = _local(e["at"], tz).date()
-        for lead in cfg["leads"]:
-            on = day - timedelta(days=lead)
-            if today < on <= today + timedelta(days=days) and sent_id(e["key"], lead) not in sent:
-                out.append({**e, "lead": lead, "days_left": lead, "id": sent_id(e["key"], lead), "on": on.isoformat()})
-    out.sort(key=lambda r: (r["on"], r["at"]))
+        times = due_times(e, cfg, tz)
+        reached = [lead for lead, t in times.items() if t <= now]
+        for lead, t in times.items():
+            sid = sent_id(e["key"], lead)
+            if now < t <= now + timedelta(days=days) and (not reached or lead < min(reached)) \
+                    and sid not in sent and sid not in seen:
+                seen.add(sid)
+                left = (_local(e["at"], tz).date() - _local(t, tz).date()).days
+                out.append({**e, "lead": lead, "days_left": left, "id": sid, "due": t})
+    out.sort(key=lambda r: (r["due"], r["at"]))
     return out
 
 
@@ -218,8 +290,7 @@ def message(r: dict[str, Any], tz: tzinfo | None = None) -> dict[str, str]:
         sub = " · ".join(x for x in (KIND_LABEL.get(r.get("kind"), "里程碑"), r.get("line")) if x)
         return {"title": f"{r['title']} · {_left(r['days_left'], True)}", "subtitle": sub, "body": f"{_when(at)} 到期"}
     if r["type"] == "target":
-        tgt = r.get("target") or {}
-        sub = "投稿目标 · " + (tgt.get("title") or "")
+        sub = "投稿目标 · " + "、".join(t["title"] for t in r.get("targets") or [])
     else:
         ranks = " / ".join(x for x in (r.get("ccf") and f"CCF {r['ccf']}", r.get("core") and f"CORE {r['core']}") if x)
         sub = "关注的会议" + (f" · {ranks}" if ranks else "")
@@ -262,15 +333,17 @@ def _check_lock() -> Iterator[None]:
 def mark_device(agent: bool | None = None, now: datetime | None = None, force: bool = False) -> None:
     """Note in the shared file that this Mac is around (at most every few hours, or when told)."""
     now = now or datetime.now(timezone.utc)
-    rec = next((r for r in store.load()["devices"] if r["id"] == DEVICE), None)
+    mid = machine_id()
+    rec = next((r for r in store.load()["devices"] if r["id"] == mid), None)
     fresh = rec and datetime.fromisoformat(rec.get("seen_at", "1970-01-01T00:00:00+00:00")) > now - HEARTBEAT
-    if rec and fresh and not force and (agent is None or rec.get("agent") == agent):
+    if rec and fresh and not force and rec.get("name") == DEVICE and (agent is None or rec.get("agent") == agent):
         return
     with store.editing() as data:
-        rec = next((r for r in data["devices"] if r["id"] == DEVICE), None)
+        rec = next((r for r in data["devices"] if r["id"] == mid), None)
         if rec is None:
-            rec = {"id": DEVICE, "created_at": _stamp(now)}
+            rec = {"id": mid, "created_at": _stamp(now)}
             data["devices"].append(rec)
+        rec["name"] = DEVICE  # the hostname, for display only
         rec["seen_at"] = _stamp(now)
         if agent is not None:
             rec["agent"] = agent
@@ -311,15 +384,25 @@ Sender = Callable[..., dict[str, Any]]
 
 def check(now: datetime | None = None, dry_run: bool = False, send: Sender | None = None,
           tz: tzinfo | None = None) -> dict[str, Any]:
-    """Send the reminders that are due. Returns what happened; dry_run sends and writes nothing."""
+    """Send the reminders that are due. Returns what happened; dry_run sends and writes nothing.
+
+    Every real run leaves its outcome (or its error) in the data dir for Settings to show."""
     now = now or datetime.now(timezone.utc)
-    send = send or notify.send
+    try:
+        return _check(now, dry_run, send or notify.send, tz)
+    except Exception as e:
+        if not dry_run:
+            _finish({"at": _stamp(now), "error": f"{type(e).__name__}: {e}"[:400]})
+        raise
+
+
+def _check(now: datetime, dry_run: bool, send: Sender, tz: tzinfo | None) -> dict[str, Any]:
     with _check_lock():
         cfg = settings()
         res: dict[str, Any] = {"at": _stamp(now), "device": DEVICE, "sent": [], "failed": [], "due": []}
         if not cfg["enabled"]:
             res["skipped"] = "off"
-        elif cfg["device"] and cfg["device"] != DEVICE:
+        elif cfg["device"] and cfg["device"] != machine_id():
             res.update(skipped="other_device", designated=cfg["device"])
         elif in_quiet(cfg, now, tz):
             res["skipped"] = "quiet"
@@ -358,7 +441,8 @@ def check(now: datetime | None = None, dry_run: bool = False, send: Sender | Non
 
 def _finish(res: dict[str, Any]) -> dict[str, Any]:
     local = _read_local()
-    local["last"] = {k: res.get(k) for k in ("at", "sent", "failed", "skipped", "via")}
+    local["last"] = {k: res[k] for k in ("at", "sent", "failed", "skipped", "via", "error") if res.get(k)}
+    local["last"]["ok"] = not res.get("error") and not res.get("failed")
     _write_local(local)
     return res
 
@@ -378,20 +462,22 @@ def status(now: datetime | None = None) -> dict[str, Any]:
 
     now = now or datetime.now(timezone.utc)
     cfg = settings()
-    data = store.load()
-    devices = sorted(data["devices"], key=lambda d: d.get("seen_at", ""), reverse=True)
-    if not any(d["id"] == DEVICE for d in devices):
-        devices.insert(0, {"id": DEVICE})
+    mid = machine_id()
+    devices = sorted(store.load()["devices"], key=lambda d: d.get("seen_at", ""), reverse=True)
+    if not any(d["id"] == mid for d in devices):
+        devices.insert(0, {"id": mid, "name": DEVICE})
     upcoming = schedule(events(), cfg, now, sent_ids()) if cfg["enabled"] else []
     local = _read_local()
+    today = _local(now, None).date()
     return {
-        "settings": cfg, "device": DEVICE, "designated": cfg["device"] or "",
-        "is_designated": not cfg["device"] or cfg["device"] == DEVICE,
-        "devices": [{k: d.get(k) for k in ("id", "seen_at", "agent")} for d in devices],
+        "settings": cfg, "device": mid, "device_name": DEVICE, "designated": cfg["device"] or "",
+        "is_designated": not cfg["device"] or cfg["device"] == mid,
+        "devices": [{"id": d["id"], "name": d.get("name") or d["id"], "seen_at": d.get("seen_at"),
+                     "agent": d.get("agent")} for d in devices],
         "agent": remind_agent.status(),
         "notify": {"via": notify.method(), "in_app": notify.in_app(), "auth": notify.authorization()},
         "last_check": local.get("last"), "last_test": local.get("last_test"),
-        "upcoming": [{**message(r), "on": r["on"], "lead": r["lead"], "type": r["type"],
-                      "days": (date.fromisoformat(r["on"]) - _local(now, None).date()).days} for r in upcoming[:12]],
+        "upcoming": [{**message(r), "on": _local(r["due"], None).date().isoformat(), "lead": r["lead"],
+                      "type": r["type"], "days": (_local(r["due"], None).date() - today).days} for r in upcoming[:12]],
         "upcoming_total": len(upcoming),
     }

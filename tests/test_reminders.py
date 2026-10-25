@@ -2,6 +2,7 @@
 the LaunchAgent definition and the CLI. Every clock here is fake; nothing is posted or installed."""
 from __future__ import annotations
 
+import json
 import plistlib
 import sys
 from datetime import date, datetime, timedelta, timezone
@@ -18,6 +19,7 @@ MEL = ZoneInfo("Pacific/Noumea")  # UTC+11 all year
 LA = ZoneInfo("America/Los_Angeles")
 LEADS = [14, 7, 3, 1, 0]
 REAL_SEND = notify.send  # the autouse fixture below replaces notify.send in every test
+NOON = datetime.now().astimezone().replace(hour=12, minute=0, second=0, microsecond=0)  # checks run "today at noon"
 
 
 @pytest.fixture(autouse=True)
@@ -77,6 +79,22 @@ def walk(event: dict[str, Any], start: datetime, end: datetime, every: timedelta
                 sent.add(r["id"])
                 out.append((now.astimezone(tz).date().isoformat(), r["lead"], r["days_left"]))
         now += every
+    return out
+
+
+def hourly(event: dict[str, Any], start: datetime, end: datetime, conf: dict[str, Any], tz: Any = MEL,
+           off: Any = None) -> list[tuple[str, int, int]]:
+    """Like the LaunchAgent: a check every hour on the hour, none in quiet hours (or while `off`).
+    Returns (local time sent, lead, days_left) per send."""
+    sent: set[str] = set()
+    out = []
+    now = start.replace(minute=0, second=0, microsecond=0)
+    while now <= end:
+        if not reminders.in_quiet(conf, now, tz) and not (off and off(now)):
+            for r in reminders.due([event], conf, now, sent, tz):
+                sent.add(r["id"])
+                out.append((now.astimezone(tz).strftime("%Y-%m-%d %H:%M"), r["lead"], r["days_left"]))
+        now += timedelta(hours=1)
     return out
 
 
@@ -154,6 +172,53 @@ def test_event_types_can_be_switched_off() -> None:
     assert [r["type"] for r in reminders.due(evs, conf, now, set(), MEL)] == ["milestone"]
 
 
+# ---------- when in the day (hourly checks) ----------
+
+
+def test_reminders_come_due_at_the_reminder_time_not_at_midnight() -> None:
+    at = datetime(2027, 1, 22, 22, 59, tzinfo=MEL)
+    got = hourly(ev(at), datetime(2027, 1, 1, tzinfo=MEL), at, cfg())
+    assert [(t[11:], lead) for t, lead, _ in got] == [("09:00", 14), ("09:00", 7), ("09:00", 3), ("09:00", 1),
+                                                     ("09:00", 0)]
+    got = hourly(ev(at), datetime(2027, 1, 1, tzinfo=MEL), at, cfg(time="18:00"))
+    assert {t[11:] for t, _, _ in got} == {"18:00"}
+
+
+def test_the_day_of_reminder_comes_before_an_early_deadline() -> None:
+    at = datetime(2027, 1, 22, 7, 0, tzinfo=MEL)  # before the 09:00 reminder time
+    got = hourly(ev(at), datetime(2027, 1, 1, tzinfo=MEL), at + timedelta(days=1), cfg())
+    assert got[-1] == ("2027-01-22 04:00", 0, 0)  # three hours ahead
+    at = datetime(2027, 1, 22, 1, 30, tzinfo=MEL)  # just after midnight: as early as that day allows
+    assert hourly(ev(at), datetime(2027, 1, 20, tzinfo=MEL), at, cfg())[-1] == ("2027-01-22 00:00", 0, 0)
+
+
+def test_long_quiet_hours_only_delay_reminders() -> None:
+    at = datetime(2027, 1, 22, 22, 59, tzinfo=MEL)
+    conf = cfg(quiet=True, quiet_start="08:30", quiet_end="18:30")  # covers 09:00, 13:00 and 18:00
+    got = hourly(ev(at), datetime(2027, 1, 1, tzinfo=MEL), at, conf)
+    assert [lead for _, lead, _ in got] == LEADS and {t[11:] for t, _, _ in got} == {"19:00"}
+
+
+def test_a_deadline_inside_quiet_hours_is_announced_before_they_start() -> None:
+    at = datetime(2027, 1, 22, 3, 0, tzinfo=MEL)
+    conf = cfg(quiet=True, quiet_start="22:00", quiet_end="08:00")
+    got = hourly(ev(at), datetime(2027, 1, 1, tzinfo=MEL), at, conf)
+    assert got[-2:] == [("2027-01-21 09:00", 1, 1), ("2027-01-21 21:00", 0, 1)]  # last one before 22:00
+
+
+def test_a_reminder_held_by_quiet_hours_goes_out_when_they_end() -> None:
+    at = datetime(2027, 1, 22, 22, 59, tzinfo=MEL)
+    conf = cfg(quiet=True, quiet_start="07:00", quiet_end="10:30", leads=[3])
+    assert hourly(ev(at), datetime(2027, 1, 1, tzinfo=MEL), at, conf) == [("2027-01-19 11:00", 3, 3)]
+
+
+def test_a_mac_asleep_through_a_lead_time_catches_up_once_awake() -> None:
+    at = datetime(2027, 1, 22, 22, 59, tzinfo=MEL)
+    asleep = (datetime(2027, 1, 15, 8, tzinfo=MEL), datetime(2027, 1, 16, 14, tzinfo=MEL))
+    got = hourly(ev(at), datetime(2027, 1, 1, tzinfo=MEL), at, cfg(), off=lambda n: asleep[0] <= n < asleep[1])
+    assert [(t, lead) for t, lead, _ in got][:2] == [("2027-01-08 09:00", 14), ("2027-01-16 14:00", 7)]
+
+
 # ---------- quiet hours ----------
 
 
@@ -184,8 +249,9 @@ def test_message_text() -> None:
         "body": "1月22日 周五 22:59 截止（本地时间）"}
     assert reminders.message({**base, "days_left": 1}, MEL)["title"].endswith("明天截止")
     assert reminders.message({**base, "days_left": 0}, MEL)["title"].endswith("今天截止")
-    tgt = {**base, "type": "target", "target": {"id": "t1", "title": "Paper A"}, "days_left": 7}
-    assert reminders.message(tgt, MEL)["subtitle"] == "投稿目标 · Paper A"
+    tgt = {**base, "type": "target", "targets": [{"id": "t1", "title": "Paper A"}, {"id": "t2", "title": "Paper B"}],
+           "days_left": 7}
+    assert reminders.message(tgt, MEL)["subtitle"] == "投稿目标 · Paper A、Paper B"
     ms = {**ev(at, key="m:1", type_="milestone", title="Gate 2", kind="gate", line="Project A"), "days_left": 0}
     assert reminders.message(ms, MEL) == {"title": "Gate 2 · 今天到期", "subtitle": "Gate · Project A",
                                           "body": "1月22日 周五 到期"}
@@ -197,22 +263,26 @@ def test_message_text() -> None:
 def test_settings_defaults_and_validation() -> None:
     s = reminders.settings()
     assert s["enabled"] is False and s["leads"] == LEADS and all(s["types"].values()) and s["device"] == ""
+    assert s["time"] == "09:00"
     assert not reminders.FILE.exists()  # reading never creates the shared file
     for bad in ({"leads": []}, {"leads": [-1]}, {"leads": [91]}, {"types": {t: False for t in reminders.TYPES}},
-                {"quiet_start": "25:00"}, {"enabled": "yes"}, {"nope": 1}):
+                {"quiet_start": "25:00"}, {"time": "noon"}, {"enabled": "yes"}, {"nope": 1}):
         with pytest.raises(ValueError):
             reminders.save_settings(bad)
 
 
 def test_turning_on_designates_this_mac_and_is_stored_in_the_vault() -> None:
-    s = reminders.save_settings({"enabled": True, "leads": [7, 1, 7], "quiet": True, "quiet_start": "23:00"})
-    assert s["device"] == config.DEVICE == "test"
-    assert s["leads"] == [7, 1] and s["quiet_start"] == "23:00"
+    s = reminders.save_settings({"enabled": True, "leads": [7, 1, 7], "quiet": True, "quiet_start": "23:00",
+                                 "time": "08:30"})
+    mid = reminders.machine_id()
+    assert s["device"] == mid and len(mid) == 12 and mid == reminders.machine_id()  # stable
+    assert reminders.MACHINE_FILE.is_relative_to(config.DATA_DIR)  # per machine, not synced
+    assert s["leads"] == [7, 1] and s["quiet_start"] == "23:00" and s["time"] == "08:30"
     assert reminders.FILE.is_relative_to(config.VAULT_DIR) and reminders.FILE.parent == config.PLAN_FILE.parent
     rec = yaml.safe_load(reminders.FILE.read_text(encoding="utf-8"))["settings"][0]
-    assert rec["enabled"] is True and rec["device"] == "test"
-    reminders.save_settings({"device": "other-mac"})
-    assert reminders.save_settings({"enabled": False})["device"] == "other-mac"  # switching off keeps the choice
+    assert rec["enabled"] is True and rec["device"] == mid
+    reminders.save_settings({"device": "0123456789ab"})
+    assert reminders.save_settings({"enabled": False})["device"] == "0123456789ab"  # switching off keeps the choice
 
 
 def test_unchecking_one_type_survives_the_round_trip() -> None:
@@ -232,16 +302,63 @@ def test_events_from_the_plan(venue_data: Any) -> None:
     _milestone(3, title="Finished", status="done")
     t = plan.add_target("Paper A", "KDD", line="Project A")
     plan.add_target("Paper C", "CIKM", status="submitted")
+    plan.add_target("Paper D", "KDD", status="accepted")
     evs = reminders.events()
     by_title = {e["title"]: e for e in evs}
     assert "Finished" not in by_title
     assert by_title["Draft"]["key"] == f"m:{m['id']}:{m['date']}" and by_title["Draft"]["open"] == {
         "view": "plan", "milestone": m["id"]}
     kdd = [e for e in evs if e.get("venue") == "kdd"]
-    assert kdd and all(e["type"] == "target" and e["target"]["id"] == t["id"] for e in kdd)
+    assert kdd and all(e["type"] == "target" and [x["id"] for x in e["targets"]] == [t["id"]] for e in kdd)
     assert kdd[0]["open"] == {"view": "timeline", "venue": "kdd"}
-    assert not any(e.get("venue") == "cikm" for e in evs)  # submitted: no more deadline reminders
+    assert sorted(e["key"].split(":")[2] for e in kdd) == ["abstract", "deadline"]
+    assert all("KDD" not in e["key"] for e in kdd)  # the display title is not part of the key
+    cikm = [e for e in evs if e.get("venue") == "cikm"]
+    assert cikm and all(e["type"] == "venue" for e in cikm)  # a submitted target does not mute the venue
     assert all(e["at"].tzinfo is not None for e in evs)
+
+
+def _timeline(events: list[dict[str, Any]], targets: list[dict[str, Any]]) -> dict[str, Any]:
+    return {"events": events, "targets": targets, "milestones": [], "watched": []}
+
+
+def _venue_event(title: str, at: str, stage: str = "deadline", venue: str = "acl") -> dict[str, Any]:
+    return {"type": "venue", "venue": venue, "title": title, "at": at, "stage": stage, "ccf": "A", "core": "A*"}
+
+
+def test_the_same_deadline_keeps_its_key_when_its_title_changes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The official-site fallback says 「主会」; ccfddl's edition, published later, does not."""
+    at = "2027-02-16T11:59:59+00:00"
+    before = _timeline([_venue_event("ACL 2027 主会 全文截止", at)], [])
+    after = _timeline([_venue_event("ACL 2027 全文截止", at)], [])
+    monkeypatch.setattr(plan, "timeline", lambda **kw: before)
+    old = reminders.events()[0]
+    monkeypatch.setattr(plan, "timeline", lambda **kw: after)
+    new = reminders.events()[0]
+    assert old["key"] == new["key"] == "v:acl:deadline:2027-02-16"
+    now = datetime(2027, 2, 14, 12, tzinfo=MEL)
+    sent = {r["id"] for r in reminders.due([old], cfg(), now, set(), MEL)}
+    assert sent and reminders.due([new], cfg(), now, sent, MEL) == []
+    # abstract and paper deadline on the same day stay two reminders; two tracks at one deadline are one
+    both = _timeline([_venue_event("ACL 2027 摘要截止", at, "abstract"), _venue_event("ACL 2027 全文截止", at),
+                      _venue_event("ACL 2027 Industry 全文截止", at)], [])
+    monkeypatch.setattr(plan, "timeline", lambda **kw: both)
+    assert len(reminders.due(reminders.events(), cfg(), now, set(), MEL)) == 2
+
+
+def test_a_closed_target_does_not_mute_its_venue(monkeypatch: pytest.MonkeyPatch) -> None:
+    at = "2027-02-16T11:59:59+00:00"
+    tl = _timeline([_venue_event("KDD 2027 全文截止", at, venue="kdd"), _venue_event("ACL 2027 全文截止", at)], [
+        {"id": "t1", "title": "Old paper", "venue": "kdd", "status": "accepted"},  # last year's
+        {"id": "t2", "title": "Paper A", "venue": "acl", "status": "submitted"},
+        {"id": "t3", "title": "Paper B", "venue": "acl", "status": "writing"},
+    ])
+    monkeypatch.setattr(plan, "timeline", lambda **kw: tl)
+    by_venue = {e["venue"]: e for e in reminders.events()}
+    assert by_venue["kdd"]["type"] == "venue" and by_venue["kdd"]["targets"] == []
+    assert by_venue["acl"]["type"] == "target" and [t["title"] for t in by_venue["acl"]["targets"]] == ["Paper B"]
+    now = datetime(2027, 2, 14, 12, tzinfo=MEL)
+    assert {r["venue"] for r in reminders.due(reminders.events(), cfg(), now, set(), MEL)} == {"kdd", "acl"}
 
 
 # ---------- the check ----------
@@ -254,7 +371,7 @@ def _now(days_before: float, at: datetime) -> datetime:
 def test_check_does_nothing_while_off() -> None:
     _milestone(1)
     send = Sender()
-    out = reminders.check(send=send)
+    out = reminders.check(now=NOON, send=send)
     assert out["skipped"] == "off" and send.sent == [] and not reminders.FILE.exists()
 
 
@@ -262,24 +379,25 @@ def test_check_sends_once_and_remembers_across_restarts() -> None:
     reminders.save_settings({"enabled": True})
     m = _milestone(3, title="Gate 2", kind="gate")
     send = Sender()
-    first = reminders.check(send=send)
+    first = reminders.check(now=NOON, send=send)
     assert first["sent"] == ["Gate 2 · 还有 3 天"]
     assert send.sent[0]["open"] == {"view": "plan", "milestone": m["id"]}
     assert send.sent[0]["subtitle"] == "Gate" and send.sent[0]["ident"].startswith("s")
     assert send.sent[0]["ask"] is False  # a background check never shows the permission prompt
-    assert reminders.check(send=send)["sent"] == [] and len(send.sent) == 1
+    assert reminders.check(now=NOON, send=send)["sent"] == [] and len(send.sent) == 1
     log = yaml.safe_load(reminders.FILE.read_text(encoding="utf-8"))["sent"]
     assert [(r["lead"], r["device"]) for r in log] == [(3, "test")]
-    assert reminders.LOCAL_FILE.is_relative_to(config.STATE_DIR)
-    assert reminders.status()["last_check"]["sent"] == []
+    assert reminders.LOCAL_FILE.is_relative_to(config.DATA_DIR)  # this Mac's own record: not synced
+    last = reminders.status(now=NOON)["last_check"]
+    assert last["ok"] is True and "sent" not in last  # nothing sent the second time
 
 
 def test_failed_send_is_retried_next_time() -> None:
     reminders.save_settings({"enabled": True})
     _milestone(2)
-    out = reminders.check(send=Sender(ok=False))
+    out = reminders.check(now=NOON, send=Sender(ok=False))
     assert out["sent"] == [] and out["failed"][0]["error"] == "nope"
-    assert reminders.check(send=Sender())["sent"] == ["Draft · 还有 2 天"]
+    assert reminders.check(now=NOON, send=Sender())["sent"] == ["Draft · 还有 2 天"]
 
 
 def test_denied_notifications_stop_the_run() -> None:
@@ -287,7 +405,7 @@ def test_denied_notifications_stop_the_run() -> None:
     _milestone(1, title="A")
     _milestone(2, title="B")
     send = Sender(ok=False, denied=True)
-    reminders.check(send=send)
+    reminders.check(now=NOON, send=send)
     assert len(send.sent) == 1
 
 
@@ -295,40 +413,71 @@ def test_only_the_designated_mac_sends() -> None:
     reminders.save_settings({"enabled": True, "device": "other-mac"})
     _milestone(1)
     send = Sender()
-    out = reminders.check(send=send)
+    out = reminders.check(now=NOON, send=send)
     assert out["skipped"] == "other_device" and out["designated"] == "other-mac" and send.sent == []
 
 
 def test_switching_macs_does_not_repeat_what_the_other_one_sent() -> None:
     reminders.save_settings({"enabled": True})
     _milestone(3)
-    first = reminders.check(send=Sender(), dry_run=True)["due"][0]
+    first = reminders.check(now=NOON, send=Sender(), dry_run=True)["due"][0]
     with reminders.store.editing() as data:  # what the other Mac wrote, synced over
         data["sent"].append({"id": first["id"], "event": "x", "lead": 3, "title": "Draft",
                              "at": (datetime.now(timezone.utc) + timedelta(days=3)).isoformat(), "device": "other-mac"})
     send = Sender()
-    assert reminders.check(send=send)["sent"] == [] and send.sent == []
+    assert reminders.check(now=NOON, send=send)["sent"] == [] and send.sent == []
 
 
 def test_a_sync_conflict_copy_of_the_log_still_counts() -> None:
     reminders.save_settings({"enabled": True})
     _milestone(3)
-    sid = reminders.check(send=Sender(), dry_run=True)["due"][0]["id"]
+    sid = reminders.check(now=NOON, send=Sender(), dry_run=True)["due"][0]["id"]
     at = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
     conflict = reminders.FILE.with_name("reminders.sync-conflict-20261025-120000-ABCDEFG.yaml")
     conflict.write_text(yaml.safe_dump({"sent": [{"id": sid, "lead": 3, "at": at, "device": "other-mac",
                                                   "updated_at": "2026-10-25T12:00:00"}]}), encoding="utf-8")
-    assert reminders.check(send=Sender())["sent"] == []
+    assert reminders.check(now=NOON, send=Sender())["sent"] == []
     assert not conflict.exists()
 
 
 def test_this_macs_own_record_guards_against_a_lost_vault_log() -> None:
     reminders.save_settings({"enabled": True})
     _milestone(3)
-    assert len(reminders.check(send=Sender())["sent"]) == 1
+    assert len(reminders.check(now=NOON, send=Sender())["sent"]) == 1
     with reminders.store.editing() as data:
         data["sent"].clear()  # e.g. the other Mac's older copy won a sync conflict
-    assert reminders.check(send=Sender())["sent"] == []
+    assert reminders.check(now=NOON, send=Sender())["sent"] == []
+
+
+def test_a_failed_run_leaves_its_error_for_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    reminders.save_settings({"enabled": True})
+
+    def unreadable() -> list:
+        raise PermissionError("Operation not permitted: plan.yaml")
+
+    readable = reminders.events
+    monkeypatch.setattr(reminders, "events", unreadable)
+    with pytest.raises(PermissionError):
+        reminders.check(now=NOON, send=Sender())
+    monkeypatch.setattr(reminders, "events", readable)  # not undo(): that would lift the sandbox's guards too
+    last = json.loads(reminders.LOCAL_FILE.read_text(encoding="utf-8"))["last"]
+    assert last["ok"] is False and "Operation not permitted" in last["error"]
+    reminders.check(now=NOON, send=Sender())
+    assert json.loads(reminders.LOCAL_FILE.read_text(encoding="utf-8"))["last"]["ok"] is True
+
+
+def test_the_sending_mac_is_known_by_its_id_not_its_hostname(monkeypatch: pytest.MonkeyPatch) -> None:
+    reminders.save_settings({"enabled": True})
+    _milestone(2)
+    monkeypatch.setattr(reminders, "DEVICE", "macbook-air-2")  # the hostname changed with the network
+    assert len(reminders.check(now=NOON, send=Sender())["sent"]) == 1
+    names = {d["id"]: d["name"] for d in reminders.store.load()["devices"]}
+    assert names == {reminders.machine_id(): "macbook-air-2"}
+    # another Mac that happens to have this hostname is still not the sending one
+    reminders.save_settings({"device": "0123456789ab"})
+    _milestone(1, title="Other")
+    out = reminders.check(now=NOON, send=Sender())
+    assert out["skipped"] == "other_device" and reminders.status(now=NOON)["is_designated"] is False
 
 
 def test_quiet_hours_hold_reminders_until_later() -> None:
@@ -345,16 +494,16 @@ def test_many_at_once_become_a_few_and_one_summary() -> None:
     for i in range(6):
         _milestone(1 + i % 3, title=f"M{i}")
     send = Sender()
-    out = reminders.check(send=send)
+    out = reminders.check(now=NOON, send=send)
     assert len(send.sent) == reminders.MAX_PER_RUN
     assert send.sent[-1]["title"] == "另有 3 项临近" and send.sent[-1]["open"] == {"view": "timeline"}
     assert len(out["sent"]) == 6
-    assert reminders.check(send=send)["sent"] == []
+    assert reminders.check(now=NOON, send=send)["sent"] == []
 
 
 def test_dry_run_sends_and_writes_nothing() -> None:
     _milestone(2)
-    out = reminders.check(send=Sender(), dry_run=True)
+    out = reminders.check(now=NOON, send=Sender(), dry_run=True)
     assert out["skipped"] == "off" and [d["title"] for d in out["due"]] == ["Draft · 还有 2 天"]
     assert not reminders.FILE.exists() and not reminders.LOCAL_FILE.exists()
 
@@ -368,7 +517,7 @@ def test_device_heartbeat_is_rate_limited() -> None:
     assert reminders.FILE.stat().st_mtime_ns == stamp
     reminders.mark_device(now=now + timedelta(hours=7))
     devs = reminders.store.load()["devices"]
-    assert [d["id"] for d in devs] == ["test"]
+    assert [(d["id"], d["name"]) for d in devs] == [(reminders.machine_id(), "test")]
 
 
 def test_old_sent_entries_are_pruned() -> None:
@@ -376,7 +525,7 @@ def test_old_sent_entries_are_pruned() -> None:
     with reminders.store.editing() as data:
         data["sent"].append({"id": "sold", "lead": 1, "at": "2025-01-01T00:00:00+00:00", "device": "test"})
     _milestone(1)
-    reminders.check(send=Sender())
+    reminders.check(now=NOON, send=Sender())
     assert "sold" not in {r["id"] for r in reminders.store.load()["sent"]}
 
 
@@ -384,8 +533,8 @@ def test_schedule_lists_upcoming_reminders_by_day() -> None:
     at = datetime(2027, 1, 22, 22, 59, tzinfo=MEL)
     now = datetime(2027, 1, 12, 9, tzinfo=MEL)
     rows = reminders.schedule([ev(at)], cfg(), now, set(), MEL)
-    assert [(r["on"], r["lead"]) for r in rows] == [("2027-01-12", 14), ("2027-01-15", 7), ("2027-01-19", 3),
-                                                   ("2027-01-21", 1), ("2027-01-22", 0)]
+    assert [(r["due"].astimezone(MEL).strftime("%m-%d %H:%M"), r["lead"]) for r in rows] == [
+        ("01-12 09:00", 14), ("01-15 09:00", 7), ("01-19 09:00", 3), ("01-21 09:00", 1), ("01-22 09:00", 0)]
     sent = {rows[0]["id"]}
     assert [r["lead"] for r in reminders.schedule([ev(at)], cfg(), now, sent, MEL)] == [7, 3, 1, 0]
 
@@ -393,8 +542,10 @@ def test_schedule_lists_upcoming_reminders_by_day() -> None:
 def test_status_shape() -> None:
     _milestone(4)
     reminders.save_settings({"enabled": True})
-    st = reminders.status()
-    assert st["device"] == "test" and st["is_designated"] and st["devices"][0]["id"] == "test"
+    st = reminders.status(now=NOON)
+    mid = reminders.machine_id()
+    assert st["device"] == mid and st["device_name"] == "test" and st["is_designated"]
+    assert st["devices"][0] == {"id": mid, "name": "test", "seen_at": None, "agent": None}
     assert st["agent"]["installed"] is False and st["upcoming"][0]["title"] == "Draft · 还有 4 天"
     assert st["upcoming"][0]["days"] == 0
 
@@ -404,7 +555,7 @@ def test_test_notification(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(notify, "send", send)
     assert reminders.test_notification()["ok"]
     assert send.sent[0]["title"] == "PhD Studio 截稿提醒" and send.sent[0]["ask"] is True  # only it may prompt
-    assert reminders.status()["last_test"]["ok"] is True
+    assert reminders.status(now=NOON)["last_test"]["ok"] is True
 
 
 # ---------- LaunchAgent ----------
@@ -417,9 +568,8 @@ def test_agent_runs_the_venv_python_not_sys_executable(monkeypatch: pytest.Monke
                                      "remind", "--check"]
     assert d["WorkingDirectory"] == str(config.STUDIO_DIR) and d["RunAtLoad"] is True
     assert d["Label"] == "local.phd-studio.reminders"
-    assert [(c["Hour"], c["Minute"]) for c in d["StartCalendarInterval"]] == list(remind_agent.CHECK_TIMES)
-    assert d["EnvironmentVariables"]["STUDIO_CONFIG"] == str(config.CONFIG_FILE)
-    assert "PHD_STUDIO_TASK" not in d["EnvironmentVariables"]
+    assert d["StartCalendarInterval"] == [{"Minute": 0}]  # every hour
+    assert set(d["EnvironmentVariables"]) == {"PATH", "PYTHONUNBUFFERED"}  # nothing from this process's env
 
 
 def _fake_app(root: Path, studio: Path, bundle: str = "local.phd-studio") -> Path:
@@ -445,6 +595,7 @@ def test_agent_prefers_the_app_built_from_this_checkout(monkeypatch: pytest.Monk
 
 def test_agent_install_and_uninstall(no_system: list, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(remind_agent, "official_config", lambda: True)
     py = tmp_path / "python"
     py.write_text("")
     monkeypatch.setattr(remind_agent, "venv_python", lambda: py)
@@ -453,6 +604,11 @@ def test_agent_install_and_uninstall(no_system: list, monkeypatch: pytest.Monkey
     assert plist.is_relative_to(tmp_path) and st["installed"] and st["loaded"] and st["current"]
     assert plistlib.loads(plist.read_bytes())["ProgramArguments"][0] == str(py)
     assert [c[0] for c in no_system] == ["bootout", "bootstrap", "kickstart", "print"]
+    # installed by something else (an older version, another config): not current
+    d = plistlib.loads(plist.read_bytes())
+    d["EnvironmentVariables"]["STUDIO_CONFIG"] = "/tmp/sandbox/studio.toml"
+    plist.write_bytes(plistlib.dumps(d))
+    assert remind_agent.status()["current"] is False
     st = remind_agent.uninstall()
     assert not plist.exists() and not st["installed"]
     assert no_system[-1][0] == "bootout"
@@ -460,10 +616,38 @@ def test_agent_install_and_uninstall(no_system: list, monkeypatch: pytest.Monkey
 
 def test_agent_install_needs_the_venv(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(remind_agent, "official_config", lambda: True)
     monkeypatch.setattr(remind_agent, "venv_python", lambda: tmp_path / "missing")
     with pytest.raises(RuntimeError, match="uv sync"):
         remind_agent.install()
     assert not remind_agent.plist_path().exists()
+
+
+def test_agent_install_refused_from_a_sandboxed_workbench(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(sys, "platform", "darwin")
+    py = tmp_path / "python"
+    py.write_text("")
+    monkeypatch.setattr(remind_agent, "venv_python", lambda: py)
+    assert config.CONFIG_FILE != config.STUDIO_DIR / "studio.toml"  # the tests run on STUDIO_CONFIG
+    assert remind_agent.official_config() is False and remind_agent.status()["can_install"] is False
+    with pytest.raises(RuntimeError, match="另一份配置"):
+        remind_agent.install()
+    assert not remind_agent.plist_path().exists()
+
+
+def test_agent_status_reports_launchd_runs_and_exit_code(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    out = "gui/501/local.phd-studio.reminders = {\n\truns = 3\n\tlast exit code = 78: EX_CONFIG\n}\n"
+    monkeypatch.setattr(remind_agent, "_launchctl",
+                        lambda *a: type("R", (), {"returncode": 0, "stdout": out, "stderr": ""})())
+    remind_agent.AGENTS_DIR.mkdir(parents=True)
+    remind_agent.plist_path().write_bytes(plistlib.dumps(remind_agent.definition()))
+    st = remind_agent.status()
+    assert st["loaded"] and st["runs"] == 3 and st["last_exit"] == 78 and st["installed_at"] > 0
+    monkeypatch.setattr(remind_agent, "_launchctl",
+                        lambda *a: type("R", (), {"returncode": 0, "stdout": "\truns = 0\n\tlast exit code = (never exited)\n",
+                                                  "stderr": ""})())
+    st = remind_agent.status()
+    assert st["runs"] == 0 and st["last_exit"] is None
 
 
 def test_agent_install_refused_off_macos(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -533,7 +717,8 @@ def test_api_routes(monkeypatch: pytest.MonkeyPatch) -> None:
     c = TestClient(api)
     assert c.get("/api/reminders").json()["settings"]["enabled"] is False
     r = c.put("/api/reminders/settings", json={"enabled": True, "leads": [7, 1]})
-    assert r.status_code == 200 and r.json()["settings"]["leads"] == [7, 1] and r.json()["designated"] == "test"
+    assert r.status_code == 200 and r.json()["settings"]["leads"] == [7, 1]
+    assert r.json()["designated"] == reminders.machine_id() and r.json()["devices"][0]["name"] == "test"
     assert c.put("/api/reminders/settings", json={"leads": []}).status_code == 400
     monkeypatch.setattr(sys, "platform", "linux")
     assert c.post("/api/reminders/agent", json={"install": True}).status_code == 400

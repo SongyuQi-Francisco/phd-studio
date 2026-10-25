@@ -205,7 +205,7 @@ def timeline(days_back: int = 14, days_ahead: int = 400) -> dict[str, Any]:
                                      + f"{'摘要' if kind == 'abstract' else '全文'}截止",
                             "at": t[kind], "days": delta, "core": e["core"], "ccf": e["ccf"],
                             "target": tgt and {"id": tgt["id"], "title": tgt["title"], "line": tgt.get("line")},
-                            "link": ed.get("link"), "comment": t.get("comment"),
+                            "link": ed.get("link"), "comment": t.get("comment"), "stage": kind,
                         })
     for m in data["milestones"]:
         at = datetime.fromisoformat(m["date"] + "T23:59:00").astimezone(timezone.utc)
