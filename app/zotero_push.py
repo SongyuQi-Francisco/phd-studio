@@ -153,61 +153,49 @@ def _query(con: sqlite3.Connection, sql: str, *args: Any, optional: bool = False
         raise
 
 
-def _drop_snapshot_copy() -> None:
-    """Remove the app's copy of zotero.sqlite, so the next read copies it afresh from Zotero's own file."""
-    with library._ZOTERO_LOCK:
-        for suffix in ("", "-wal", "-shm"):
-            Path(f"{library._ZOTERO_SNAPSHOT}{suffix}").unlink(missing_ok=True)
+def _empty_index() -> dict[str, Any]:
+    return {"by_ident": {}, "live": set(), "deleted": set(), "library": None, "collections": []}
 
 
 @lru_cache(maxsize=1)
 def _index(_stamp: float) -> dict[str, Any]:
     try:
-        return _build_index()
-    except (sqlite3.Error, OSError):
-        _drop_snapshot_copy()  # a bad copy heals with one fresh copy; a bad original fails closed below
-    try:
-        return _build_index()
+        out = library.read_zotero(_build_index)  # a bad copy heals with one fresh copy; a bad original fails closed
     except (sqlite3.Error, OSError) as e:
         raise SnapshotError(f"读不了本机 Zotero 数据库快照（{e.__class__.__name__}: {e}），为免重复，先不添加") from None
+    return _empty_index() if out is None else out  # no local Zotero database at all (only the Web API is used then)
 
 
-def _build_index() -> dict[str, Any]:
-    out: dict[str, Any] = {"by_ident": {}, "live": set(), "deleted": set(), "library": None, "collections": []}
-    con = library._zotero_db()
-    if con is None:  # no local Zotero database at all (only the Web API is used then)
+def _build_index(con: sqlite3.Connection) -> dict[str, Any]:
+    out = _empty_index()
+    lib = _query(con, "SELECT libraryID FROM libraries WHERE type = 'user'")
+    if not lib:
         return out
-    try:
-        lib = _query(con, "SELECT libraryID FROM libraries WHERE type = 'user'")
-        if not lib:
-            return out
-        lid = out["library"] = lib[0][0]
-        deleted = {k for (k,) in _query(con, "SELECT i.key FROM items i JOIN deletedItems d ON d.itemID = i.itemID")}
-        fields: dict[str, dict[str, str]] = {}
-        for key, name, value in _query(con, _ITEM_FIELDS, lid):
-            fields.setdefault(key, {})[name] = str(value)
-        for key, f in fields.items():
-            if key in deleted:
-                continue
-            for k in ident_keys(doi=f.get("DOI", ""), url=f.get("url", ""), extra=f"{f.get('archiveID', '')}\n{f.get('extra', '')}"):
-                out["by_ident"].setdefault(k, key)
-        out["live"] = {k for (k,) in _query(con, "SELECT key FROM items WHERE libraryID = ?", lid)} - deleted
-        out["deleted"] = deleted
-        gone = {cid for (cid,) in _query(con, "SELECT collectionID FROM deletedCollections", optional=True)}
-        rows = [r for r in _query(con, "SELECT collectionID, collectionName, parentCollectionID, key FROM collections "
-                                       "WHERE libraryID = ?", lid) if r[0] not in gone]
-        by_id = {r[0]: r for r in rows}
+    lid = out["library"] = lib[0][0]
+    deleted = {k for (k,) in _query(con, "SELECT i.key FROM items i JOIN deletedItems d ON d.itemID = i.itemID")}
+    fields: dict[str, dict[str, str]] = {}
+    for key, name, value in _query(con, _ITEM_FIELDS, lid):
+        fields.setdefault(key, {})[name] = str(value)
+    for key, f in fields.items():
+        if key in deleted:
+            continue
+        for k in ident_keys(doi=f.get("DOI", ""), url=f.get("url", ""), extra=f"{f.get('archiveID', '')}\n{f.get('extra', '')}"):
+            out["by_ident"].setdefault(k, key)
+    out["live"] = {k for (k,) in _query(con, "SELECT key FROM items WHERE libraryID = ?", lid)} - deleted
+    out["deleted"] = deleted
+    gone = {cid for (cid,) in _query(con, "SELECT collectionID FROM deletedCollections", optional=True)}
+    rows = [r for r in _query(con, "SELECT collectionID, collectionName, parentCollectionID, key FROM collections "
+                                   "WHERE libraryID = ?", lid) if r[0] not in gone]
+    by_id = {r[0]: r for r in rows}
 
-        def path(r: tuple) -> str:
-            names, seen = [r[1]], {r[0]}
-            while r[2] in by_id and r[2] not in seen:
-                r = by_id[r[2]]
-                seen.add(r[0])
-                names.append(r[1])
-            return " / ".join(reversed(names))
-        out["collections"] = sorted(({"key": r[3], "id": r[0], "name": path(r)} for r in rows), key=lambda c: c["name"].lower())
-    finally:
-        con.close()
+    def path(r: tuple) -> str:
+        names, seen = [r[1]], {r[0]}
+        while r[2] in by_id and r[2] not in seen:
+            r = by_id[r[2]]
+            seen.add(r[0])
+            names.append(r[1])
+        return " / ".join(reversed(names))
+    out["collections"] = sorted(({"key": r[3], "id": r[0], "name": path(r)} for r in rows), key=lambda c: c["name"].lower())
     return out
 
 

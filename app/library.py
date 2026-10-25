@@ -7,6 +7,7 @@ or the note's arXiv / source link into the cache (never into the vault).
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import shutil
@@ -15,7 +16,7 @@ import threading
 from urllib.parse import quote
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 import pymupdf as fitz
 import httpx
@@ -186,6 +187,8 @@ def note_path(stem: str) -> Path:
 
 _ZOTERO_SNAPSHOT = DATA_DIR / "zotero_snapshot.sqlite"
 
+log = logging.getLogger(__name__)
+_T = TypeVar("_T")
 
 _ZOTERO_LOCK = threading.Lock()
 
@@ -205,18 +208,49 @@ def _zotero_db() -> sqlite3.Connection | None:
                 d = Path(f"{_ZOTERO_SNAPSHOT}{suffix}")
                 if s.exists():
                     tmp = Path(f"{d}.tmp")
-                    shutil.copy2(s, tmp)
-                    os.replace(tmp, d)
+                    try:
+                        shutil.copy2(s, tmp)
+                        os.replace(tmp, d)
+                    except OSError:
+                        tmp.unlink(missing_ok=True)
+                        raise
                 elif d.exists():
                     d.unlink()
         return sqlite3.connect(_ZOTERO_SNAPSHOT)
 
 
-@lru_cache(maxsize=1)
-def _zotero_pdf_urls(_stamp: float) -> dict[str, list[str]]:
+def drop_zotero_snapshot() -> None:
+    """Remove the app's copy of zotero.sqlite, so the next read copies it afresh from Zotero's own file."""
+    with _ZOTERO_LOCK:
+        for suffix in ("", "-wal", "-shm"):
+            Path(f"{_ZOTERO_SNAPSHOT}{suffix}").unlink(missing_ok=True)
+
+
+def _read_zotero_once(work: Callable[[sqlite3.Connection], _T]) -> _T | None:
     con = _zotero_db()
     if con is None:
-        return {}
+        return None
+    try:
+        return work(con)
+    finally:
+        con.close()
+
+
+def read_zotero(work: Callable[[sqlite3.Connection], _T]) -> _T | None:
+    """Run `work` on the snapshot of Zotero's database; None when there is no local Zotero database.
+
+    A bad copy (a torn copy, a leftover from a crash) is never re-copied on its own when it is newer than
+    Zotero's file, so a read error drops it and reads once more from a fresh copy. An error from that second
+    read is the original's own (or a plain I/O failure) and is raised: sqlite3.Error or OSError.
+    """
+    try:
+        return _read_zotero_once(work)
+    except (sqlite3.Error, OSError):
+        drop_zotero_snapshot()
+    return _read_zotero_once(work)
+
+
+def _pdf_url_rows(con: sqlite3.Connection) -> dict[str, list[str]]:
     rows = con.execute(
         """
         SELECT parent.key, v.value
@@ -228,11 +262,21 @@ def _zotero_pdf_urls(_stamp: float) -> dict[str, list[str]]:
         WHERE a.contentType = 'application/pdf'
         """
     ).fetchall()
-    con.close()
     out: dict[str, list[str]] = {}
     for key, url in rows:
         out.setdefault(key, []).append(url)
     return out
+
+
+@lru_cache(maxsize=1)
+def _zotero_pdf_urls(_stamp: float) -> dict[str, list[str]]:
+    try:
+        return read_zotero(_pdf_url_rows) or {}
+    except (sqlite3.Error, OSError) as e:
+        # No Zotero links is better than no paper list. Cached for this stamp, so it is tried (and logged) once;
+        # the next write to Zotero's database changes the stamp and tries again.
+        log.warning("Zotero database unreadable, going on without its attachment links: %s: %s", type(e).__name__, e)
+        return {}
 
 
 def _zotero_stamp() -> float:
