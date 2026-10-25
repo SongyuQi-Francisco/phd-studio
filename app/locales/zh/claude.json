@@ -1,0 +1,4 @@
+{
+  "method_token": "长期令牌 (claude.env)",
+  "login_hint": "运行 claude setup-token 并存入 ~/.config/secrets/claude.env"
+}

@@ -1,0 +1,17 @@
+{
+  "glm": "智谱 GLM",
+  "role_claude": "可读可写，改 vault 前先给你看差异",
+  "role_readonly": "只读",
+  "vision": "看图",
+  "busy": "回答完再换模型",
+  "unavailable": "{label}：{detail}",
+  "switch": "换模型（换到别的来源会开始新线程）",
+  "menu_note": "换到别的来源会开始新线程（之前的对话保留在记录里，新模型看不到）。不可用时直接报错，不会换成别的模型。",
+  "checking_all": "正在检查各模型的登录状态…",
+  "checking": "正在检查登录状态…",
+  "other": "其他模型",
+  "other_hint": "在每个对话面板顶部选；只读，改 vault 仍然只有 Claude。选中的模型不可用时直接报错，不会换成别的。",
+  "kind_cli": "订阅登录",
+  "kind_api": "API Key",
+  "detail_fix": "{detail}：{fix}"
+}

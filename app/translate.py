@@ -4,6 +4,7 @@ from __future__ import annotations
 import httpx
 
 from .config import load_settings, secret
+from .i18n import t
 from .providers import PROVIDERS
 
 _PROMPT = (
@@ -60,7 +61,11 @@ def _google(text: str) -> str:
     return "".join(seg[0] for seg in r.json()[0] if seg and seg[0])
 
 
-ENGINES = {"deepseek": ("DeepSeek", _deepseek), "glm": ("智谱 GLM", _glm), "google": ("Google 翻译", _google)}
+ENGINES = {"deepseek": _deepseek, "glm": _glm, "google": _google}
+
+
+def engine_label(name: str) -> str:
+    return t(f"translate.engine.{name}")  # i18n-keys: translate.engine.{deepseek,glm,google}
 
 
 def translate(text: str) -> dict[str, str]:
@@ -69,7 +74,7 @@ def translate(text: str) -> dict[str, str]:
     order = [preferred] + [e for e in ENGINES if e != preferred]
     errors = []
     for name in order:
-        label, fn = ENGINES[name]
+        label, fn = engine_label(name), ENGINES[name]
         try:
             return {"text": fn(text), "engine": label}
         except Exception as e:  # noqa: BLE001 - surface every engine's failure together

@@ -1,0 +1,5 @@
+{
+  "engine.deepseek": "DeepSeek",
+  "engine.glm": "智谱 GLM",
+  "engine.google": "Google 翻译"
+}

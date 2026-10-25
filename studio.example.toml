@@ -33,6 +33,9 @@ research_maps = "Research Maps"                # research maps (研究地图): o
 # Who you are and what you work on; goes into Claude's system prompt.
 about = "AI PhD student. Prefers answers in Chinese; reads English papers slowly."
 answer_language = "中文"
+# Language of the Markdown the app generates in the vault (Reading List.md): "zh" | "en", the same on
+# both Macs. "ui" follows each Mac's interface language (two Macs set differently keep rewriting it).
+vault_language = "zh"
 # Notes Claude reads first when relating a paper to your work.
 research_notes = ["Atlas/PhD Roadmap.md", "Ideas/Idea Radar.md"]
 # Research lines used to group the reading list (also matched against old queue headings).

@@ -1,10 +1,11 @@
 import { render } from "preact";
 import { useEffect, useMemo, useRef, useState, useCallback } from "preact/hooks";
 import { html, Icon, api, prefs, copyText, composing } from "/lib.js";
+import { t, LANGS, systemLang, initI18n, onLangChange, setLangSetting } from "/i18n.js";
 import { PdfView } from "/pdfview.js";
 import { BilingualSettings } from "/bilingual.js";
 import { ChatPanel, NotePanel, PROMPTS } from "/chat.js";
-import { ProviderSettings } from "/models.js";
+import { ProviderSettings, refreshProviders } from "/models.js";
 import { ReadingPage, DoneDialog } from "/reading.js";
 import { OverviewPage, TimelinePage, VenueSheet, IdeaCapture } from "/plan.js";
 import { IdeasPage } from "/ideas.js";
@@ -123,13 +124,13 @@ function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef
   // poll bilingual job (also while it waits in the background queue)
   useEffect(() => {
     if (bi.state !== "running" && bi.state !== "queued") return;
-    const t = setInterval(async () => {
+    const timer = setInterval(async () => {
       const s = await api(`/api/bilingual/${encodeURIComponent(stem)}`);
       setBi(s);
       if (s.state === "done") toast("双语版已生成");
       if (s.state === "error") toast("双语生成失败");
     }, bi.state === "queued" ? 5000 : 3000);
-    return () => clearInterval(t);
+    return () => clearInterval(timer);
   }, [bi.state, stem]);
 
   const switchVariant = (v) => {
@@ -346,26 +347,46 @@ function flatten(items, depth = 0, out = []) {
 
 function Settings({ status, onClose, onSaved }) {
   const [s, setS] = useState(status.settings);
-  const save = async (patch) => { const n = await api("/api/settings", { json: patch }); setS(n); onSaved(); };
+  // Shown at once (no bounce back while the request runs), then replaced by what the server saved.
+  const saved = useRef(status.settings);
+  const save = async (patch) => {
+    setS((x) => ({ ...x, ...patch }));
+    try { saved.current = await api("/api/settings", { json: patch }); } finally { setS(saved.current); }
+    onSaved();
+  };
+  // Saved first, so the server's messages and Markdown views switch together with the page.
+  const setUiLanguage = async (v) => { await save({ ui_language: v }); setLangSetting(v); };
   const c = status.claude;
+  const langName = (l) => t("common.lang." + l); // i18n-keys: common.lang.{zh,en}
   return html`<div class="modal-bg" onClick=${(e) => e.target === e.currentTarget && onClose()}>
     <div class="modal settings">
-      <h2>设置</h2>
+      <h2>${t("settings.title")}</h2>
+      <div class="field"><div><label>${t("settings.ui_language")}</label><small>${t("settings.ui_language_hint")}</small></div>
+        <select value=${s.ui_language} onChange=${(e) => setUiLanguage(e.target.value)}>
+          <option value="system">${t("settings.lang_system", { lang: langName(systemLang()) })}</option>
+          ${LANGS.map((l) => html`<option value=${l}>${langName(l)}</option>`)}
+        </select></div>
+      <div class="field"><div><label>${t("settings.answer_language")}</label><small>${t("settings.answer_language_hint")}</small></div>
+        <select value=${s.answer_language} onChange=${(e) => save({ answer_language: e.target.value })}>
+          <option value="">${t("settings.answer_profile", { lang: status.answer_language })}</option>
+          <option value="ui">${t("settings.answer_ui")}</option>
+          ${LANGS.map((l) => html`<option value=${l}>${langName(l)}</option>`)}
+        </select></div>
       <div class="field"><div><label>Claude</label>
-        <small>${c.ok ? "已连接 · " + c.method : "未登录：" + c.hint}</small></div><span class=${"dot " + (c.ok ? "ok" : "bad")} /></div>
-      <div class="field"><div><label>伴读模型</label><small>默认跟随你的 Claude 账号设置</small></div>
+        <small>${c.ok ? t("settings.claude_connected", { method: c.method }) : t("settings.claude_signed_out", { hint: c.hint })}</small></div><span class=${"dot " + (c.ok ? "ok" : "bad")} /></div>
+      <div class="field"><div><label>${t("settings.model")}</label><small>${t("settings.model_hint")}</small></div>
         <select value=${s.claude_model} onChange=${(e) => save({ claude_model: e.target.value })}>
-          <option value="">默认</option><option value="opus">Opus</option><option value="sonnet">Sonnet</option><option value="haiku">Haiku（快）</option>
+          <option value="">${t("common.default")}</option><option value="opus">Opus</option><option value="sonnet">Sonnet</option><option value="haiku">${t("settings.model_haiku")}</option>
         </select></div>
       <${ProviderSettings} />
       <${ZoteroSettings} settings=${s} save=${save} />
-      <div class="field"><div><label>翻译引擎</label><small>划词翻译和整篇双语 PDF</small></div>
+      <div class="field"><div><label>${t("settings.engine")}</label><small>${t("settings.engine_hint")}</small></div>
         <select value=${s.translate_engine} onChange=${(e) => save({ translate_engine: e.target.value })}>
-          <option value="deepseek">DeepSeek</option><option value="glm">智谱 GLM</option><option value="google">Google 翻译（免费）</option>
+          <option value="deepseek">DeepSeek</option><option value="glm">${t("models.glm")}</option><option value="google">${t("settings.engine_google")}</option>
         </select></div>
       <${BilingualSettings} settings=${s} save=${save} />
       <${ReminderRow} />
-      <div class="row-end" style="margin-top:12px"><button class="btn" onClick=${onClose}>完成</button></div>
+      <div class="row-end" style="margin-top:12px"><button class="btn" onClick=${onClose}>${t("common.done")}</button></div>
     </div>
   </div>`;
 }
@@ -421,6 +442,9 @@ function App() {
   }, []);
   const refreshStatus = () => api("/api/status").then(setStatus).catch(() => {});
   const bump = () => setDataVersion((n) => n + 1);
+  // A language switch re-renders everything from here down; data the server worded in the old language is fetched again.
+  const [, setLang] = useState(null);
+  useEffect(() => onLangChange((l) => { setLang(l); refreshStatus(); refreshProviders(); bump(); }), []);
 
   useEffect(() => {
     api("/api/papers").then((r) => setPapers(r.papers));
@@ -650,4 +674,4 @@ function App() {
   </div>`;
 }
 
-render(html`<${App} />`, document.getElementById("app"));
+initI18n().then(() => render(html`<${App} />`, document.getElementById("app")));

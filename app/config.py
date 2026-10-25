@@ -149,6 +149,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "zotero_auto": "off",
     # Zotero collection key new items go into; "" = the library root.
     "zotero_collection": "",
+    # Interface language on this Mac: "zh" | "en" | "system" (the OS language). See app/i18n.py.
+    "ui_language": "system",
+    # The assistant's answer language: "" = the profile's answer_language | "ui" = the interface language | "zh" | "en".
+    "answer_language": "",
 }
 
 

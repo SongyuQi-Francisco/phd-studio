@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import bilingual, direction, excerpt, idea_ops, library, line_chat, model_chat, notes, plan, reading, tracking, venues
+from . import bilingual, direction, excerpt, i18n, idea_ops, library, line_chat, model_chat, notes, plan, reading, tracking, venues
 from .claude_chat import claude_status, draft_takeaway, history, registry
 from .config import CROPS_DIR, IDEA_RADAR, PROFILE, STUDIO_DIR, load_settings, save_settings
 from .translate import translate
@@ -531,12 +531,21 @@ def overview() -> dict[str, Any]:
 async def status() -> dict[str, Any]:
     return {"claude": await run_in_threadpool(claude_status), "settings": load_settings(),
             "focus": PROFILE.get("current_focus", ""), "lines": PROFILE.get("lines", []),
+            "answer_language": PROFILE.get("answer_language") or i18n.LANGUAGE_NAMES["zh"],
             "idea_radar": notes.rel(IDEA_RADAR) if IDEA_RADAR.exists() else None}
+
+
+SETTING_CHOICES = {"ui_language": ("zh", "en", "system"), "answer_language": ("", "ui", "zh", "en")}
 
 
 @app.post("/api/settings")
 async def update_settings(patch: dict[str, Any]) -> dict[str, Any]:
+    for k, choices in SETTING_CHOICES.items():
+        if k in patch and patch[k] not in choices:
+            raise HTTPException(400, i18n.t("settings.bad_choice", name=k, value=patch[k]))
     s = save_settings(patch)
+    if "ui_language" in patch:
+        await run_in_threadpool(reading.refresh_view)  # only changes it with [profile] vault_language = "ui"
     await registry.close_all()  # new model applies to the next turn
     return s
 
@@ -609,4 +618,6 @@ from .model_api import router as model_router  # noqa: E402  (model picker: prov
 app.include_router(model_router)
 from .rmap.api import router as rmap_router  # noqa: E402  (研究地图: research maps, extension plugins)
 app.include_router(rmap_router)
+from .i18n_api import router as i18n_router  # noqa: E402  (interface language: message tables)
+app.include_router(i18n_router)
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")

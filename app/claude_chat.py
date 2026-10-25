@@ -40,6 +40,7 @@ from claude_agent_sdk import (
 from fastapi import WebSocket
 
 from . import library, line_chat, model_chat, providers
+from .i18n import answer_language, answers_in_chinese, t
 from .config import (
     AGENTS_MD,
     CHATS_DIR,
@@ -70,7 +71,7 @@ def _claude_env() -> dict[str, str]:
 def claude_status() -> dict[str, Any]:
     env = _claude_env()
     if env:
-        return {"ok": True, "method": "长期令牌 (claude.env)"}
+        return {"ok": True, "method": t("claude.method_token")}
     try:
         out = subprocess.run(
             [str(CLAUDE_CLI), "auth", "status"], capture_output=True, text=True, timeout=15
@@ -80,7 +81,7 @@ def claude_status() -> dict[str, Any]:
             return {"ok": True, "method": st.get("authMethod", "login")}
     except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
         pass
-    return {"ok": False, "method": "", "hint": "运行 claude setup-token 并存入 ~/.config/secrets/claude.env"}
+    return {"ok": False, "method": "", "hint": t("claude.login_hint")}
 
 
 def _load_sessions() -> dict[str, str]:
@@ -124,13 +125,13 @@ def _system_prompt(stem: str) -> str:
         text = None
     agents = AGENTS_MD.read_text(encoding="utf-8") if AGENTS_MD.exists() else ""
     notes = "、".join(f"`{n}`" for n in PROFILE.get("research_notes", [])) or "vault 里的路线图和 idea 笔记"
-    lang = PROFILE.get("answer_language", "中文")
+    lang = answer_language()
     return f"""
 # 你的角色
 你是用户的论文伴读与科研搭档，运行在用户本地的 PhD 工作台里。
 关于用户：{PROFILE.get("about", "")}
 - 一律用{lang}回答，先给结论，再给依据；简洁，不要客套和重复问题。
-- 专业术语第一次出现写成“中文（English）”；公式用 $...$ 或 $$...$$。
+- {"专业术语第一次出现写成“中文（English）”；" if answers_in_chinese() else ""}公式用 $...$ 或 $$...$$。
 - 引用论文内容时标注页码，如 [p.5]，用户点击可跳转。
 - 不确定就直说，不要编造实验数字、会议或代码是否开源。
 
@@ -449,13 +450,18 @@ class PaperChat:
             self.last_used = time.time()
 
 
+def takeaway_prompt(text: str | None = None) -> str:
+    """text: the paper's full text, when there is no conversation to fork."""
+    limit = "不超过 60 字" if answers_in_chinese() else "不超过 25 个英文单词"  # a Chinese character ≈ half a word
+    return (f"用{answer_language()}写一句话（{limit}）总结这篇论文对我的价值：它解决了什么、我能拿走什么。"
+            "只输出这句话。" + (f"先读全文：{text}" if text else ""))
+
+
 async def draft_takeaway(stem: str) -> str:
     """One-line takeaway for the reading list, drafted from a fork of the paper's conversation."""
     session = _load_sessions().get(stem)
-    lang = PROFILE.get("answer_language", "中文")
     text = "" if session else await asyncio.to_thread(library.text_file, stem)  # may download the PDF: off the event loop
-    prompt = (f"用{lang}写一句话（不超过 60 字）总结这篇论文对我的价值：它解决了什么、我能拿走什么。"
-              "只输出这句话。" + ("" if session else f"先读全文：{text}"))
+    prompt = takeaway_prompt(None if session else text)
     opts = ClaudeAgentOptions(
         cwd=str(VAULT_DIR), add_dirs=[str(TEXT_DIR)], tools=["Read"], allowed_tools=["Read"],
         setting_sources=[], resume=session, fork_session=bool(session), max_turns=4,
@@ -479,7 +485,7 @@ STUDIO_KEY = "studio"
 def _studio_prompt() -> str:
     agents = AGENTS_MD.read_text(encoding="utf-8") if AGENTS_MD.exists() else ""
     notes = "、".join(f"`{n}`" for n in PROFILE.get("research_notes", [])) or "vault 里的路线图和 idea 笔记"
-    lang = PROFILE.get("answer_language", "中文")
+    lang = answer_language()
     return f"""
 # 你的角色
 你是用户 PhD 工作台（PhD Studio）里的全局助手。用户会直接跟你说要做的事，你用 studio 工具把它落到工作台里。
