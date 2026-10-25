@@ -11,8 +11,10 @@ Left to extract, in web/**/*.js (not web/vendor), outside comments:
           (use locale() / formatDate() / formatNumber() from /i18n.js)
 A line ending in `// i18n-ignore` is skipped (e.g. a regex that matches Chinese note text).
 
-Errors (exit 1, checked by tests/test_i18n.py), in files that import t from /i18n.js:
-  - a variable, parameter or destructured name `t` (it hides t() and breaks only when that code runs)
+Errors (exit 1, checked by tests/test_i18n.py):
+  - in a file that imports a t (from /i18n.js, or /rmap/strings.js until the research map moves over):
+    a variable, parameter or destructured name `t` (it hides t() and breaks only when that code runs)
+  and in files that import t from /i18n.js:
   - a key that is in neither web/locales/zh nor web/locales/en
   - a key built at runtime ("zotero.auto." + v, a variable) without the keys it can take listed in an
     `// i18n-keys: zotero.auto.{off,triage,all}` comment (same file for a prefix; same or previous line otherwise)
@@ -42,7 +44,8 @@ LOCALE_PATTERNS = [
     re.compile(r"[\"'](?:zh|en)(?:-[A-Za-z]{2,4})+[\"']"),
     re.compile(r"\blocaleCompare\([^()]*,\s*[\"']"),
 ]
-IMPORTS_T = re.compile(r"import\s*\{[^}]*(?<![\w$])t(?![\w$])[^}]*\}\s*from\s*[\"']/i18n\.js[\"']")
+IMPORTS_T = re.compile(r"import\s*\{[^}]*(?<![\w$])t(?![\w$])[^}]*\}\s*from\s*[\"'][^\"']+[\"']")
+IMPORTS_I18N = re.compile(r"from\s*[\"']/i18n\.js[\"']")
 KEY = re.compile(r"[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+")
 PREFIX = re.compile(r"[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)*\.")
 T_CALL = re.compile(r"(?<![\w$.])tx?\(")
@@ -230,7 +233,8 @@ def scan_file(path: Path, tables: dict[str, dict[str, object]] | None = None) ->
         if any(p.search(line) for p in LOCALE_PATTERNS):
             lines.append((no, "locale", raw[no - 1].strip()))
     if IMPORTS_T.search(code):
-        errors += [(no, "a local name t hides t() from /i18n.js; rename it") for no in shadowed_t(code)]
+        errors += [(no, "a local name t hides the imported t(); rename it") for no in shadowed_t(code)]
+    if IMPORTS_T.search(code) and IMPORTS_I18N.search(code):
         tables = tables or web_tables()
         known = set(tables["zh"]) & set(tables["en"])
         declared = declared_keys(src)

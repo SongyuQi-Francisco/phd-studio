@@ -301,6 +301,15 @@ def test_scan_finds_a_local_t_in_its_usual_forms():
     assert i18n_scan.shadowed_t(code) == [1, 2, 3, 4, 5, 6, 7, 8]
 
 
+def test_scan_covers_the_research_map_and_its_own_t(tmp_path):
+    scanned = {str(f.relative_to(ROOT)) for f in i18n_scan.files([])}
+    assert {"web/rmap/page.js", "web/rmap/strings.js", "web/rmap/registry.js"} <= scanned
+    f = tmp_path / "page.js"  # web/rmap/page.js imports t from its own strings module until it moves to /i18n.js
+    f.write_text('import { t } from "/rmap/strings.js";\nconst pick = (t) => t.id;\nt("rmap.title");\n', encoding="utf-8")
+    r = i18n_scan.scan_file(f)
+    assert [n for n, _ in r["errors"]] == [2]  # the local t; rmap keys live in strings.js, not checked here
+
+
 def test_scan_flags_hard_coded_locales(tmp_path):
     f = tmp_path / "x.js"
     f.write_text("\n".join([
