@@ -16,6 +16,7 @@ built on top of an Obsidian vault and a Zotero library you already have.
   - Excerpt appends one line, `- "quote" [p.N] — your comment`, to a section of the paper's note (default: a new `## Excerpts`). You see the line before it is written, and can undo it from the toast (byte for byte, unless the note was edited in between; then just that line goes). The quote is escaped, so `<tags>` or `$` from the PDF stay text; the note is rewritten in place (same file, creation time and line endings).
   - ⌥-drag (or the crop tool) on a figure, table or formula → the actual image is sent to Claude.
   - **Bilingual / translated PDF** of the whole paper via [pdf2zh-next](https://github.com/PDFMathTranslate/PDFMathTranslate-next) (keeps formulas and layout), generated in the background. Optionally (off by default; per machine, since each Mac keeps and pays for its own copy), papers that become T1/T2 on the reading list get theirs made ahead of time by a one-at-a-time queue (pausable, survives restarts); Settings also shows the disk use and cleans up old ones.
+  - **Zotero** button: adds the paper to Zotero in one click (through the running Zotero desktop app, else the Zotero Web API with a key you create yourself in `<secrets>/zotero.env`), after a DOI / arXiv / URL dedupe. The `zotero://select/...` link goes into the note's front matter only after you confirm the exact line. Optional auto mode in Settings.
 - **Claude co-reader**: one persistent session per paper (resumed after restarts), streamed.
   Claude can read the vault, the paper's full text and the web. Any edit to the vault is shown as a diff and only applied after you approve it. If Claude is unavailable you get an error, never a silent switch to another model.
 - **Note**: the paper's Obsidian note, with an Obsidian deep link and "ask Claude to update".
@@ -113,7 +114,7 @@ The project folder and the vault can live in synced folders:
 ## Code map
 
 - `app/main.py` routes · `library.py` notes, Zotero, PDFs · `claude_chat.py` Agent SDK sessions and edit approvals
-  · `translate.py` selection translation · `bilingual.py` pdf2zh-next jobs · `bilingual_queue.py` the ahead-of-time queue · `config.py` paths and settings
+  · `translate.py` selection translation · `bilingual.py` pdf2zh-next jobs · `bilingual_queue.py` the ahead-of-time queue · `zotero_push.py` adding to Zotero · `config.py` paths and settings
 - `web/` `main.js` app shell, library, reader · `chat.js` Claude and note panels · `pdfview.js` pdf.js wrapper
 - `web/vendor/` Preact (MIT), htm (Apache-2.0), pdf.js (Apache-2.0), marked (MIT), KaTeX (MIT); licenses alongside.
 

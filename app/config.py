@@ -143,6 +143,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "claude_model": "",
     # Engine for selection translation and full-PDF translation: "deepseek" | "google".
     "translate_engine": "deepseek",
+    # Add papers to Zotero by themselves: "off" | "triage" (given a tier, or a note) | "all" (also inbox).
+    "zotero_auto": "off",
+    # Zotero collection key new items go into; "" = the library root.
+    "zotero_collection": "",
 }
 
 
