@@ -178,12 +178,15 @@ def test_settings_save_and_check_the_languages(client):
 # ---------- web/i18n.js ----------
 
 
-def test_web_i18n_in_a_javascript_engine():
-    engine = shutil.which("node") or (str(JSC) if JSC.exists() else None)
-    if not engine:
-        pytest.skip("no JavaScript engine (node, or macOS's jsc)")
-    args = [engine, "-m", "tests/js/i18n.test.mjs"] if engine.endswith("jsc") else [engine, "tests/js/i18n.test.mjs"]
-    r = subprocess.run(args, cwd=ROOT, capture_output=True, text=True, timeout=60)
+@pytest.mark.parametrize("engine", ["node", "jsc"])
+def test_web_i18n_in_a_javascript_engine(engine, tmp_path):
+    exe = shutil.which("node") if engine == "node" else (str(JSC) if JSC.exists() else None)
+    if not exe:
+        pytest.skip(f"{engine} is not installed")
+    shutil.copy(ROOT / "web" / "i18n.js", tmp_path / "i18n.mjs")  # .mjs: a module in every engine
+    shutil.copy(ROOT / "tests" / "js" / "i18n.test.mjs", tmp_path / "test.mjs")
+    args = [exe, "-m", "test.mjs"] if engine == "jsc" else [exe, "test.mjs"]
+    r = subprocess.run(args, cwd=tmp_path, capture_output=True, text=True, timeout=60)
     assert r.returncode == 0 and r.stdout.strip().endswith("ok"), r.stdout + r.stderr
 
 

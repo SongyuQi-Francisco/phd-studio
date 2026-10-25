@@ -1,10 +1,12 @@
 // web/i18n.js without a browser: run by tests/test_i18n.py with node, or with JavaScriptCore's jsc
 // (WebKit's engine, the one the desktop window uses). Prints "ok" or throws.
-import { t, tx, lang, loadMessages, setLangSetting, onLangChange, intlLocale } from "../../web/i18n.js";
+// The test copies web/i18n.js next to this file as i18n.mjs, so every engine loads it as a module.
+import { t, tx, lang, loadMessages, setLangSetting, onLangChange, intlLocale } from "./i18n.mjs";
 
-const out = typeof print === "function" ? print : (s) => console.log(s);
+const out = typeof print === "function" ? print : console.log.bind(console);
 const warnings = [];
-globalThis.console = { ...(globalThis.console || {}), warn: (m) => warnings.push(m), log: out };
+if (typeof console === "undefined") globalThis.console = {};
+console.warn = (m) => warnings.push(m);
 
 function eq(actual, expected, what) {
   const a = JSON.stringify(actual), e = JSON.stringify(expected);
