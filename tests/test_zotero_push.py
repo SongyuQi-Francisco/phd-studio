@@ -529,6 +529,18 @@ def test_an_unreadable_snapshot_fails_closed(zot, note, client):
     assert r.status_code == 502 and "快照" in r.json()["detail"]
 
 
+def test_a_bad_copy_of_a_good_database_heals(zot, note):
+    zot.fake.add("HAVE2345", archiveID="arXiv:2608.21939")
+    assert zotero_push.status("Group Memory 2026")["key"] == "HAVE2345"  # the app's copy now exists
+    copy = library._ZOTERO_SNAPSHOT
+    copy.write_bytes(b"not a database" * 100)
+    t = zot.fake.stamp + 50  # newer than Zotero's file, so it would never be copied again on its own
+    os.utime(copy, (t, t))
+    zotero_push._index.cache_clear()
+    assert zotero_push.status("Group Memory 2026")["key"] == "HAVE2345"
+    assert copy.read_bytes()[:15] == b"SQLite format 3"
+
+
 def test_a_missing_optional_table_is_fine_but_a_missing_core_table_is_not(zot, note):
     import sqlite3
     with sqlite3.connect(zot.fake.db) as con:

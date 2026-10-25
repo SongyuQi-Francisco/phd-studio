@@ -153,8 +153,19 @@ def _query(con: sqlite3.Connection, sql: str, *args: Any, optional: bool = False
         raise
 
 
+def _drop_snapshot_copy() -> None:
+    """Remove the app's copy of zotero.sqlite, so the next read copies it afresh from Zotero's own file."""
+    with library._ZOTERO_LOCK:
+        for suffix in ("", "-wal", "-shm"):
+            Path(f"{library._ZOTERO_SNAPSHOT}{suffix}").unlink(missing_ok=True)
+
+
 @lru_cache(maxsize=1)
 def _index(_stamp: float) -> dict[str, Any]:
+    try:
+        return _build_index()
+    except (sqlite3.Error, OSError):
+        _drop_snapshot_copy()  # a bad copy heals with one fresh copy; a bad original fails closed below
     try:
         return _build_index()
     except (sqlite3.Error, OSError) as e:
