@@ -7,6 +7,7 @@ merged on the next read (newest record wins) and parked outside the vault.
 """
 from __future__ import annotations
 
+import copy
 import fcntl
 import os
 import secrets
@@ -32,12 +33,14 @@ def new_id(prefix: str) -> str:
 
 
 class Store:
-    def __init__(self, path: Path, collections: tuple[str, ...], header: str):
+    def __init__(self, path: Path, collections: tuple[str, ...], header: str, name: str | None = None):
+        """name: what the lock and temp file in the data dir are called (default: the file's own name);
+        give one when several stores share a file name in different folders (research maps)."""
         self.path = path
         self.collections = collections
         self.header = header
-        self._lock = DATA_DIR / f"{path.stem}.lock"
-        self._tmp = DATA_DIR / f"{path.name}.tmp"
+        self._lock = DATA_DIR / f"{name or path.stem}.lock"
+        self._tmp = DATA_DIR / f"{name or path.stem}{path.suffix}.tmp"
 
     # ---- file io ----
     def _read(self, path: Path) -> dict[str, list[dict[str, Any]]]:
@@ -98,12 +101,16 @@ class Store:
         return {c: [r for r in data[c] if include_deleted or not r.get("deleted")] for c in self.collections}
 
     @contextmanager
-    def editing(self) -> Iterator[dict[str, list[dict[str, Any]]]]:
+    def editing(self, skip_unchanged: bool = False) -> Iterator[dict[str, list[dict[str, Any]]]]:
+        """Read-modify-write under the lock; nothing is written if the block raises.
+        skip_unchanged: leave the file alone when the block changed nothing (and no conflict copy was merged)."""
         with self._locked():
             data = self._read(self.path)
-            self._merge_conflicts(data)
+            merged = self._merge_conflicts(data)
+            before = copy.deepcopy(data) if skip_unchanged and not merged else None
             yield data
-            self._write(data)
+            if before is None or data != before:
+                self._write(data)
 
     def add(self, collection: str, record: dict[str, Any], prefix: str) -> dict[str, Any]:
         rec = {"id": new_id(prefix), **record, "created_at": now(), "updated_at": now()}

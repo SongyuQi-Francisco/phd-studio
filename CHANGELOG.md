@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - README, community files, demo data and screenshots ([#40](https://github.com/SongyuQi-Francisco/phd-studio/issues/40))
+- Research maps, part 1: the data model (`docs/research-map.md`), a sync-safe store per project in the vault (`paths.research_maps`) with a change log, the `/api/rmap` routes, and extension points for later phases ([#45](https://github.com/SongyuQi-Francisco/phd-studio/issues/45))
 
 ## [0.1.0] - 2026-10-25
 
