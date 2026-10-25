@@ -356,7 +356,10 @@ def test_engine_follows_the_setting_and_the_key(fake, make_note, monkeypatch):
     (config.SECRETS_DIR).mkdir(parents=True, exist_ok=True)
     (config.SECRETS_DIR / "deepseek.env").write_text("DEEPSEEK_API_KEY=sk-test\n", encoding="utf-8")
     label, args = bilingual.engine()
-    assert label == "DeepSeek" and args[-2:] == ["--deepseek-api-key", "sk-test"]
+    assert label == "DeepSeek" and args == ["--deepseek", "--deepseek-model", "deepseek-chat"]
+    # the key goes to pdf2zh in its environment, never on the command line (visible in ps)
+    assert bilingual._engine()[2] == {"PDF2ZH_DEEPSEEK_API_KEY": "sk-test"} and "sk-test" not in " ".join(args)
+    assert bilingual._child_env(bilingual._engine()[2])["PDF2ZH_DEEPSEEK_API_KEY"] == "sk-test"
     config.save_settings({"translate_engine": "google"})
     assert bilingual.engine()[0] == "Google 翻译"
     snap = bq.snapshot()

@@ -37,13 +37,14 @@ def fake_cli(tmp_path, monkeypatch):
     """A stand-in CLI: records its args and stdin, prints FAKE_OUT, writes FAKE_ERR to stderr, exits FAKE_EXIT."""
     script = tmp_path / "bin" / "fakecli"
     script.parent.mkdir()
-    script.write_text('#!/bin/sh\ncat > "$FAKE_STDIN"\nprintf \'%s\\n\' "$@" > "$FAKE_ARGS"\n'
+    script.write_text('#!/bin/sh\ncat > "$FAKE_STDIN"\nprintf \'%s\\n\' "$@" > "$FAKE_ARGS"\npwd > "$FAKE_CWD"\n'
                       'cat "$FAKE_OUT"\nprintf \'%s\\n\' "$FAKE_ERR" >&2\nexit "${FAKE_EXIT:-0}"\n')
     script.chmod(script.stat().st_mode | stat.S_IEXEC)
     out = tmp_path / "out.jsonl"
     out.write_text("")
     monkeypatch.setenv("FAKE_STDIN", str(tmp_path / "stdin.txt"))
     monkeypatch.setenv("FAKE_ARGS", str(tmp_path / "args.txt"))
+    monkeypatch.setenv("FAKE_CWD", str(tmp_path / "cwd.txt"))
     monkeypatch.setenv("FAKE_OUT", str(out))
     monkeypatch.setenv("FAKE_ERR", "")
     monkeypatch.setattr(providers, "find_bin", lambda name: str(script))
@@ -57,6 +58,9 @@ def fake_cli(tmp_path, monkeypatch):
 
         def stdin(self) -> str:
             return (tmp_path / "stdin.txt").read_text()
+
+        def cwd(self) -> Path:
+            return Path((tmp_path / "cwd.txt").read_text().strip()).resolve()
 
     return Cli()
 
@@ -184,25 +188,54 @@ def test_missing_and_logged_out_clis_say_how_to_fix(monkeypatch, fake_cli, tmp_p
 # ---------------- Gemini ----------------
 
 
-def test_gemini_streams_deltas_with_the_reported_model(fake_cli, tmp_path):
-    fake_cli.events(
-        {"type": "init", "session_id": "s-9", "model": "gemini-x-pro"},
-        {"type": "message", "role": "user", "content": "问题"},
-        {"type": "tool_use", "tool_name": "read_file", "tool_id": "1", "parameters": {"absolute_path": str(config.VAULT_DIR / "a.md")}},
-        {"type": "tool_result", "tool_id": "1", "status": "success", "output": "..."},
-        {"type": "message", "role": "assistant", "content": "第一段", "delta": True},
-        {"type": "message", "role": "assistant", "content": "，第二段", "delta": True},
-        {"type": "result", "status": "success", "stats": {}},
-    )
+def test_gemini_runs_locked_to_read_only_outside_the_vault(fake_cli, tmp_path):
+    fake_cli.events({"type": "result", "status": "success", "stats": {}})
     img = tmp_path / "my crop.png"
     img.write_bytes(b"png")
-    evs = run(providers.PROVIDERS["gemini"].stream(turn(model="pro", images=[img], read_dirs=[tmp_path])))
-    assert [e["type"] for e in evs] == ["thread", "model", "tool", "delta", "delta"]
-    assert evs[1]["model"] == "gemini-x-pro" and evs[2]["summary"] == "read_file a.md"
-    args = fake_cli.args()
-    assert args[args.index("--output-format") + 1] == "stream-json" and args[args.index("--model") + 1] == "pro"
-    assert args[args.index("--include-directories") + 1] == str(tmp_path) and "--resume" not in args
+    gemini = providers.PROVIDERS["gemini"]
+    run(gemini.stream(turn(model="pro", images=[img], read_dirs=[tmp_path])))
+    # every read-only guarantee is an explicit flag, not a CLI default the user's settings could change
+    assert fake_cli.args() == [
+        "--output-format", "stream-json", "--model", "pro", "--approval-mode", "default",
+        "--admin-policy", str(gemini.policy), "--extensions", "none",
+        "--allowed-mcp-server-names", providers.NO_MCP, "--skip-trust",
+        "--include-directories", f"{config.VAULT_DIR},{tmp_path}"]
+    # run from an empty folder of our own, so no .gemini settings in the vault apply
+    assert fake_cli.cwd() == gemini.workspace.resolve() and list(gemini.workspace.iterdir()) == []
+    assert not fake_cli.cwd().is_relative_to(config.VAULT_DIR)
+    policy = gemini.policy.read_text(encoding="utf-8")
+    import tomllib
+    rules = tomllib.loads(policy)["rule"]
+    assert rules[0] == {"toolName": "*", "decision": "deny", "priority": 100, "denyMessage": rules[0]["denyMessage"]}
+    assert rules[1]["decision"] == "allow" and rules[1]["priority"] > rules[0]["priority"]
+    allowed = set(rules[1]["toolName"])
+    assert {"read_file", "grep_search", "list_directory", "glob"} <= allowed
+    assert not allowed & {"write_file", "replace", "run_shell_command", "save_memory", "activate_skill"}
     assert fake_cli.stdin().endswith("@" + str(img).replace(" ", "\\ "))
+
+
+def test_gemini_labels_the_model_that_answered(fake_cli):
+    gemini = providers.PROVIDERS["gemini"]
+    fake_cli.events(
+        {"type": "init", "session_id": "s-9", "model": "auto"},
+        {"type": "tool_use", "tool_name": "read_file", "tool_id": "1", "parameters": {"absolute_path": str(config.VAULT_DIR / "a.md")}},
+        {"type": "message", "role": "assistant", "content": "第一段", "delta": True},
+        {"type": "message", "role": "assistant", "content": "，第二段", "delta": True},
+        {"type": "result", "status": "success", "stats": {"models": {
+            "gemini-x-flash-lite": {"output_tokens": 12}, "gemini-x-pro": {"output_tokens": 400}}}})
+    evs = run(gemini.stream(turn(model="auto")))
+    assert [e["type"] for e in evs] == ["model", "thread", "tool", "delta", "delta", "model"]
+    assert evs[0]["model"] == "自动" and evs[2]["summary"] == "read_file a.md"  # "auto" in init is not a model
+    assert evs[-1]["model"] == "gemini-x-pro + gemini-x-flash-lite"
+    fake_cli.events({"type": "init", "session_id": "s-9", "model": "gemini-x-pro"}, {"type": "result", "status": "success"})
+    assert [e.get("model") for e in run(gemini.stream(turn(model="pro"))) if e["type"] == "model"] == ["Pro", "gemini-x-pro"]
+
+
+def test_an_old_gemini_cli_says_to_upgrade(fake_cli, monkeypatch):
+    monkeypatch.setenv("FAKE_ERR", "Unknown arguments: admin-policy, adminPolicy, skip-trust, skipTrust")
+    monkeypatch.setenv("FAKE_EXIT", "1")
+    evs = run(providers.PROVIDERS["gemini"].stream(turn()))
+    assert evs[-1]["type"] == "error" and "版本太旧" in evs[-1]["message"] and "brew upgrade gemini-cli" in evs[-1]["message"]
 
 
 def test_gemini_error_result_and_resume(fake_cli):
@@ -564,5 +597,210 @@ def test_bilingual_uses_glm_when_chosen(monkeypatch):
     monkeypatch.setattr(bilingual, "load_settings", lambda: {"translate_engine": "glm"})
     assert bilingual.engine() == ("Google 翻译", ["--google"])  # no key: the label says what is used
     write_secret("zhipu", "ZHIPU_API_KEY=zk-2\n")
-    label, args = bilingual.engine()
-    assert label == "智谱 GLM" and args[:3] == ["--zhipu", "--zhipu-model", "glm-4.7-flash"]
+    label, args, keys = bilingual._engine()
+    assert (label, args) == ("智谱 GLM", ["--zhipu", "--zhipu-model", "glm-4.7-flash"])
+    assert keys == {"PDF2ZH_ZHIPU_API_KEY": "zk-2"}  # in pdf2zh's environment, not on its command line
+
+
+# ---------------- review fixes: stopping, resets, blocking calls, labels, long contexts ----------------
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def test_stopping_a_cli_ends_its_whole_process_group(tmp_path, monkeypatch):
+    """Like codex: a wrapper whose child keeps the pipes and ignores SIGTERM. Stop must end both, quickly."""
+    monkeypatch.setattr(providers, "GRACE", 0.5)
+    script = tmp_path / "wrapper"
+    script.write_text('#!/bin/sh\n( trap "" TERM; sleep 60 ) &\necho $! > "$1"\necho \'{"type": "x"}\'\nwait\n')
+    script.chmod(0o755)
+    child_pid = tmp_path / "child.pid"
+
+    async def go():
+        gen = providers.run_jsonl([str(script), str(child_pid)], "", providers.child_env(), tmp_path, providers.Run())
+        assert await gen.__anext__() == {"type": "x"}
+        started = asyncio.get_running_loop().time()
+        await gen.aclose()
+        return asyncio.get_running_loop().time() - started
+
+    took = asyncio.run(go())
+    pid = int(child_pid.read_text())
+    for _ in range(50):
+        if not _alive(pid):
+            break
+        asyncio.run(asyncio.sleep(0.05))
+    assert not _alive(pid) and took < 5
+
+
+class Slow(Fake):
+    """A provider that is slow before it streams (status) or while streaming."""
+
+    def __init__(self, slow_status=False, kind="cli"):
+        super().__init__(kind=kind)
+        self.slow_status = slow_status
+        self.hang = True
+        self.release = __import__("threading").Event()
+
+    def status(self):
+        if self.slow_status:
+            self.release.wait(5)
+        return super().status()
+
+    async def stream(self, t):
+        self.turns.append(t)
+        yield {"type": "thread", "id": "th-new"}
+        yield {"type": "delta", "text": "开始"}
+        if self.hang:
+            await asyncio.sleep(30)
+        yield {"type": "delta", "text": "不该到" if self.hang else "完"}
+
+
+def test_stop_also_works_before_the_stream_starts(monkeypatch, no_claude):
+    slow = Slow(slow_status=True)
+    monkeypatch.setitem(providers.PROVIDERS, "fake", slow)
+    chat = chat_for()
+    asyncio.run(chat.set_model("fake", "f-1"))
+
+    async def go():
+        task = asyncio.create_task(chat.send(text="x", page=None, selection=None, images=[], include_page_text=False))
+        while chat.other is None:
+            await asyncio.sleep(0.01)
+        await chat.interrupt()  # while the status check is still running
+        await asyncio.wait_for(task, 1)
+        slow.release.set()
+    asyncio.run(go())
+    assert slow.turns == [] and [e["type"] for e in chat.ws.sent] == ["error", "done"]
+    assert chat.ws.sent[0]["message"] == "已停止。" and chat.ws.sent[-1]["is_error"]
+
+
+def test_a_new_conversation_mid_answer_keeps_nothing_of_the_old_turn(monkeypatch, no_claude):
+    slow = Slow(kind="api")
+    monkeypatch.setitem(providers.PROVIDERS, "fake", slow)
+    chat = chat_for()
+    model_chat.save("studio", "fake", "f-1", "th-old")
+    slow.hang = False
+    send(chat, "第一轮")  # finishes: a transcript to archive
+    slow.hang = True
+    chat.ws.sent.clear()
+
+    async def go():
+        chat.task = asyncio.create_task(chat.send(text="第二轮", page=None, selection=None, images=[], include_page_text=False))
+        while not any(e["type"] == "delta" for e in chat.ws.sent):
+            await asyncio.sleep(0.01)
+        await asyncio.wait_for(chat.reset(), 5)
+        assert chat.task.done()
+    asyncio.run(go())
+    # the stopped turn wrote no thread, no API history and nothing into the new transcript
+    assert model_chat.binding("studio")["thread"] is None and model_chat.load_thread("studio", "fake") == []
+    assert claude_chat.history("studio") == []
+    assert model_chat.public("studio") == {"provider": "fake", "model": "f-1"}
+
+
+def test_the_codex_model_list_never_blocks_the_event_loop(fake_cli, monkeypatch, tmp_path):
+    codex = providers.Codex()
+    calls = tmp_path / "calls"
+    monkeypatch.setenv("FAKE_EXIT", "1")  # `codex debug models` fails
+    real = providers.run_quick
+
+    def counted(args, timeout=15):
+        with calls.open("a") as f:
+            f.write(" ".join(args[1:]) + "\n")
+        return real(args, timeout)
+    monkeypatch.setattr(providers, "run_quick", counted)
+    assert codex._catalog() == []
+    assert codex._catalog() == []  # a failure is remembered for a minute, not retried on every call
+    assert calls.read_text().splitlines() == ["debug models"]
+    # a stale list is served at once while a background thread refreshes it
+    codex._models = (0.0, [{"slug": "old", "visibility": "list"}])
+    monkeypatch.setenv("FAKE_EXIT", "0")
+    Path(os.environ["FAKE_OUT"]).write_text(json.dumps({"models": [{"slug": "new", "visibility": "list"}]}))
+    assert [m["slug"] for m in codex._catalog()] == ["old"]
+    for _ in range(100):
+        if codex._models[1] and codex._models[1][0]["slug"] == "new":
+            break
+        __import__("time").sleep(0.02)
+    assert [m["slug"] for m in codex._catalog()] == ["new"]
+
+
+def test_turn_setup_runs_off_the_event_loop(monkeypatch, no_claude):
+    import threading
+    seen = {}
+
+    class Picky(Fake):
+        def default_model(self):
+            seen.setdefault("default", threading.current_thread())
+            return super().default_model()
+
+        def models(self):
+            seen.setdefault("models", threading.current_thread())
+            return super().models()
+
+    monkeypatch.setitem(providers.PROVIDERS, "fake", Picky([{"type": "text", "text": "好"}]))
+    chat = chat_for()
+    loop_thread = {}
+
+    async def go():
+        loop_thread["t"] = threading.current_thread()
+        await chat.set_model("fake", "")  # the divider names the default model
+        seen.clear()
+        await chat.send(text="x", page=None, selection=None, images=[], include_page_text=False)
+    asyncio.run(go())
+    assert seen and all(t is not loop_thread["t"] for t in seen.values())
+
+
+def test_codex_labels_the_model_its_session_file_records(fake_cli, monkeypatch, tmp_path):
+    codex = providers.Codex()
+    monkeypatch.setattr(codex, "home", tmp_path / "codex-home")
+    day = tmp_path / "codex-home" / "sessions" / "2026" / "10" / "26"
+    day.mkdir(parents=True)
+    (day / "rollout-2026-10-26T01-03-24-th-77777777.jsonl").write_text("\n".join(json.dumps(x) for x in [
+        {"type": "session_meta", "payload": {"id": "th-77777777"}},
+        {"type": "turn_context", "payload": {"model": "gpt-old"}},
+        {"type": "turn_context", "payload": {"model": "gpt-actual"}}]) + "\n")
+    fake_cli.events({"type": "thread.started", "thread_id": "th-77777777"}, {"type": "turn.completed"})
+    models = [e["model"] for e in run(codex.stream(turn(model=""))) if e["type"] == "model"]
+    assert models == ["默认模型", "gpt-actual"]
+    assert codex.rollout_model("../../etc") == ""
+
+
+def test_too_long_contexts_are_named_as_such(api_mock):
+    calls, replies = api_mock
+    write_secret("deepseek", "DEEPSEEK_API_KEY=sk-1\n")
+    replies.append(httpx.Response(400, json={"error": {"message": "This model's maximum context length is 131072 tokens. "
+                                                       "However, you requested 140000 tokens.", "type": "invalid_request_error"}}))
+    evs = run(providers.PROVIDERS["deepseek"].stream(turn(model="deepseek-chat")))
+    assert "上下文超长" in evs[-1]["message"] and "新对话" in evs[-1]["message"] and "用不了模型" not in evs[-1]["message"]
+    assert "上下文超长" in providers.PROVIDERS["codex"].friendly("context_length_exceeded: input exceeds the context window")
+    assert "上下文超长" in providers.PROVIDERS["gemini"].friendly("The input token count exceeds the maximum number of tokens")
+
+
+def test_fit_drops_the_oldest_turns_then_old_tool_results():
+    big = "x" * 7000  # about 2000 tokens each
+    msgs = [{"role": "system", "content": "S"},
+            {"role": "user", "content": big}, {"role": "assistant", "content": big},
+            {"role": "user", "content": big}, {"role": "assistant", "content": big},
+            {"role": "user", "content": "这一轮"},
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "a"}]}, {"role": "tool", "tool_call_id": "a", "content": big},
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "b"}]}, {"role": "tool", "tool_call_id": "b", "content": big}]
+    current, dropped = providers.fit(msgs, 5, 9000)
+    assert (current, dropped) == (3, 2) and msgs[1]["content"] == big and msgs[3]["content"] == "这一轮"
+    current, dropped = providers.fit(msgs, current, 3000)
+    assert (current, dropped) == (1, 2) and msgs[0]["content"] == "S" and msgs[1]["content"] == "这一轮"
+    tools = [m for m in msgs if m["role"] == "tool"]
+    assert tools[0]["content"] == providers.SHORTENED and tools[-1]["content"] == big  # the latest result stays
+
+
+def test_a_trimmed_request_says_so(api_mock, monkeypatch):
+    calls, replies = api_mock
+    write_secret("deepseek", "DEEPSEEK_API_KEY=sk-1\n")
+    monkeypatch.setattr(providers.DeepSeek, "budget", lambda self, model: 3000)
+    replies.append(httpx.Response(200, content=sse({"choices": [{"delta": {"content": "好"}}]})))
+    history = [{"role": "user", "content": "x" * 7000}, {"role": "assistant", "content": "y" * 7000}]
+    evs = run(providers.PROVIDERS["deepseek"].stream(turn(model="deepseek-chat", history=history)))
+    assert {"type": "tool", "name": "trim", "summary": "上下文太长：这次没带上最早的 2 条对话"} in evs
+    assert [m["role"] for m in calls[0]["body"]["messages"]] == ["system", "user"]

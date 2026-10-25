@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import difflib
 import json
 import subprocess
@@ -212,7 +213,8 @@ class PaperChat:
         self.pending: dict[str, asyncio.Future[bool]] = {}
         self.last_used = time.time()
         self.task: asyncio.Task | None = None
-        self.other: asyncio.Task | None = None  # a non-Claude turn's stream, cancelled by "stop"
+        self.other: asyncio.Task | None = None  # a non-Claude turn, cancelled by "stop"
+        self.generation = 0  # bumped by 新对话: a turn still running from before must not write anything
 
     async def emit(self, payload: dict[str, Any]) -> None:
         if self.ws is not None:
@@ -307,7 +309,21 @@ class PaperChat:
                 pass
             self.client = None
 
+    async def _end_turn(self) -> None:
+        """Stop the answer in progress (新对话 while answering) and give it a moment to wind down."""
+        task = self.task
+        if task is None or task.done():
+            return
+        if self.other is not None:
+            self.other.cancel()
+        elif self.client is not None:
+            with contextlib.suppress(Exception):
+                await self.client.interrupt()
+        await asyncio.wait({task}, timeout=10)
+
     async def reset(self) -> None:
+        self.generation += 1
+        await self._end_turn()
         await self.close()
         _save_session(self.stem, None)
         model_chat.drop_thread(self.stem)
@@ -334,6 +350,9 @@ class PaperChat:
         old = model_chat.binding(self.stem)
         if (provider, model) == (old["provider"], old["model"]):
             return {"binding": model_chat.public(self.stem), "event": None}
+        p = providers.get(provider)
+        # the default model can come from a CLI's model list: off the event loop
+        shown = model or (await asyncio.to_thread(p.default_model) if p and provider != "claude" else "")
         new_thread = provider != old["provider"]
         if old["provider"] == "claude":
             await self.close()  # the next Claude turn connects with the new model, or never
@@ -344,8 +363,6 @@ class PaperChat:
         model_chat.save(self.stem, provider, model, None if new_thread else old.get("thread"))
         event = None
         if _log_path(self.stem).exists():
-            p = providers.get(provider)
-            shown = model or (p.default_model() if p and provider != "claude" else "")
             event = {"role": "event", "kind": "provider" if new_thread else "model", "provider": provider,
                      "model": shown, "label": model_chat.answered_by(provider, shown), "ts": time.time()}
             _append_log(self.stem, event)
@@ -355,6 +372,7 @@ class PaperChat:
                    images: list[str], include_page_text: bool, display: str | None = None) -> None:
         async with self.lock:
             self.last_used = time.time()
+            generation = self.generation
             context = []
             if page:
                 context.append(f"[用户正在看第 {page} 页]")
@@ -412,7 +430,7 @@ class PaperChat:
                                 segments.append(seg)
                                 await self.emit({"type": "tool", **seg})
                     elif isinstance(msg, ResultMessage):
-                        if msg.session_id:
+                        if msg.session_id and self.generation == generation:
                             _save_session(self.stem, msg.session_id)
                         done = {"type": "done", "provider": "claude", "model": model, "duration_ms": msg.duration_ms,
                                 "segments": segments, "is_error": msg.is_error}
@@ -425,8 +443,9 @@ class PaperChat:
                 msg_text = _friendly_error(str(e))
                 await self.emit({"type": "error", "message": msg_text})
                 segments.append({"type": "error", "text": msg_text})
-            _append_log(self.stem, {"role": "assistant", "segments": segments, "provider": "claude", "model": model,
-                                    "ts": time.time()})
+            if self.generation == generation:  # not after 新对话: that answer belongs to the archived conversation
+                _append_log(self.stem, {"role": "assistant", "segments": segments, "provider": "claude", "model": model,
+                                        "ts": time.time()})
             self.last_used = time.time()
 
 

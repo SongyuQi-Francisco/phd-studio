@@ -166,44 +166,76 @@ def no_vision(p: providers.Provider, model: str) -> str:
 # ---------------- one turn ----------------
 
 
+def _check(p: providers.Provider, b: dict[str, Any], paths: list[Path]) -> tuple[str, str | None]:
+    """The model this turn uses and why it can't run, if it can't. Status checks and model lists can run
+    a CLI: off the event loop."""
+    model = b["model"] or p.default_model()
+    st = p.status()
+    if not st["ok"]:
+        return model, unavailable(p, st)
+    if paths and not p.vision(model):
+        return model, no_vision(p, model)
+    return model, None
+
+
 async def run_turn(chat: PaperChat, b: dict[str, Any], text: str, images: list[str]) -> None:
-    """Answer one message with the conversation's non-Claude provider, streaming to the panel."""
+    """Answer one message with the conversation's non-Claude provider, streaming to the panel.
+
+    The whole turn (status check, context, the stream) is one task that 「停止」 cancels. If the
+    conversation was reset meanwhile (新对话), nothing of this turn is written: not the thread, not the
+    API history, not the transcript."""
     p = providers.get(b["provider"])
-    model = b["model"] or (p.default_model() if p else "")
+    generation = chat.generation
     segments: list[dict[str, Any]] = []
-    out: dict[str, Any] = {"model": model, "reply": "", "error": False, "thread": None, "stopped": False}
+    out: dict[str, Any] = {"model": b["model"], "reply": "", "error": False, "thread": None, "stopped": False}
     started = time.monotonic()
+    paths = [x for x in (CROPS_DIR / Path(n).name for n in images) if x.exists()]
 
     async def fail(msg: str) -> None:
         segments.append({"type": "error", "text": msg})
         out["error"] = True
         await chat.emit({"type": "error", "message": msg})
 
-    paths = [CROPS_DIR / Path(n).name for n in images]
-    paths = [x for x in paths if x.exists()]
-    if p is None:
-        await fail(f"这个对话绑定的模型来源「{b['provider']}」已不存在。在面板顶部重新选一个模型。")
-    else:
-        st = await asyncio.to_thread(p.status)
-        if not st["ok"]:
-            await fail(unavailable(p, st))
-        elif paths and not p.vision(model):
-            await fail(no_vision(p, model))
-        else:
-            await chat.emit({"type": "start"})
-            try:  # a resumed CLI thread already has its instructions
-                resumed = p.kind == "cli" and b.get("thread")
-                instr = "" if resumed else await asyncio.to_thread(instructions, chat, p, model)
-            except Exception as e:  # noqa: BLE001 - e.g. the paper's PDF can't be fetched
-                await fail(f"准备上下文失败：{e}")
-            else:
-                studio = chat.stem == "studio" or line_chat.is_line_key(chat.stem)
-                turn = providers.Turn(
-                    text=text, instructions=instr, model=model, cwd=VAULT_DIR,
-                    read_dirs=[TEXT_DIR, CROPS_DIR, *(Path(d) for d in EXTRA_READ_DIRS)],
-                    thread=b.get("thread"), history=load_thread(chat.stem, p.id) if p.kind == "api" else [],
-                    images=paths, tools=ro_tools.for_chat(studio) if p.kind == "api" else [])
-                await _stream(chat, p, turn, segments, out)
+    async def work() -> None:
+        if p is None:
+            await fail(f"这个对话绑定的模型来源「{b['provider']}」已不存在。在面板顶部重新选一个模型。")
+            return
+        out["model"], problem = await asyncio.to_thread(_check, p, b, paths)
+        if problem:
+            await fail(problem)
+            return
+        await chat.emit({"type": "start"})
+        try:  # a resumed CLI thread already has its instructions
+            resumed = p.kind == "cli" and b.get("thread")
+            instr = "" if resumed else await asyncio.to_thread(instructions, chat, p, out["model"])
+        except Exception as e:  # noqa: BLE001 - e.g. the paper's PDF can't be fetched
+            await fail(f"准备上下文失败：{e}")
+            return
+        studio = chat.stem == "studio" or line_chat.is_line_key(chat.stem)
+        turn = providers.Turn(
+            text=text, instructions=instr, model=out["model"], cwd=VAULT_DIR,
+            read_dirs=[TEXT_DIR, CROPS_DIR, *(Path(d) for d in EXTRA_READ_DIRS)],
+            thread=b.get("thread"), history=load_thread(chat.stem, p.id) if p.kind == "api" else [],
+            images=paths, tools=ro_tools.for_chat(studio) if p.kind == "api" else [])
+        await _consume(chat, p, turn, segments, out)
+
+    task = asyncio.create_task(work())
+    chat.other = task
+    try:
+        await task
+    except asyncio.CancelledError:
+        current = asyncio.current_task()
+        if not task.cancelled() or (current and current.cancelling()):
+            raise  # the whole send is being cancelled (app shutting down), not just this turn stopped
+        out["stopped"] = True
+        segments.append({"type": "error", "text": "已停止。"})
+        await chat.emit({"type": "error", "message": "已停止。"})
+    except Exception as e:  # noqa: BLE001 - report to the panel, never fall back to another model
+        await fail(f"{p.label if p else b['provider']} 出错：{e}")
+    finally:
+        chat.other = None
+    if chat.generation != generation:
+        return  # 新对话 while this was answering: a stale turn must not write into the new conversation
     if p is not None and not out["error"] and not out["stopped"]:
         if out["thread"]:
             set_thread(chat.stem, out["thread"])
@@ -215,59 +247,41 @@ async def run_turn(chat: PaperChat, b: dict[str, Any], text: str, images: list[s
     elif out.get("lost"):
         set_thread(chat.stem, None)  # said so in the error: the next message opens a new thread
     elif out["thread"] and not b.get("thread"):
-        set_thread(chat.stem, out["thread"])  # a failed first turn still opened the CLI's thread
+        set_thread(chat.stem, out["thread"])  # a failed or stopped first turn still opened the CLI's thread
     pid = p.id if p else b["provider"]
     done = {"type": "done", "provider": pid, "model": out["model"], "duration_ms": int((time.monotonic() - started) * 1000),
-            "segments": segments, "is_error": out["error"]}
+            "segments": segments, "is_error": out["error"] or out["stopped"]}
     await chat.emit(done)
     chat.log({"role": "assistant", "segments": segments, "provider": pid, "model": out["model"], "ts": time.time()})
 
 
-async def _stream(chat: PaperChat, p: providers.Provider, turn: providers.Turn,
-                  segments: list[dict[str, Any]], out: dict[str, Any]) -> None:
-    async def consume() -> None:
-        async for ev in p.stream(turn):
-            kind = ev.get("type")
-            if kind == "thread":
-                out["thread"] = ev["id"]
-            elif kind == "thread_lost":
-                out["lost"] = True
-            elif kind == "model":
-                out["model"] = ev["model"]
-            elif kind in ("delta", "text"):
-                chunk = ev["text"]
-                last = segments[-1] if segments else None
-                if kind == "text" and last and last["type"] == "text" and last["text"]:
-                    chunk = "\n\n" + chunk  # whole messages from a CLI are paragraphs
-                if last and last["type"] == "text":
-                    last["text"] += chunk
-                else:
-                    segments.append({"type": "text", "text": chunk})
-                out["reply"] += chunk
-                await chat.emit({"type": "delta", "text": chunk})
-            elif kind == "tool":
-                seg = {"type": "tool", "name": ev["name"], "summary": ev["summary"]}
-                segments.append(seg)
-                await chat.emit({"type": "tool", **seg})
-            elif kind == "error":
-                segments.append({"type": "error", "text": ev["message"]})
-                out["error"] = True
-                await chat.emit({"type": "error", "message": ev["message"]})
-                return
-
-    task = asyncio.create_task(consume())
-    chat.other = task
-    try:
-        await task
-    except asyncio.CancelledError:
-        if not task.cancelled() or (asyncio.current_task() and asyncio.current_task().cancelling()):
-            raise  # the whole turn is being cancelled (app shutting down), not just stopped
-        out["stopped"] = True
-        segments.append({"type": "error", "text": "已停止。"})
-        await chat.emit({"type": "error", "message": "已停止。"})
-    except Exception as e:  # noqa: BLE001 - report to the panel, never fall back to another model
-        await chat.emit({"type": "error", "message": f"{p.label} 出错：{e}"})
-        segments.append({"type": "error", "text": f"{p.label} 出错：{e}"})
-        out["error"] = True
-    finally:
-        chat.other = None
+async def _consume(chat: PaperChat, p: providers.Provider, turn: providers.Turn,
+                   segments: list[dict[str, Any]], out: dict[str, Any]) -> None:
+    async for ev in p.stream(turn):
+        kind = ev.get("type")
+        if kind == "thread":
+            out["thread"] = ev["id"]
+        elif kind == "thread_lost":
+            out["lost"] = True
+        elif kind == "model":
+            out["model"] = ev["model"]
+        elif kind in ("delta", "text"):
+            chunk = ev["text"]
+            last = segments[-1] if segments else None
+            if kind == "text" and last and last["type"] == "text" and last["text"]:
+                chunk = "\n\n" + chunk  # whole messages from a CLI are paragraphs
+            if last and last["type"] == "text":
+                last["text"] += chunk
+            else:
+                segments.append({"type": "text", "text": chunk})
+            out["reply"] += chunk
+            await chat.emit({"type": "delta", "text": chunk})
+        elif kind == "tool":
+            seg = {"type": "tool", "name": ev["name"], "summary": ev["summary"]}
+            segments.append(seg)
+            await chat.emit({"type": "tool", **seg})
+        elif kind == "error":
+            segments.append({"type": "error", "text": ev["message"]})
+            out["error"] = True
+            await chat.emit({"type": "error", "message": ev["message"]})
+            return
