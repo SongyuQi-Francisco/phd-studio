@@ -188,7 +188,7 @@ def load() -> list[dict[str, Any]]:
 
 
 def refresh_view() -> None:
-    """Rewrite Reading List.md now, e.g. in the new interface language (it otherwise waits for a change)."""
+    """Rewrite Reading List.md now, e.g. after the interface language changed with vault_language = "ui"."""
     with _locked():
         if READING_LIST.exists():
             _write_view(_load_raw())
@@ -395,16 +395,16 @@ def _write_view(items: list[dict[str, Any]]) -> None:
     reading = [i for i in items if i["status"] == "reading"]
     cutoff = (date.today() - timedelta(days=STALE_DAYS)).isoformat()
     inbox = [i for i in items if i["status"] == "inbox" and i.get("pushed_at", "") >= cutoff]
-    parts = ["---", "type: reading-list", "generated: true", "---", "", "# " + i18n.t("reading.view.title"), "",
-             "> " + i18n.t("reading.view.generated", file=READING_LIST.name), ""]
+    parts = ["---", "type: reading-list", "generated: true", "---", "", "# " + i18n.tv("reading.view.title"), "",
+             "> " + i18n.tv("reading.view.generated", file=READING_LIST.name), ""]
     if reading:
-        parts += ["## " + i18n.t("reading.view.reading"), *rows(reading), ""]
+        parts += ["## " + i18n.tv("reading.view.reading"), *rows(reading), ""]
     for tier in TIERS:
         sel = [i for i in queued if i.get("tier") == tier]
         if sel:
             parts += [f"## {tier}", *rows(sel), ""]
     if inbox:
-        parts += ["## " + i18n.t("reading.view.inbox", n=len(inbox)), *rows(inbox), ""]
+        parts += ["## " + i18n.tv("reading.view.inbox", n=len(inbox)), *rows(inbox), ""]
     text = "\n".join(parts)
     for copy in _conflict_copies(READING_VIEW):
         _park(copy)  # generated file: just regenerate

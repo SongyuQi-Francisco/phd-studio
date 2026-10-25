@@ -12,7 +12,7 @@
   "writing": "Writing…",
   "skip": "Don't write",
   "write_failed": "{stem}: {error}",
-  "written": { "one": "Wrote the Zotero link into {n} note", "other": "Wrote the Zotero link into {n} notes" },
+  "written": {"one": "Wrote the Zotero link into {n} note", "other": "Wrote the Zotero link into {n} notes"},
   "ways.desktop": "Zotero desktop is running",
   "ways.desktop_web": "Zotero desktop is running; a web API key is set too",
   "ways.web": "Zotero desktop isn't running; using the web API key",
@@ -32,5 +32,5 @@
   "coll_root": "Library root",
   "coll_gone": "(collection no longer exists)",
   "pending": "Links to write back",
-  "pending_hint": { "one": "{n} paper is in Zotero, but its note has no link yet", "other": "{n} papers are in Zotero, but their notes have no link yet" }
+  "pending_hint": {"one": "{n} paper is in Zotero, but its note has no link yet", "other": "{n} papers are in Zotero, but their notes have no link yet"}
 }

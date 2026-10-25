@@ -2,6 +2,7 @@
 
 > 状态：**草案，待确认**（#49）。确认后 #50–#52 按这里逐页抽取和翻译；之后新增文案也按这里写。
 > 写法和检查方法见 [docs/i18n.md](i18n.md)。标 ⚖️ 的行写的是建议，需要你在「待你决定」里定。
+> 几个页面共用的术语已放进 `web/locales/*/common.json`（`common.term.*`、`common.status.*` 等），按这里的结论改。
 
 ## 规则
 
@@ -33,7 +34,7 @@
 | D12 | 实验室 / lab | ✅ 统一成「实验室」，只有专名 Lab Tracker 不变 | 统一成 lab |
 | D13 | 学术指标 | ✅ h-index、i10-index 用英文；被引、引用统一成「被引」 | 「h 指数」保留中文 |
 | D14 | 研究地图（#45）的节点类型和状态 | ✅ 中文，Kill criteria 除外（见「研究地图」表） | 节点类型用英文：Question / Hypothesis / Branch / Experiment / Result / Decision / Open question |
-| D15 | 两台 Mac 界面语言不同时，生成的 `Reading List.md` 用哪种语言 | ✅ 跟随写它的那台 Mac 的界面语言（现在的实现）；两台语言不同时这个文件会随最后写入的那台变 | 在 `studio.toml` 里固定一种语言，两台一致 |
+| D15 | 工作台写进 vault 的文件（现在是 `Reading List.md`）用哪种语言 | ✅ `studio.toml` 的 `[profile] vault_language` 固定一种，默认中文，两台 Mac 写出来一样（已实现）。注意：这个文件原来的标题是英文（# Reading List、## Inbox），改成中文后，指向 `#Reading` 这类小节的链接要改一次 | 默认英文（和原来一样，链接不用改）；或 `ui`：跟随各自 Mac 的界面语言，两台设置不同时会来回改写 |
 | D16 | 英文界面下，划词翻译和双语 PDF 还翻成中文吗 | ✅ 先不变（目标语言是中文）；以后需要时再加「翻译成」设置 | 跟随界面语言 |
 | D17 | 研究线卡片上的「第一个实验」「证据」 | ✅ First Experiment、Evidence，和笔记小节、vault 文件夹同名 | 保留「第一个实验」「证据」 |
 

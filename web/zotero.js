@@ -2,10 +2,10 @@
 // confirm the exact line, and the Settings rows (status, auto mode, collection, API key help).
 import { useEffect, useRef, useState } from "preact/hooks";
 import { html, Icon, api } from "/lib.js";
-import { t, tx } from "/i18n.js";
+import { t, tx, lang } from "/i18n.js";
 
-const AUTO = ["off", "triage", "all"];
-const STATE = ["added", "exists", "linked", "error"];
+const AUTO = ["off", "triage", "all"]; // i18n-keys: zotero.auto.{off,triage,all}
+const STATE = ["added", "exists", "linked", "error"]; // i18n-keys: zotero.state.{added,exists,linked,error}
 const stateLabel = (s) => (STATE.includes(s) ? t("zotero.state." + s) : s);
 const enc = encodeURIComponent;
 
@@ -109,7 +109,7 @@ export function ZoteroSettings({ settings, save, toast }) {
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
   const load = () => api("/api/zotero/setup").then(setZ).catch(() => {});
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [lang()]); // the server's messages follow the interface language
   if (!z) return null;
 
   const ways = z.snapshot_error ? z.snapshot_error : z.desktop ? t(z.web ? "zotero.ways.desktop_web" : "zotero.ways.desktop")

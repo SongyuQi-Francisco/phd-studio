@@ -65,7 +65,7 @@ ENGINES = {"deepseek": _deepseek, "glm": _glm, "google": _google}
 
 
 def engine_label(name: str) -> str:
-    return t(f"translate.engine.{name}")
+    return t(f"translate.engine.{name}")  # i18n-keys: translate.engine.{deepseek,glm,google}
 
 
 def translate(text: str) -> dict[str, str]:

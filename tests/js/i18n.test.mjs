@@ -1,7 +1,7 @@
 // web/i18n.js without a browser: run by tests/test_i18n.py with node, or with JavaScriptCore's jsc
 // (WebKit's engine, the one the desktop window uses). Prints "ok" or throws.
 // The test copies web/i18n.js next to this file as i18n.mjs, so every engine loads it as a module.
-import { t, tx, lang, loadMessages, setLangSetting, onLangChange, intlLocale } from "./i18n.mjs";
+import { t, tx, lang, loadMessages, setLangSetting, onLangChange, locale, formatNumber, formatDate } from "./i18n.mjs";
 
 const out = typeof print === "function" ? print : console.log.bind(console);
 const warnings = [];
@@ -29,7 +29,9 @@ loadMessages({
 
 // "system" follows the OS language the server reported
 eq(lang(), "en", "system language");
-eq(intlLocale(), "en-US", "Intl locale");
+eq(locale(), "en-US", "Intl locale");
+eq(formatNumber(12345.5), "12,345.5", "numbers in the interface language");
+eq(formatDate("2026-10-26T12:00:00", { month: "short", day: "numeric" }), "Oct 26", "dates in the interface language");
 
 // interpolation
 eq(t("m.hello", { name: "Ada" }), "Hello, Ada", "interpolation");
@@ -63,9 +65,16 @@ eq(lang(), "zh", "switched");
 eq(t("m.hello", { name: "Ada" }), "你好，Ada", "text in the new language");
 eq(t("m.count", { n: 1 }), "1 篇", "Chinese has one form");
 eq(t("m.only_en"), "English only", "falls back to English");
+eq(formatDate("2026-10-26T12:00:00", { month: "short", day: "numeric" }), "10月26日", "dates follow the switch");
 off();
 setLangSetting("system");
 eq(seen, "zh", "unsubscribed");
 eq(lang(), "en", "back to the system language");
+
+// a development server: a key missing everywhere is shown loudly, not as a plausible-looking key
+loadMessages({ setting: "en", system: "zh", dev: true, messages: { zh: {}, en: { "m.hello": "Hello" } } });
+eq(t("m.gone"), "⟦m.gone⟧", "dev marks a missing key");
+eq(tx("m.gone"), ["⟦m.gone⟧"], "tx too");
+eq(t("m.hello"), "Hello", "present keys are unaffected");
 
 out("ok");

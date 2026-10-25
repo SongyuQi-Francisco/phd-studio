@@ -5,8 +5,9 @@ plural forms {"one": ..., "other": ...} picked by n, and a missing key falls bac
 language, then to the key itself (logged once).
 
 The language is this Mac's Settings choice, ui_language: "zh" | "en" | "system". "system" follows
-the OS language ($STUDIO_LANG overrides it: tests, demo screenshots). API errors, messages and the
-generated Markdown views use it; the assistant's answer language is its own setting.
+the OS language ($STUDIO_LANG overrides it: tests, demo screenshots). API errors and messages use it
+(t); text written into the vault uses the vault language from studio.toml instead (tv), and the
+assistant's answer language is its own setting.
 """
 from __future__ import annotations
 
@@ -61,6 +62,19 @@ def system_lang() -> str:
 def ui_lang() -> str:
     s = load_settings().get("ui_language", "system")
     return s if s in LANGS else system_lang()
+
+
+def vault_lang() -> str:
+    """The language of the Markdown the app writes into the vault (Reading List.md, generated views).
+
+    [profile] vault_language in studio.toml: "zh" (default) | "en" | "ui". The vault is shared by both
+    Macs, so it is one fixed language unless set to "ui" (each Mac's interface language: two Macs set
+    differently then keep rewriting the same files).
+    """
+    v = str(PROFILE.get("vault_language") or "zh").lower()
+    if v == "ui":
+        return ui_lang()
+    return v if v in LANGS else "zh"
 
 
 def answer_language() -> str:
@@ -142,3 +156,8 @@ def tl(lang: str, key: str, /, **params: Any) -> str:
 def t(key: str, /, **params: Any) -> str:
     """The message for key in this Mac's interface language."""
     return tl(ui_lang(), key, **params)
+
+
+def tv(key: str, /, **params: Any) -> str:
+    """The message for key in the vault language: for text written into vault files."""
+    return tl(vault_lang(), key, **params)

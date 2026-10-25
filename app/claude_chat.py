@@ -450,13 +450,18 @@ class PaperChat:
             self.last_used = time.time()
 
 
+def takeaway_prompt(text: str | None = None) -> str:
+    """text: the paper's full text, when there is no conversation to fork."""
+    limit = "不超过 60 字" if answers_in_chinese() else "不超过 25 个英文单词"  # a Chinese character ≈ half a word
+    return (f"用{answer_language()}写一句话（{limit}）总结这篇论文对我的价值：它解决了什么、我能拿走什么。"
+            "只输出这句话。" + (f"先读全文：{text}" if text else ""))
+
+
 async def draft_takeaway(stem: str) -> str:
     """One-line takeaway for the reading list, drafted from a fork of the paper's conversation."""
     session = _load_sessions().get(stem)
-    lang = answer_language()
     text = "" if session else await asyncio.to_thread(library.text_file, stem)  # may download the PDF: off the event loop
-    prompt = (f"用{lang}写一句话（不超过 60 字）总结这篇论文对我的价值：它解决了什么、我能拿走什么。"
-              "只输出这句话。" + ("" if session else f"先读全文：{text}"))
+    prompt = takeaway_prompt(None if session else text)
     opts = ClaudeAgentOptions(
         cwd=str(VAULT_DIR), add_dirs=[str(TEXT_DIR)], tools=["Read"], allowed_tools=["Read"],
         setting_sources=[], resume=session, fork_session=bool(session), max_turns=4,

@@ -545,7 +545,7 @@ async def update_settings(patch: dict[str, Any]) -> dict[str, Any]:
             raise HTTPException(400, i18n.t("settings.bad_choice", name=k, value=patch[k]))
     s = save_settings(patch)
     if "ui_language" in patch:
-        await run_in_threadpool(reading.refresh_view)  # generated Markdown follows the interface language
+        await run_in_threadpool(reading.refresh_view)  # only changes it with [profile] vault_language = "ui"
     await registry.close_all()  # new model applies to the next turn
     return s
 

@@ -5,14 +5,14 @@
 import { useEffect, useState } from "preact/hooks";
 import { html, Icon, api } from "/lib.js";
 import { Days } from "/ui.js";
-import { t, intlLocale } from "/i18n.js";
+import { t, lang, formatDate, formatTime } from "/i18n.js";
 
 const LEAD_CHOICES = [30, 14, 7, 3, 1, 0];
-const TYPES = ["target", "milestone", "venue"];
-const SKIPPED = ["off", "other_device", "quiet"];
+const TYPES = ["target", "milestone", "venue"]; // i18n-keys: reminders.type.{target,milestone,venue}
+const SKIPPED = ["off", "other_device", "quiet"]; // i18n-keys: reminders.skipped.{off,other_device,quiet}
 const skippedLabel = (s) => (SKIPPED.includes(s) ? t("reminders.skipped." + s) : s);
 const leadLabel = (d) => (d === 0 ? t("reminders.same_day") : t("common.n_days", { n: d }));
-const monthDay = (d) => d.toLocaleDateString(intlLocale(), { month: "short", day: "numeric" });
+const monthDay = (d) => formatDate(d, { month: "short", day: "numeric" });
 
 function ago(iso) {
   if (!iso) return "";
@@ -28,7 +28,7 @@ function clock(iso) {
   const day = new Date(d); day.setHours(0, 0, 0, 0);
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const n = Math.round((today - day) / 86400000);
-  const time = d.toLocaleTimeString(intlLocale(), { hour: "2-digit", minute: "2-digit", hour12: false });
+  const time = formatTime(d, { hour: "2-digit", minute: "2-digit", hour12: false });
   return t("reminders.at", { day: n === 0 ? t("common.today") : n === 1 ? t("common.yesterday") : monthDay(d), time });
 }
 
@@ -59,7 +59,7 @@ function Switch({ on, onChange, disabled }) {
 export function ReminderRow() {
   const [st, setSt] = useState(null);
   const [open, setOpen] = useState(false);
-  useEffect(() => { api("/api/reminders").then(setSt).catch(() => {}); }, []);
+  useEffect(() => { api("/api/reminders").then(setSt).catch(() => {}); }, [lang()]); // titles are worded by the server
   if (!st) return null;
   const s = st.settings;
   const sender = st.devices.find((d) => d.id === st.designated)?.name || st.designated;
@@ -94,7 +94,7 @@ function RemindersSheet({ initial, onClose }) {
   const [err, setErr] = useState("");
   const [sent, setSent] = useState(null);
   const [custom, setCustom] = useState("");
-  useEffect(() => { api("/api/reminders").then(setSt).catch(() => {}); }, []);
+  useEffect(() => { api("/api/reminders").then(setSt).catch(() => {}); }, [lang()]); // titles are worded by the server
   const s = st.settings, ag = st.agent;
 
   const save = async (patch) => {
@@ -109,8 +109,8 @@ function RemindersSheet({ initial, onClose }) {
     const d = parseInt(custom, 10);
     if (Number.isInteger(d) && d >= 0 && d <= 90) { save({ leads: [...s.leads, d] }); setCustom(""); } else setErr(t("reminders.err_lead_range"));
   };
-  const toggleType = (t) => {
-    const next = { ...s.types, [t]: !s.types[t] };
+  const toggleType = (type) => {
+    const next = { ...s.types, [type]: !s.types[type] };
     if (Object.values(next).some(Boolean)) save({ types: next }); else setErr(t("reminders.err_one_type"));
   };
   const agent = async (install) => {

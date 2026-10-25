@@ -354,9 +354,9 @@ def view() -> str:
 
 
 @pytest.fixture
-def english() -> None:
-    """The view follows the interface language; these tests read the English one."""
-    config.save_settings({"ui_language": "en"})
+def english(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The view is written in the vault language ([profile] vault_language); these tests read the English one."""
+    monkeypatch.setitem(config.PROFILE, "vault_language", "en")
 
 
 def test_view_is_a_generated_sibling_of_the_yaml(notes, english):
@@ -394,7 +394,15 @@ def test_view_is_in_chinese_with_tiers_kept(notes):
     assert "## 收件箱（1 篇待分拣）" in text
 
 
-def test_view_follows_a_language_switch_at_once(notes):
+def test_view_keeps_the_vault_language_when_this_mac_switches(notes):
+    push(paper="Alpha")
+    config.save_settings({"ui_language": "en"})
+    reading.refresh_view()
+    assert "# 阅读清单" in view()  # both Macs write the same headings, whatever their interface language
+
+
+def test_view_can_follow_the_interface_language(notes, monkeypatch):
+    monkeypatch.setitem(config.PROFILE, "vault_language", "ui")
     push(paper="Alpha")
     assert "# 阅读清单" in view()
     config.save_settings({"ui_language": "en"})

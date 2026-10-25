@@ -4,11 +4,11 @@
 import { useEffect, useState } from "preact/hooks";
 import { html, Icon, api } from "/lib.js";
 import { Progress } from "/charts.js";
-import { t } from "/i18n.js";
+import { t, lang } from "/i18n.js";
 
 const MODES = [["off", null], ["T1", "T1"], ["T1T2", "T1 + T2"]];
 const mb = (b) => (b >= 1e9 ? (b / 1e9).toFixed(1) + " GB" : Math.round(b / 1e6) + " MB");
-const DONE = ["done", "error", "skipped"];
+const DONE = ["done", "error", "skipped"]; // i18n-keys: bilingual.state.{done,error,skipped}
 const doneLabel = (s) => (DONE.includes(s) ? t("bilingual.state." + s) : s);
 const enc = encodeURIComponent;
 
@@ -19,11 +19,12 @@ export function BilingualSettings({ settings, save }) {
   const [days, setDays] = useState("90");
   const [sure, setSure] = useState(false); // second click confirms the cleanup
   const load = () => api("/api/bilingual-queue").then(setQ).catch(() => {});
-  useEffect(() => { load(); }, [settings.bilingual_prefetch, settings.translate_engine]);
+  // lang(): the engine name and job errors come worded by the server, in the interface language.
+  useEffect(() => { load(); }, [settings.bilingual_prefetch, settings.translate_engine, lang()]);
   useEffect(() => {
     if (!q?.running && !q?.busy?.length) return;
-    const t = setInterval(load, 3000);
-    return () => clearInterval(t);
+    const timer = setInterval(load, 3000);
+    return () => clearInterval(timer);
   }, [!!q?.running, q?.busy?.length]);
   if (!q) return null;
 

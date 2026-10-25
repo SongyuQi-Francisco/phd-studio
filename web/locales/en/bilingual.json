@@ -18,12 +18,12 @@
   "state.error": "failed",
   "state.skipped": "skipped",
   "state_error": "{state}: {error}",
-  "backfill": { "one": "Also queue the {n} {tiers} paper already in the list", "other": "Also queue the {n} {tiers} papers already in the list" },
+  "backfill": {"one": "Also queue the {n} {tiers} paper already in the list", "other": "Also queue the {n} {tiers} papers already in the list"},
   "disk": "Bilingual PDFs on disk",
-  "disk_hint": { "one": "{size} · {n} paper. Cleanup only removes papers that are no longer in the inbox, T1–T3 or reading; click “Bilingual” to make one again", "other": "{size} · {n} papers. Cleanup only removes papers that are no longer in the inbox, T1–T3 or reading; click “Bilingual” to make one again" },
+  "disk_hint": {"one": "{size} · {n} paper. Cleanup only removes papers that are no longer in the inbox, T1–T3 or reading; click “Bilingual” to make one again", "other": "{size} · {n} papers. Cleanup only removes papers that are no longer in the inbox, T1–T3 or reading; click “Bilingual” to make one again"},
   "age_title": "Made how long ago",
-  "days_ago": { "one": "{n} day ago", "other": "{n} days ago" },
+  "days_ago": {"one": "{n} day ago", "other": "{n} days ago"},
   "nothing_to_clean": "Nothing to clean up",
-  "confirm_clean": { "one": "Delete {n} paper?", "other": "Delete {n} papers?" },
+  "confirm_clean": {"one": "Delete {n} paper?", "other": "Delete {n} papers?"},
   "clean": "Clean up {n} · {size}"
 }

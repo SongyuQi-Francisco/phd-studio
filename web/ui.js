@@ -26,8 +26,8 @@ export function Days({ d }) {
 // Run a DOM-changing state update inside a view transition where WebKit supports it.
 export function transition(fn) {
   if (!document.startViewTransition || document.hidden || matchMedia("(prefers-reduced-motion: reduce)").matches) { fn(); return; }
-  const t = document.startViewTransition(() => { fn(); return new Promise((r) => setTimeout(r, 30)); });
-  for (const p of [t.ready, t.finished, t.updateCallbackDone]) p?.catch(() => {}); // a skipped transition still applies fn
+  const vt = document.startViewTransition(() => { fn(); return new Promise((r) => setTimeout(r, 30)); });
+  for (const p of [vt.ready, vt.finished, vt.updateCallbackDone]) p?.catch(() => {}); // a skipped transition still applies fn
 }
 
 // Which papers have a local PDF (asked once per list, so missing ones never hit /api/thumb).

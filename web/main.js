@@ -1,7 +1,7 @@
 import { render } from "preact";
 import { useEffect, useMemo, useRef, useState, useCallback } from "preact/hooks";
 import { html, Icon, api, prefs, copyText, composing } from "/lib.js";
-import { t, LANGS, langSetting, systemLang, initI18n, onLangChange, setLangSetting } from "/i18n.js";
+import { t, LANGS, systemLang, initI18n, onLangChange, setLangSetting } from "/i18n.js";
 import { PdfView } from "/pdfview.js";
 import { BilingualSettings } from "/bilingual.js";
 import { ChatPanel, NotePanel, PROMPTS } from "/chat.js";
@@ -124,13 +124,13 @@ function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef
   // poll bilingual job (also while it waits in the background queue)
   useEffect(() => {
     if (bi.state !== "running" && bi.state !== "queued") return;
-    const t = setInterval(async () => {
+    const timer = setInterval(async () => {
       const s = await api(`/api/bilingual/${encodeURIComponent(stem)}`);
       setBi(s);
       if (s.state === "done") toast("双语版已生成");
       if (s.state === "error") toast("双语生成失败");
     }, bi.state === "queued" ? 5000 : 3000);
-    return () => clearInterval(t);
+    return () => clearInterval(timer);
   }, [bi.state, stem]);
 
   const switchVariant = (v) => {
@@ -347,16 +347,22 @@ function flatten(items, depth = 0, out = []) {
 
 function Settings({ status, onClose, onSaved }) {
   const [s, setS] = useState(status.settings);
-  const save = async (patch) => { const n = await api("/api/settings", { json: patch }); setS(n); onSaved(); };
+  // Shown at once (no bounce back while the request runs), then replaced by what the server saved.
+  const saved = useRef(status.settings);
+  const save = async (patch) => {
+    setS((x) => ({ ...x, ...patch }));
+    try { saved.current = await api("/api/settings", { json: patch }); } finally { setS(saved.current); }
+    onSaved();
+  };
   // Saved first, so the server's messages and Markdown views switch together with the page.
   const setUiLanguage = async (v) => { await save({ ui_language: v }); setLangSetting(v); };
   const c = status.claude;
-  const langName = (l) => t("common.lang." + l);
+  const langName = (l) => t("common.lang." + l); // i18n-keys: common.lang.{zh,en}
   return html`<div class="modal-bg" onClick=${(e) => e.target === e.currentTarget && onClose()}>
     <div class="modal settings">
       <h2>${t("settings.title")}</h2>
       <div class="field"><div><label>${t("settings.ui_language")}</label><small>${t("settings.ui_language_hint")}</small></div>
-        <select value=${langSetting()} onChange=${(e) => setUiLanguage(e.target.value)}>
+        <select value=${s.ui_language} onChange=${(e) => setUiLanguage(e.target.value)}>
           <option value="system">${t("settings.lang_system", { lang: langName(systemLang()) })}</option>
           ${LANGS.map((l) => html`<option value=${l}>${langName(l)}</option>`)}
         </select></div>
