@@ -1,7 +1,15 @@
 """app/library.py: paper keys, safe file names, path validation, note parsing, PDF link rules."""
 from __future__ import annotations
 
+import logging
+import os
+import shutil
+import sqlite3
+import time
+from pathlib import Path
+
 import pytest
+from fastapi.testclient import TestClient
 
 from app import config, library
 
@@ -251,3 +259,154 @@ def test_list_papers_orders_info_by_queue_rank(make_note):
     by = {p["stem"]: p for p in library.list_papers()}
     assert by["B"]["queue_rank"] == 0 and by["A"]["queue_rank"] is None
     assert by["B"]["pdf"] == "remote" and by["A"]["pdf"] == "none"
+
+
+# ---------- the Zotero snapshot: a bad copy heals, a bad original degrades ----------
+
+ZOTERO_SCHEMA = """
+CREATE TABLE items (itemID INTEGER PRIMARY KEY, libraryID INT NOT NULL, key TEXT NOT NULL);
+CREATE TABLE fields (fieldID INTEGER PRIMARY KEY, fieldName TEXT);
+CREATE TABLE itemDataValues (valueID INTEGER PRIMARY KEY, value);
+CREATE TABLE itemData (itemID INT, fieldID INT, valueID INT);
+CREATE TABLE itemAttachments (itemID INTEGER PRIMARY KEY, parentItemID INT, contentType TEXT);
+INSERT INTO fields (fieldName) VALUES ('url');
+"""
+
+
+class FakeZoteroDb:
+    """A zotero.sqlite with just the tables the attachment-link query reads."""
+
+    def __init__(self) -> None:
+        config.ZOTERO_DIR.mkdir(parents=True, exist_ok=True)
+        self.db = config.ZOTERO_DIR / "zotero.sqlite"
+        self.stamp = time.time() - 1000
+        self.write()
+
+    def write(self) -> None:
+        """A fresh, healthy database with one paper (HAVE2345) holding a PDF attachment link."""
+        self.db.unlink(missing_ok=True)
+        with sqlite3.connect(self.db) as con:
+            con.executescript(ZOTERO_SCHEMA)
+            con.execute("INSERT INTO items VALUES (1, 1, 'HAVE2345'), (2, 1, 'ATTACH99')")
+            con.execute("INSERT INTO itemAttachments VALUES (2, 1, 'application/pdf')")
+            con.execute("INSERT INTO itemDataValues VALUES (1, 'https://example.org/papers/have.pdf')")
+            con.execute("INSERT INTO itemData VALUES (2, 1, 1)")
+        self.touch()
+
+    def touch(self) -> None:
+        self.stamp += 1  # strictly newer each write, whatever the file system's mtime resolution
+        os.utime(self.db, (self.stamp, self.stamp))
+
+    def corrupt(self) -> None:
+        self.db.write_bytes(b"this is not a database at all" * 100)
+        self.touch()
+
+
+@pytest.fixture
+def zdb():
+    fake = FakeZoteroDb()
+    yield fake
+    for f in config.ZOTERO_DIR.glob("zotero.sqlite*"):
+        f.unlink()
+    library._zotero_pdf_urls.cache_clear()
+
+
+def _links(key: str = "HAVE2345") -> list[str]:
+    library._zotero_pdf_urls.cache_clear()
+    return library.pdf_urls({"zotero_key": key})
+
+
+def _bad_newer_copy(fake: FakeZoteroDb) -> Path:
+    copy = library._ZOTERO_SNAPSHOT
+    copy.write_bytes(b"not a database" * 100)
+    t = fake.stamp + 50  # newer than Zotero's file, so it would never be copied again on its own
+    os.utime(copy, (t, t))
+    return copy
+
+
+def test_zotero_attachment_links_come_from_the_snapshot(zdb):
+    assert _links() == ["https://example.org/papers/have.pdf"]
+    assert _links("NOSUCHKEY") == []
+    assert library._ZOTERO_SNAPSHOT.read_bytes()[:15] == b"SQLite format 3"
+
+
+def test_no_zotero_database_means_no_links(zdb):
+    zdb.db.unlink()
+    assert _links() == []
+    assert library.read_zotero(lambda con: 1) is None
+
+
+def test_a_bad_copy_of_a_good_database_heals(zdb, caplog):
+    assert _links()  # the app's copy now exists
+    copy = _bad_newer_copy(zdb)
+    with caplog.at_level(logging.WARNING, logger="app.library"):
+        assert _links() == ["https://example.org/papers/have.pdf"]
+    assert copy.read_bytes()[:15] == b"SQLite format 3"
+    assert not caplog.records  # healed quietly: nothing to report
+
+
+def test_a_half_copied_snapshot_with_stray_wal_files_heals(zdb):
+    assert _links()
+    _bad_newer_copy(zdb)
+    for suffix in ("-wal", "-shm"):
+        Path(f"{library._ZOTERO_SNAPSHOT}{suffix}").write_bytes(b"junk" * 50)
+    assert _links() == ["https://example.org/papers/have.pdf"]
+    assert not list(config.DATA_DIR.glob("zotero_snapshot.sqlite-*"))
+
+
+def test_read_zotero_retries_once_on_a_fresh_copy(zdb):
+    calls = []
+
+    def work(con):
+        calls.append(library._ZOTERO_SNAPSHOT.stat().st_ino)
+        raise sqlite3.DatabaseError("database disk image is malformed")
+
+    with pytest.raises(sqlite3.DatabaseError):
+        library.read_zotero(work)
+    assert len(calls) == 2 and calls[0] != calls[1]  # a second, freshly made copy; no third try
+
+
+def test_the_paper_list_survives_a_bad_original_and_says_so(zdb, make_note, caplog):
+    from app.main import app
+    make_note("Alpha", zotero="zotero://select/library/items/HAVE2345/")
+    make_note("Beta", arxiv="2606.00001")
+    make_note("Gamma", zotero="zotero://select/library/items/HAVE2345/")
+    assert library.list_papers()[0]["pdf"] == "remote"  # sanity: the Zotero link counts while it is readable
+    zdb.corrupt()
+    library._zotero_pdf_urls.cache_clear()
+    with caplog.at_level(logging.WARNING, logger="app.library"):
+        r = TestClient(app).get("/api/papers")
+    assert r.status_code == 200
+    by = {p["stem"]: p["pdf"] for p in r.json()["papers"]}
+    assert by == {"Alpha": "none", "Beta": "remote", "Gamma": "none"}  # no Zotero info, but the list is there
+    warnings = [x for x in caplog.records if x.name == "app.library" and x.levelno == logging.WARNING]
+    assert len(warnings) == 1 and "Zotero" in warnings[0].getMessage()  # once, not once per paper
+    assert TestClient(app).get("/api/papers/Alpha").status_code == 200  # the paper page too
+
+
+def test_links_return_once_the_original_is_repaired(zdb):
+    zdb.corrupt()
+    assert _links() == []
+    zdb.write()
+    assert _links() == ["https://example.org/papers/have.pdf"]
+
+
+def test_links_return_when_a_backup_older_than_the_bad_copy_is_restored(zdb):
+    zdb.corrupt()
+    assert _links() == []  # the app's copy is now a copy of the bad file, with its mtime
+    zdb.write()
+    t = zdb.stamp - 500  # restored from a backup: older than the bad copy, so "newer copy wins" would keep it
+    os.utime(zdb.db, (t, t))
+    assert _links() == ["https://example.org/papers/have.pdf"]
+
+
+def test_a_copy_that_fails_degrades_and_leaves_no_temp_file(zdb, monkeypatch, caplog):
+    def broken(src, dst, **kw):
+        Path(dst).write_bytes(b"half")
+        raise OSError(5, "Input/output error")
+
+    monkeypatch.setattr(shutil, "copy2", broken)
+    with caplog.at_level(logging.WARNING, logger="app.library"):
+        assert _links() == []
+    assert any("OSError" in x.getMessage() for x in caplog.records)
+    assert not list(config.DATA_DIR.glob("zotero_snapshot*"))
