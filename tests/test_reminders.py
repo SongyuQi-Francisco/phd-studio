@@ -313,8 +313,7 @@ def test_events_from_the_plan(venue_data: Any) -> None:
     assert kdd[0]["open"] == {"view": "timeline", "venue": "kdd"}
     assert sorted(e["key"].split(":")[2] for e in kdd) == ["abstract", "deadline"]
     assert all("KDD" not in e["key"] for e in kdd)  # the display title is not part of the key
-    cikm = [e for e in evs if e.get("venue") == "cikm"]
-    assert cikm and all(e["type"] == "venue" for e in cikm)  # a submitted target does not mute the venue
+    assert [e for e in evs if e.get("venue") == "cikm"] == []  # the only paper aimed at that edition is sent
     assert all(e["at"].tzinfo is not None for e in evs)
 
 
@@ -322,8 +321,8 @@ def _timeline(events: list[dict[str, Any]], targets: list[dict[str, Any]]) -> di
     return {"events": events, "targets": targets, "milestones": [], "watched": []}
 
 
-def _venue_event(title: str, at: str, stage: str = "deadline", venue: str = "acl") -> dict[str, Any]:
-    return {"type": "venue", "venue": venue, "title": title, "at": at, "stage": stage, "ccf": "A", "core": "A*"}
+def _venue_event(title: str, at: str, stage: str = "deadline", venue: str = "acl", **kw: Any) -> dict[str, Any]:
+    return {"type": "venue", "venue": venue, "title": title, "at": at, "stage": stage, "ccf": "A", "core": "A*", **kw}
 
 
 def test_the_same_deadline_keeps_its_key_when_its_title_changes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -346,17 +345,20 @@ def test_the_same_deadline_keeps_its_key_when_its_title_changes(monkeypatch: pyt
     assert len(reminders.due(reminders.events(), cfg(), now, set(), MEL)) == 2
 
 
-def test_a_closed_target_does_not_mute_its_venue(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_events_follow_the_papers_the_timeline_attaches_to_a_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Which papers a deadline belongs to is the timeline's call (edition, round); reminders only read it."""
     at = "2027-02-16T11:59:59+00:00"
-    tl = _timeline([_venue_event("KDD 2027 全文截止", at, venue="kdd"), _venue_event("ACL 2027 全文截止", at)], [
-        {"id": "t1", "title": "Old paper", "venue": "kdd", "status": "accepted"},  # last year's
-        {"id": "t2", "title": "Paper A", "venue": "acl", "status": "submitted"},
-        {"id": "t3", "title": "Paper B", "venue": "acl", "status": "writing"},
-    ])
+    paper_b = {"id": "t3", "title": "Paper B", "line": None}
+    tl = _timeline([
+        _venue_event("KDD 2027 全文截止", at, venue="kdd", targets=[], closed=[], muted=False),  # nobody's: the venue's
+        _venue_event("ACL 2027 全文截止", at, targets=[paper_b], closed=[{**paper_b, "id": "t2", "status": "submitted"}], muted=False),
+        _venue_event("CIKM 2027 全文截止", at, venue="cikm", targets=[], closed=[{**paper_b, "id": "t4", "status": "accepted"}], muted=True),
+    ], [])
     monkeypatch.setattr(plan, "timeline", lambda **kw: tl)
     by_venue = {e["venue"]: e for e in reminders.events()}
     assert by_venue["kdd"]["type"] == "venue" and by_venue["kdd"]["targets"] == []
     assert by_venue["acl"]["type"] == "target" and [t["title"] for t in by_venue["acl"]["targets"]] == ["Paper B"]
+    assert "cikm" not in by_venue  # only sent papers aimed at it: quiet
     now = datetime(2027, 2, 14, 12, tzinfo=MEL)
     assert {r["venue"] for r in reminders.due(reminders.events(), cfg(), now, set(), MEL)} == {"kdd", "acl"}
 

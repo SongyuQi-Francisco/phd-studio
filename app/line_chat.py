@@ -396,10 +396,13 @@ def _facts(line: dict[str, Any]) -> list[str]:
     if any(head):
         out.append(" · ".join(x for x in head if x))
     for t in line.get("targets") or []:
-        ev = next((e for e in line.get("deadlines") or [] if (e.get("target") or {}).get("id") == t.get("id")), None)
+        ev = next((e for e in line.get("deadlines") or [] if any(x.get("id") == t.get("id") for x in e.get("targets") or [])), None)
         alt = f"（备选 {', '.join(t['alternatives'])}）" if t.get("alternatives") else ""
-        when = f"{ev['title']} {ev['at'][:10]}，还剩 {ev['days']} 天" if ev else "截稿未公布"
-        out.append(f"投稿目标：{str(t.get('venue', '')).upper()}{alt} · {when}")
+        if t.get("status") in ("submitted", "accepted"):
+            when = {"submitted": "已投稿", "accepted": "已录用"}[t["status"]]
+        else:
+            when = f"{ev['title']} {ev['at'][:10]}，还剩 {ev['days']} 天" if ev else ("本届截稿已过" if t.get("state") == "past" else "截稿未公布")
+        out.append(f"投稿目标：{str(t.get('venue', '')).upper()}{' ' + str(t['edition']) if t.get('edition') else ''}{alt} · {when}")
     open_ms = [m for m in line.get("milestones") or [] if m.get("status") != "done"][:4]
     if open_ms:
         out.append("未完成的里程碑：" + "；".join(

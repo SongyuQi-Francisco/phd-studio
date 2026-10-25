@@ -335,6 +335,15 @@ def venue_detail(key: str) -> dict[str, Any]:
     return v
 
 
+@app.get("/api/venues/{key}/editions")
+def venue_editions(key: str) -> dict[str, Any]:
+    """The editions (with their dated rounds) a submission target of this venue can aim at."""
+    try:
+        return plan.edition_options(key)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
 @app.post("/api/venues/refresh")
 async def venue_refresh() -> dict[str, Any]:
     try:
@@ -368,7 +377,8 @@ def plan_add(collection: str, body: dict[str, Any]) -> dict[str, Any]:
                                       kind=body.get("kind") or "milestone", notes=body.get("notes"))
         if collection == "targets":
             return plan.add_target(body["title"], body["venue"], line=body.get("line"),
-                                   alternatives=body.get("alternatives"), notes=body.get("notes"))
+                                   alternatives=body.get("alternatives"), notes=body.get("notes"),
+                                   edition=body.get("edition"), deadline=body.get("deadline"))
     except (KeyError, ValueError) as e:
         raise HTTPException(400, str(e))
     raise HTTPException(404)
