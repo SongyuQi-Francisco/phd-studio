@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from . import config, library, notes
+from .i18n import answer_language
 from .config import (AGENTS_MD, CHATS_DIR, IDEA_RADAR, IDEA_TEMPLATE, IDEAS_DIR, PLAN_FILE, PROFILE, ROADMAP,
                      STATE_DIR, VAULT_DIR)
 
@@ -418,7 +419,7 @@ def _facts(line: dict[str, Any]) -> list[str]:
 def system_prompt(line: dict[str, Any], today: date | None = None) -> str:
     ctx = context(line)
     today = today or date.today()
-    lang = PROFILE.get("answer_language", "中文")
+    lang = answer_language()
     agents = AGENTS_MD.read_text(encoding="utf-8") if AGENTS_MD.exists() else ""
     name = ctx["line"]
     note = (f"- 研究线笔记：`{ctx['note']}`。现状、Kill Criteria、First Experiment 和按日期记的进展都在这里，"

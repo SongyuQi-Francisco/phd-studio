@@ -1,7 +1,9 @@
 // Small UI pieces shared by the dashboard pages: paper thumbnails, skeletons, empty states,
 // animated collapse, view transitions and the days-left pill.
+// i18n: done
 import { useEffect, useState } from "preact/hooks";
 import { html, Icon, api } from "/lib.js";
+import { t } from "/i18n.js";
 
 // A few extra icons in the same stroke style as lib.js Icon.
 const GLYPHS = {
@@ -18,7 +20,7 @@ export const daysTo = (iso) => Math.ceil((new Date(iso) - new Date()) / 86400000
 export function Days({ d }) {
   if (d == null) return null;
   const cls = d < 0 ? "past" : d <= 14 ? "hot" : d <= 45 ? "warm" : "";
-  return html`<span class=${"days " + cls}>${d < 0 ? `${-d} 天前` : d === 0 ? "今天" : `${d} 天`}</span>`;
+  return html`<span class=${"days " + cls}>${d < 0 ? t("common.days_ago", { n: -d }) : d === 0 ? t("common.today") : t("common.n_days", { n: d })}</span>`;
 }
 
 // Run a DOM-changing state update inside a view transition where WebKit supports it.
@@ -43,7 +45,7 @@ export function Thumb({ k, title, size = "md", badge, ready }) {
   const ok = () => !!k && have.has(k) && !failed.has(k);
   const [bad, setBad] = useState(!ok());
   useEffect(() => setBad(!ok()), [k, ready]);
-  const initials = (title || k || "?").replace(/[^A-Za-z0-9一-鿿 ]/g, " ").trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
+  const initials = (title || k || "?").replace(/[^A-Za-z0-9一-鿿 ]/g, " ").trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();  // i18n-ignore: keeps CJK letters for initials
   return html`<div class=${"thumb " + size + (bad ? " ph" : "")} aria-hidden="true">
     ${bad
       ? html`<div class="ph-sheet"><b>${initials}</b><i /><i /><i class="s" /><i /><i class="s" /></div>`

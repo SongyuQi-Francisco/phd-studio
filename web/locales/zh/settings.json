@@ -1,0 +1,18 @@
+{
+  "title": "设置",
+  "ui_language": "界面语言",
+  "ui_language_hint": "只对这台 Mac 生效，切换后立即生效",
+  "lang_system": "跟随系统（{lang}）",
+  "answer_language": "回答语言",
+  "answer_language_hint": "伴读和各个助手用什么语言回答",
+  "answer_profile": "按 studio.toml（{lang}）",
+  "answer_ui": "跟随界面语言",
+  "claude_connected": "已连接 · {method}",
+  "claude_signed_out": "未登录：{hint}",
+  "model": "伴读模型",
+  "model_hint": "默认跟随你的 Claude 账号设置",
+  "model_haiku": "Haiku（快）",
+  "engine": "翻译引擎",
+  "engine_hint": "划词翻译和整篇双语 PDF",
+  "engine_google": "Google 翻译（免费）"
+}

@@ -2,15 +2,17 @@
 // confirm the exact line, and the Settings rows (status, auto mode, collection, API key help).
 import { useEffect, useRef, useState } from "preact/hooks";
 import { html, Icon, api } from "/lib.js";
+import { t, tx } from "/i18n.js";
 
-const AUTO = [["off", "关"], ["triage", "定了优先级或建笔记时"], ["all", "一进清单就加"]];
-const STATE = { added: "已加入", exists: "已有", linked: "已链接", error: "失败" };
+const AUTO = ["off", "triage", "all"];
+const STATE = ["added", "exists", "linked", "error"];
+const stateLabel = (s) => (STATE.includes(s) ? t("zotero.state." + s) : s);
 const enc = encodeURIComponent;
 
 const openInZotero = (key, toast) => api("/api/zotero/open", { json: { key } }).catch((e) => toast?.(e.message));
 
 // The change to the note's front matter, shown exactly as it will be written.
-function LinkChange({ lb, busy, onWrite, onSkip, writeLabel = "写入笔记" }) {
+function LinkChange({ lb, busy, onWrite, onSkip, writeLabel = t("zotero.write_note") }) {
   return html`<div class="perm zperm">
     <div class="perm-head"><${Icon} name="note" sm /><b title=${lb.path}>${lb.path}</b></div>
     <div class="diff">
@@ -19,8 +21,8 @@ function LinkChange({ lb, busy, onWrite, onSkip, writeLabel = "写入笔记" }) 
       <div class="a">+ ${lb.line}</div>
     </div>
     <div class="perm-foot">
-      ${onSkip && html`<button class="btn ghost" onClick=${onSkip}>不写</button>`}
-      <button class="btn primary" disabled=${busy} onClick=${onWrite}>${busy ? "写入中…" : writeLabel}</button>
+      ${onSkip && html`<button class="btn ghost" onClick=${onSkip}>${t("zotero.skip")}</button>`}
+      <button class="btn primary" disabled=${busy} onClick=${onWrite}>${busy ? t("zotero.writing") : writeLabel}</button>
     </div>
   </div>`;
 }
@@ -110,53 +112,53 @@ export function ZoteroSettings({ settings, save, toast }) {
   useEffect(() => { load(); }, []);
   if (!z) return null;
 
-  const ways = z.snapshot_error ? z.snapshot_error : z.desktop ? "桌面端在运行" + (z.web ? "，网络密钥已配置" : "")
-    : z.web ? "桌面端没开，用网络密钥" : "桌面端没开，也没有网络密钥";
-  const colls = [["", "库的根目录"], ...z.collections.map((c) => [c.key, c.name])];
-  if (settings.zotero_collection && !z.collections.some((c) => c.key === settings.zotero_collection)) colls.push([settings.zotero_collection, "（已不存在的分类）"]);
+  const ways = z.snapshot_error ? z.snapshot_error : z.desktop ? t(z.web ? "zotero.ways.desktop_web" : "zotero.ways.desktop")
+    : t(z.web ? "zotero.ways.web" : "zotero.ways.none");
+  const colls = [["", t("zotero.coll_root")], ...z.collections.map((c) => [c.key, c.name])];
+  if (settings.zotero_collection && !z.collections.some((c) => c.key === settings.zotero_collection)) colls.push([settings.zotero_collection, t("zotero.coll_gone")]);
   const recent = z.auto.recent.slice(0, 3);
 
   const write = async (items) => {
     setBusy(items.length > 1 ? "all" : items[0].stem); setErr("");
     let n = 0;
     for (const lb of items) {
-      try { await writeLink(lb); n++; } catch (e) { setErr(`${lb.stem}：${e.message}`); break; }
+      try { await writeLink(lb); n++; } catch (e) { setErr(t("zotero.write_failed", { stem: lb.stem, error: e.message })); break; }
     }
-    if (n) toast?.(`已写入 ${n} 篇笔记的 Zotero 链接`);
+    if (n) toast?.(t("zotero.written", { n }));
     await load();
     setBusy("");
   };
 
   return html`<div class="zset">
     <div class="field"><div><label>Zotero</label><small>${ways}</small></div>
-      <span class="zset-r"><button class="tb-btn" title="怎么建网络密钥" onClick=${() => setHelp(!help)}>密钥说明</button>
+      <span class="zset-r"><button class="tb-btn" title=${t("zotero.key_help_title")} onClick=${() => setHelp(!help)}>${t("zotero.key_help")}</button>
         <span class=${"dot " + ((z.desktop || z.web) && !z.snapshot_error ? "ok" : "bad")} /></span></div>
     ${help && html`<div class="zhelp">
-      <p>桌面端开着时直接存进本机 Zotero；没开时用 Zotero 网络服务，需要你自己建一个密钥：</p>
+      <p>${t("zotero.help.intro")}</p>
       <ol>
-        <li>打开 <a href="https://www.zotero.org/settings/keys" target="_blank" rel="noopener">zotero.org/settings/keys</a>，点 Create new private key。</li>
-        <li>勾选 Allow library access 和 Allow write access，保存。</li>
-        <li>把显示的密钥和页面上的 user ID 写进 <code>${z.secrets_file}</code>：<pre>ZOTERO_API_KEY=…\nZOTERO_USER_ID=…</pre></li>
+        <li>${tx("zotero.help.step1", { link: html`<a href="https://www.zotero.org/settings/keys" target="_blank" rel="noopener">zotero.org/settings/keys</a>` })}</li>
+        <li>${t("zotero.help.step2")}</li>
+        <li>${tx("zotero.help.step3", { file: html`<code>${z.secrets_file}</code>` })}<pre>ZOTERO_API_KEY=…\nZOTERO_USER_ID=…</pre></li>
       </ol>
-      <p class="muted">工作台只读这个文件，不会问你的 Zotero 密码，也不在界面里填密钥。</p>
+      <p class="muted">${t("zotero.help.note")}</p>
     </div>`}
-    <div class="field"><div><label>自动入库</label>
-        <small>${recent.length ? "最近：" + recent.map((r) => `${r.paper} ${STATE[r.state] || r.state}`).join(" · ") : "论文到这一步时自动加入 Zotero；链接仍要你确认才写进笔记"}</small></div>
+    <div class="field"><div><label>${t("zotero.auto_label")}</label>
+        <small>${recent.length ? t("zotero.recent", { list: recent.map((r) => `${r.paper} ${stateLabel(r.state)}`).join(" · ") }) : t("zotero.auto_hint")}</small></div>
       <select value=${settings.zotero_auto} onChange=${(e) => save({ zotero_auto: e.target.value })}>
-        ${AUTO.map(([v, l]) => html`<option value=${v}>${l}</option>`)}
+        ${AUTO.map((v) => html`<option value=${v}>${t("zotero.auto." + v)}</option>`)}
       </select></div>
-    <div class="field"><div><label>放进分类</label><small>新条目进 Zotero 的哪个分类</small></div>
+    <div class="field"><div><label>${t("zotero.collection")}</label><small>${t("zotero.collection_hint")}</small></div>
       <select value=${settings.zotero_collection} onChange=${(e) => save({ zotero_collection: e.target.value })}>
         ${colls.map(([v, l]) => html`<option value=${v}>${l}</option>`)}
       </select></div>
     ${z.pending.length > 0 && html`<div class="field col">
-      <div class="row-between"><div><label>待写回的链接</label><small>${z.pending.length} 篇已在 Zotero，笔记里还没有链接</small></div>
-        <button class="tb-btn" onClick=${() => setShowPending(!showPending)}>${showPending ? "收起" : "查看"}</button></div>
+      <div class="row-between"><div><label>${t("zotero.pending")}</label><small>${t("zotero.pending_hint", { n: z.pending.length })}</small></div>
+        <button class="tb-btn" onClick=${() => setShowPending(!showPending)}>${showPending ? t("common.hide") : t("common.show")}</button></div>
       ${showPending && html`<div class="zpending">
         ${err && html`<div class="err">${err}</div>`}
-        ${z.pending.map((lb) => html`<${LinkChange} lb=${lb} busy=${busy === lb.stem || busy === "all"} writeLabel="写入" onWrite=${() => write([lb])} />`)}
+        ${z.pending.map((lb) => html`<${LinkChange} lb=${lb} busy=${busy === lb.stem || busy === "all"} writeLabel=${t("zotero.write")} onWrite=${() => write([lb])} />`)}
         ${z.pending.length > 1 && html`<div class="row-end"><button class="btn primary" disabled=${!!busy} onClick=${() => write(z.pending)}>
-          ${busy === "all" ? "写入中…" : `以上 ${z.pending.length} 篇全部写入`}</button></div>`}
+          ${busy === "all" ? t("zotero.writing") : t("zotero.write_all", { n: z.pending.length })}</button></div>`}
       </div>`}
     </div>`}
   </div>`;

@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - README, community files, demo data and screenshots ([#40](https://github.com/SongyuQi-Francisco/phd-studio/issues/40))
 - Research maps, part 1: the data model (`docs/research-map.md`), a sync-safe store per project in the vault (`paths.research_maps`) with a change log, the `/api/rmap` routes, and extension points for later phases ([#45](https://github.com/SongyuQi-Francisco/phd-studio/issues/45))
+- Interface language groundwork: Settings → Interface language (中文, English, or follow the system), per Mac, switching without a reload; a separate answer language for the assistants; `t()` with per-module locale files for the frontend and the server; API errors and `Reading List.md` follow the interface language; Settings is the first page in both languages; a draft term glossary (`docs/glossary.md`), the guide `docs/i18n.md`, key-parity tests and `scripts/i18n_scan.py` to track the remaining Chinese text ([#49](https://github.com/SongyuQi-Francisco/phd-studio/issues/49))
 
 ## [0.1.0] - 2026-10-25
 

@@ -353,7 +353,13 @@ def view() -> str:
     return reading.READING_VIEW.read_text(encoding="utf-8")
 
 
-def test_view_is_a_generated_sibling_of_the_yaml(notes):
+@pytest.fixture
+def english() -> None:
+    """The view follows the interface language; these tests read the English one."""
+    config.save_settings({"ui_language": "en"})
+
+
+def test_view_is_a_generated_sibling_of_the_yaml(notes, english):
     push(paper="Alpha")
     assert reading.READING_VIEW == config.READING_LIST.parent / "Reading List.md"
     text = view()
@@ -362,7 +368,7 @@ def test_view_is_a_generated_sibling_of_the_yaml(notes):
     assert "edits here are overwritten" in text
 
 
-def test_view_groups_by_tier_with_links_lines_and_reasons(notes):
+def test_view_groups_by_tier_with_links_lines_and_reasons(notes, english):
     push(paper="Alpha", tier="T1", source="self", lines=["Project A"], reason="their metric")
     push(paper="Beta", tier="T2", source="self", reason="baseline")
     push(arxiv="2606.00001", title="Some Paper", reason="cited by Alpha")
@@ -376,6 +382,26 @@ def test_view_groups_by_tier_with_links_lines_and_reasons(notes):
     assert text.index("## T1") < text.index("## T2") < text.index("## Inbox")
 
 
+def test_view_is_in_chinese_with_tiers_kept(notes):
+    push(paper="Alpha", tier="T1", source="self")
+    push(paper="Gamma", reason="triage me")
+    reading.mark_opened("Alpha")
+    push(paper="Beta", tier="T2", source="self")
+    text = view()
+    assert "# 阅读清单" in text and "在这里的改动会被覆盖" in text
+    assert "## 在读\n- [[Alpha]]" in text
+    assert "## T2\n- [[Beta]]" in text
+    assert "## 收件箱（1 篇待分拣）" in text
+
+
+def test_view_follows_a_language_switch_at_once(notes):
+    push(paper="Alpha")
+    assert "# 阅读清单" in view()
+    config.save_settings({"ui_language": "en"})
+    reading.refresh_view()
+    assert "# Reading List" in view() and "## Inbox (1 to triage)" in view()
+
+
 def test_view_orders_a_tier_by_due_date_then_age(notes, make_note):
     for stem in ("D1", "D2", "D3"):
         make_note(stem)
@@ -386,7 +412,7 @@ def test_view_orders_a_tier_by_due_date_then_age(notes, make_note):
     assert text.index("[[D3]]") < text.index("[[D2]]") < text.index("[[D1]]")
 
 
-def test_view_lists_reading_first_and_hides_done_dismissed_snoozed_and_stale(notes, make_note):
+def test_view_lists_reading_first_and_hides_done_dismissed_snoozed_and_stale(notes, make_note, english):
     for stem in ("R", "Done", "Dis", "Snz", "Old"):
         make_note(stem)
         push(paper=stem)

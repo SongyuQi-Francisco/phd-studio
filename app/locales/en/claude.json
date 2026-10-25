@@ -1,0 +1,4 @@
+{
+  "method_token": "long-lived token (claude.env)",
+  "login_hint": "run claude setup-token and save it to ~/.config/secrets/claude.env"
+}

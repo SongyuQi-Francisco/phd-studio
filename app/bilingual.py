@@ -24,6 +24,7 @@ from typing import Any
 from . import library, reading
 from .config import BILINGUAL_DIR, load_settings, secret
 from .providers import PROVIDERS
+from .translate import engine_label
 
 UVX = shutil.which("uvx") or str(Path.home() / ".local" / "bin" / "uvx")
 _jobs: dict[str, dict[str, Any]] = {}
@@ -129,11 +130,11 @@ def _engine() -> tuple[str, list[str], dict[str, str]]:
     setting = load_settings().get("translate_engine")
     key = secret("DEEPSEEK_API_KEY", "deepseek")
     if setting == "deepseek" and key:
-        return "DeepSeek", ["--deepseek", "--deepseek-model", "deepseek-chat"], {"PDF2ZH_DEEPSEEK_API_KEY": key}
+        return engine_label("deepseek"), ["--deepseek", "--deepseek-model", "deepseek-chat"], {"PDF2ZH_DEEPSEEK_API_KEY": key}
     glm = PROVIDERS["glm"]
     if setting == "glm" and (key := glm.key()):
-        return "智谱 GLM", ["--zhipu", "--zhipu-model", glm.translate_model()], {"PDF2ZH_ZHIPU_API_KEY": key}
-    return "Google 翻译", ["--google"], {}
+        return engine_label("glm"), ["--zhipu", "--zhipu-model", glm.translate_model()], {"PDF2ZH_ZHIPU_API_KEY": key}
+    return engine_label("google"), ["--google"], {}
 
 
 def engine() -> tuple[str, list[str]]:

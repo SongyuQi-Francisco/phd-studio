@@ -1,0 +1,17 @@
+{
+  "glm": "Zhipu GLM",
+  "role_claude": "Reads and writes; shows you a diff before changing the vault",
+  "role_readonly": "Read-only",
+  "vision": "images",
+  "busy": "Switch models once the answer is finished",
+  "unavailable": "{label}: {detail}",
+  "switch": "Switch model (another provider starts a new thread)",
+  "menu_note": "Another provider starts a new thread: the earlier conversation stays in the log, but the new model can't see it. An unavailable model reports an error; it is never swapped for another.",
+  "checking_all": "Checking each model's sign-in status…",
+  "checking": "Checking sign-in status…",
+  "other": "Other models",
+  "other_hint": "Pick one at the top of any chat panel. They are read-only: only Claude changes the vault. If the chosen model is unavailable you get an error, never a substitute.",
+  "kind_cli": "Subscription",
+  "kind_api": "API key",
+  "detail_fix": "{detail}: {fix}"
+}

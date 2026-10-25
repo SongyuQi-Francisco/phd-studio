@@ -1,0 +1,18 @@
+{
+  "title": "Settings",
+  "ui_language": "Interface language",
+  "ui_language_hint": "This Mac only; takes effect at once",
+  "lang_system": "Follow system ({lang})",
+  "answer_language": "Answer language",
+  "answer_language_hint": "What the co-reader and the assistants answer in",
+  "answer_profile": "As in studio.toml ({lang})",
+  "answer_ui": "Same as interface",
+  "claude_connected": "Connected · {method}",
+  "claude_signed_out": "Not signed in: {hint}",
+  "model": "Co-reader model",
+  "model_hint": "Defaults to your Claude account's setting",
+  "model_haiku": "Haiku (fast)",
+  "engine": "Translation engine",
+  "engine_hint": "Selection translation and full bilingual PDFs",
+  "engine_google": "Google Translate (free)"
+}

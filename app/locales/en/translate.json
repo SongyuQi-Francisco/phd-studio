@@ -1,0 +1,5 @@
+{
+  "engine.deepseek": "DeepSeek",
+  "engine.glm": "Zhipu GLM",
+  "engine.google": "Google Translate"
+}

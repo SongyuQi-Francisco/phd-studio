@@ -92,6 +92,7 @@ All screenshots use the fictional demo workspace from [`scripts/demo/make_demo.p
 <img src="docs/assets/clip-assistant.gif" alt="⌘J opens the workbench assistant, which answers from the timeline" width="100%">
 
 - The **⌘J assistant** sees the timeline, reading list and ideas, and can add to the list, the plan and the idea inbox.
+- **Answer language** is its own setting, apart from the interface language: Chinese, English, the interface's, or the profile's in `studio.toml`.
 - **Multi-model**: each chat can use Claude, Codex, Gemini, 智谱 GLM or DeepSeek. Only Claude may edit the vault, behind the diff approval; the others are read-only. An unavailable model fails with its own error and the fix, and every answer is labelled with the model that wrote it.
 
 <p align="center"><img src="docs/assets/model-picker.webp" alt="Model picker with provider states" width="460"></p>
@@ -236,7 +237,7 @@ Screenshots and clips for this README come from the demo: `scripts/demo/make_dem
 
 What has shipped is in the [CHANGELOG](CHANGELOG.md). Planned work and bugs are tracked in [issues](https://github.com/SongyuQi-Francisco/phd-studio/issues); feature requests are welcome there.
 
-Known limits today: the interface is Chinese only, the desktop window and notifications need macOS, and only Claude can edit the vault.
+Known limits today: the interface is mostly Chinese (an English interface is in progress: Settings → Interface language already switches Settings, and the other pages follow; see [docs/i18n.md](docs/i18n.md)), the desktop window and notifications need macOS, and only Claude can edit the vault.
 
 ## Contributing
 

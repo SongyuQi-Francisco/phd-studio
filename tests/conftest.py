@@ -56,6 +56,7 @@ CONFIG_FILE = ROOT / "studio.toml"
 CONFIG_FILE.write_text(CONFIG_TEXT, encoding="utf-8")
 os.environ["STUDIO_CONFIG"] = str(CONFIG_FILE)
 os.environ["STUDIO_DEVICE"] = "test"
+os.environ["STUDIO_LANG"] = "zh"  # "follow the system" means Chinese here, whatever the machine's language (app/i18n.py)
 
 if "app.config" in sys.modules:  # imported by something before this file ran: paths may be the real ones
     pytest.exit("app.config was imported before tests/conftest.py; refusing to run against it", returncode=3)

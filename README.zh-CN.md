@@ -94,6 +94,7 @@
 <img src="docs/assets/clip-assistant.gif" alt="⌘J 打开工作台助手，它根据时间线回答" width="100%">
 
 - **⌘J 助手**能看到时间线、阅读清单和想法，可以往清单、规划和想法里加东西。
+- **回答语言**单独设置，和界面语言分开：中文、English、跟随界面，或按 `studio.toml` 里的 profile。
 - **多模型**：每个对话可以选 Claude、Codex、Gemini、智谱 GLM 或 DeepSeek。只有 Claude 能改 vault，而且要经过差异确认；其他模型只读。某个模型不可用时直接报错并给出修复方法，每条回答都标明出自哪个模型。
 
 <p align="center"><img src="docs/assets/model-picker.webp" alt="显示各模型状态的选择器" width="460"></p>
@@ -238,7 +239,7 @@ uv run pytest
 
 已经做完的见 [CHANGELOG](CHANGELOG.md)。计划中的工作和 bug 都在 [issues](https://github.com/SongyuQi-Francisco/phd-studio/issues) 里，欢迎在那里提功能建议。
 
-目前的限制：界面只有中文，桌面窗口和通知需要 macOS，只有 Claude 能修改 vault。
+目前的限制：界面大部分还只有中文（英文界面在做：设置 → 界面语言已经能切换设置页，其他页面陆续跟上，见 [docs/i18n.md](docs/i18n.md)），桌面窗口和通知需要 macOS，只有 Claude 能修改 vault。
 
 ## 参与贡献
 
