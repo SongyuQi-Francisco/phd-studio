@@ -106,12 +106,12 @@ def add_target(title: str, venue: str, line: str | None = None, alternatives: li
         raise ValueError(f"unknown venue {venue}")
     year, key = editions.year_of(edition), _round(deadline)
     if year is None and status in (*OPEN_STATUS, *CLOSED_STATUS):
-        year = editions.resolve({"status": status, "updated_at": stamp_now()}, e)[0]
+        year = editions.resolve({"status": status, "status_at": stamp_now()}, e)[0]
     if key:
         _check_round(e, year, key)
     alts = [venues._key(a) for a in alternatives or []]
     rec = plan_store.add("targets", {"title": title, "line": line, "venue": k, "edition": year, "deadline": key,
-                                     "alternatives": alts, "status": status, "notes": notes}, "t")
+                                     "alternatives": alts, "status": status, "status_at": stamp_now(), "notes": notes}, "t")
     watch(k)
     for a in alts:
         if venues.catalog().get(a):
@@ -176,9 +176,18 @@ def update(collection: str, rid: str, patch: dict[str, Any]) -> dict[str, Any]:
 
 
 def _target_patch(rid: str, patch: dict[str, Any]) -> dict[str, Any]:
-    """A target edit with its edition kept consistent: a changed venue or edition drops the old round, and a
-    target that has no edition yet gets the one it showed when its status or venue changes (or a round is
-    chosen), so the meaning of that edit is saved rather than left to move with the calendar."""
+    """A target edit with its edition kept consistent.
+
+    - A changed venue or edition drops the old round; a rejected target taken up again starts a new
+      attempt, so it forgets its edition and round and follows the calendar.
+    - A target that has no edition yet gets the one it showed before this edit, whatever the edit is (an
+      edition worked out from the calendar moves with it, so it is saved the first time the user touches
+      the target). A paper marked submitted just after a deadline went by was sent to that edition.
+    - The status change time (`status_at`) is kept, so what a sent paper's edition is read from does not
+      move when something else about it is edited.
+    - A round is checked only when this edit sets it: a stored one that has since moved or gone must not
+      stop the target from being edited (reads fall back to the whole edition).
+    """
     patch = dict(patch)
     cur = next((t for t in plan_store.load()["targets"] if t["id"] == rid), None)
     if cur is None:
@@ -189,7 +198,8 @@ def _target_patch(rid: str, patch: dict[str, Any]) -> dict[str, Any]:
         venue = patch["venue"] = venues._key(venue)
         if moved and not venues.catalog().get(venue):
             raise ValueError(f"unknown venue {venue}")
-    if "edition" in patch:
+    auto = "edition" in patch  # an explicit edition, or an explicit 'automatic' (0 / empty): not ours to fill in
+    if auto:
         patch["edition"] = editions.year_of(patch["edition"])
     elif moved:
         patch["edition"] = None
@@ -197,18 +207,25 @@ def _target_patch(rid: str, patch: dict[str, Any]) -> dict[str, Any]:
         patch["deadline"] = _round(patch["deadline"])
     elif moved or ("edition" in patch and patch["edition"] != editions.stored_year(cur)):
         patch["deadline"] = None
+    was, status = cur.get("status", "planning"), patch.get("status", cur.get("status", "planning"))
+    if status != was:
+        patch["status_at"] = stamp_now()
+    elif status in CLOSED_STATUS and not cur.get("status_at"):  # an older record: keep the moment it was read from
+        patch["status_at"] = cur.get("updated_at") or cur.get("created_at")
+    revived = was == "rejected" and status in OPEN_STATUS and "edition" not in patch
+    if revived:
+        patch["edition"] = patch["deadline"] = None
     new = {**cur, **patch}
     e = venues.catalog().get(venue)
-    live = new.get("status", "planning") in (*OPEN_STATUS, *CLOSED_STATUS)
-    if e and live and not new.get("edition") and ("status" in patch or moved or patch.get("deadline")):
-        # The card showed the edition the target resolved to, so that is what an edit of its status means
-        # (marking a paper submitted keeps the edition it was being written for, however far off). A new
-        # venue has nothing shown yet: it resolves for the new status as of now.
-        year = editions.resolve({**new, "updated_at": stamp_now()} if moved else cur, e)[0]
+    if e and status in (*OPEN_STATUS, *CLOSED_STATUS) and not new.get("edition") and not (auto and not revived):
+        now = datetime.now(timezone.utc)
+        year = editions.just_passed(e, now) if was in OPEN_STATUS and status in CLOSED_STATUS else None
+        if not year:
+            year = editions.resolve({**new, "status_at": stamp_now()} if moved or revived else cur, e, now)[0]
         if year:
             patch["edition"] = new["edition"] = year
-    if new.get("deadline"):
-        _check_round(e or {"editions": [], "acronym": venue}, editions.stored_year(new), new["deadline"])
+    if patch.get("deadline"):
+        _check_round(e or {"editions": [], "acronym": venue}, editions.stored_year(new), patch["deadline"])
     return patch
 
 
@@ -258,11 +275,14 @@ def ideas(include_merged: bool = False) -> list[dict[str, Any]]:
 
 def _aims(t: dict[str, Any], cat: dict[str, Any], now: datetime) -> tuple[int | None, set[tuple[int, int]], dict[str, Any]]:
     """(edition, the venue rounds it covers, the target as shown): the shown copy has `edition` and
-    `edition_from` (set / nearest / status, see editions.py) and where its deadlines stand (`state`)."""
+    `edition_from` (set / nearest / status, see editions.py), `edition_auto` (the edition the automatic
+    reading gives, whatever is stored) and where its deadlines stand (`state`, with `next_at`)."""
     e = cat.get(t["venue"])
     year, how = editions.resolve(t, e, now)
     cov = editions.covered(e, year, t.get("deadline")) if e else set()
-    return year, cov, {**t, "edition": year, "edition_from": how, **(editions.state(e, cov, now) if e else {"state": "tbd"})}
+    auto = editions.resolve({k: v for k, v in t.items() if k != "edition"}, e, now)[0]  # what 'automatic' would give
+    return year, cov, {**t, "edition": year, "edition_from": how, "edition_auto": auto,
+                       **(editions.state(e, cov, now) if e else {"state": "tbd"})}
 
 
 def targets(include_ended: bool = False) -> list[dict[str, Any]]:

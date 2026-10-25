@@ -244,10 +244,10 @@ def test_an_older_target_just_marked_sent_quiets_the_edition_it_was_sent_to(venu
 
 def test_the_first_change_to_an_older_target_saves_the_edition_it_meant(venue_data) -> None:
     open_ = legacy("Being written", "kdd", "writing")
-    plan.update("targets", open_["id"], {"notes": "just a note"})
-    assert "edition" not in stored(open_["id"])  # a note does not change what the target aims at
-    out = plan.update("targets", open_["id"], {"status": "submitted"})
+    out = plan.update("targets", open_["id"], {"notes": "just a note"})  # any change saves what the card showed
     assert out["edition"] == venue_data.kdd_paper.year + 1 and stored(open_["id"])["edition"] == out["edition"]
+    out = plan.update("targets", open_["id"], {"status": "submitted"})
+    assert out["edition"] == venue_data.kdd_paper.year + 1 and out["status_at"]
 
     sent = legacy("Sent long ago", "kdd", "submitted", updated_days_ago=150)
     out = plan.update("targets", sent["id"], {"status": "accepted"})  # sent -> accepted keeps the edition it already read as
@@ -271,6 +271,87 @@ def test_dropping_an_older_target_does_not_pin_anything(venue_data) -> None:
     t = legacy("Given up", "kdd", "writing")
     plan.update("targets", t["id"], {"status": "dropped"})
     assert "edition" not in stored(t["id"])
+
+
+def test_editing_a_sent_target_does_not_move_the_edition_it_was_read_as(venue_data) -> None:
+    """A paper accepted last spring reads as the edition it was sent to; touching its notes must not slide
+    that to the next edition just because the edit time is now close to that edition's deadlines."""
+    add_venue("ZZ", (2026, [(-205, -200, None)]), (2027, [(15, 20, None)]), (2028, [(380, 390, None)]))
+    plan.watch("ZZ")
+    t = legacy("Accepted last spring", "zz", "accepted", updated_days_ago=150)
+    assert plan.targets()[0]["edition"] == 2026
+    for patch in ({"notes": "camera-ready sent"}, {"title": "Better title"}, {"line": "Project B"}, {"alternatives": ["CIKM"]}):
+        assert plan.update("targets", t["id"], patch)["edition"] == 2026
+    assert stored(t["id"])["edition"] == 2026
+    by_year = {e["edition"]: e for e in events_of("zz")}
+    assert by_year[2027]["type"] == "venue" and not by_year[2027]["muted"]  # next edition still reminds
+
+
+def test_an_edit_that_pins_nothing_does_not_move_a_sent_target_that_knows_when_its_status_was_set(venue_data) -> None:
+    """An older Mac edits the record without pinning anything and moves updated_at: status_at keeps the reading."""
+    add_venue("ZZ", (2026, [(-205, -200, None)]), (2027, [(15, 20, None)]))
+    t = legacy("Sent", "zz", "submitted", updated_days_ago=150)
+    plan.update("targets", t["id"], {"edition": 0})  # keep it floating, as if saved by code that never pins
+    plan.plan_store.update("targets", t["id"], {"status_at": local_stamp(-150), "notes": "edited elsewhere"})
+    assert plan.targets()[0]["edition"] == 2026
+    assert editions.resolve(stored(t["id"]), venues.catalog()["zz"])[0] == 2026
+
+
+def test_marking_submitted_just_after_the_deadline_keeps_that_edition(venue_data) -> None:
+    add_venue("ZZ", (2027, [(-4, -2, None)]), (2028, [(300, 310, None)]))
+    t = legacy("Sent after the deadline", "zz", "writing")
+    assert plan.targets()[0]["edition"] == 2028  # the card could only show the next one
+    out = plan.update("targets", t["id"], {"status": "submitted"})
+    assert out["edition"] == 2027
+    assert all(not e["muted"] for e in events_of("zz") if e["edition"] == 2028)  # 2028 keeps reminding
+    far = legacy("Long after", "zz", "planning")
+    add_venue("YY", (2027, [(-100, -90, None)]), (2028, [(300, 310, None)]))
+    t2 = legacy("Months late", "yy", "planning")
+    assert plan.update("targets", t2["id"], {"status": "submitted"})["edition"] == 2028  # nothing just passed: what the card showed
+    assert far["id"] != t2["id"]
+
+
+def test_a_target_created_after_the_deadline_as_submitted_gets_the_edition_that_just_closed(venue_data) -> None:
+    add_venue("ZZ", (2027, [(-4, -2, None)]), (2028, [(300, 310, None)]))
+    assert plan.add_target("Already sent", "ZZ", status="submitted")["edition"] == 2027
+
+
+def test_a_stored_round_that_moved_or_went_does_not_block_other_edits(venue_data) -> None:
+    add_venue("ZZ", (2027, [(20, 30, "Cycle 1"), (110, 120, "Cycle 2")]))
+    key = (NOW + timedelta(days=120)).date().isoformat()
+    t = plan.add_target("Paper", "ZZ", edition=2027, deadline=key)
+    add_venue("ZZ", (2027, [(20, 30, "Cycle 1")]))  # the second round was dropped from ccfddl
+    assert plan.targets()[0]["state"] == "upcoming"   # reads fall back to the whole edition
+    out = plan.update("targets", t["id"], {"notes": "still editable", "status": "writing"})
+    assert out["notes"] == "still editable" and out["deadline"] == key
+    assert plan.update("targets", t["id"], {"status": "submitted"})["status"] == "submitted"
+    with pytest.raises(ValueError, match="no deadline near"):  # setting a round is still checked
+        plan.update("targets", t["id"], {"deadline": FAR})
+    with pytest.raises(ValueError, match="no deadline near"):
+        plan.update("targets", t["id"], {"edition": 2027, "deadline": FAR})
+
+
+def test_a_rejected_target_taken_up_again_starts_over_on_the_calendar(venue_data) -> None:
+    add_venue("ZZ", (2027, [(-100, -90, None), (-60, -50, None)]), (2028, [(300, 310, None)]))
+    key = (NOW + timedelta(days=-50)).date().isoformat()
+    t = plan.add_target("Resubmit", "ZZ", edition=2027, deadline=key)
+    plan.update("targets", t["id"], {"status": "rejected"})
+    out = plan.update("targets", t["id"], {"status": "writing"})
+    assert out["edition"] == 2028 and "deadline" not in stored(t["id"])
+    assert plan.targets()[0]["state"] == "upcoming"
+    # said explicitly, the edition is kept; a plain undo of a submitted paper keeps it too
+    plan.update("targets", t["id"], {"status": "rejected"})
+    assert plan.update("targets", t["id"], {"status": "planning", "edition": 2027})["edition"] == 2027
+    plan.update("targets", t["id"], {"status": "submitted"})
+    assert plan.update("targets", t["id"], {"status": "writing"})["edition"] == 2027
+
+
+def test_the_automatic_reading_is_reported_next_to_the_stored_edition(venue_data) -> None:
+    add_venue("ZZ", (2026, [(-205, -200, None)]), (2027, [(15, 20, None)]))
+    t = legacy("Sent", "zz", "submitted", updated_days_ago=150)
+    plan.update("targets", t["id"], {"edition": 2027})
+    [shown] = plan.targets()
+    assert (shown["edition"], shown["edition_from"], shown["edition_auto"]) == (2027, "set", 2026)  # what 自动 would pick
 
 
 # ---------- the timeline: several targets, editions and rounds ----------

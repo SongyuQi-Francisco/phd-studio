@@ -7,10 +7,14 @@ every round of its edition; a `deadline` that no round is near any more (moved b
 falls back to that.
 
 A target saved before editions existed has no `edition`. `resolve` works one out each time it is read and
-nothing is written back; plan.update pins it into the record only when the user changes the target:
+nothing is written back; plan.update pins it into the record the first time the user changes the target
+(whatever the change), as the edition the card showed before it:
 - planning / writing: the edition with the nearest upcoming deadline;
 - submitted / accepted: the edition it was sent to, the one with the latest deadline up to EARLY after the
-  target's last change (a paper is marked submitted a little before the deadline at the earliest).
+  moment its status was set (`status_at`, which plan.update keeps; `updated_at` for a target that has none,
+  which any later edit moves, so an edit that does not pin, as from an older Mac, can shift the reading).
+A paper marked submitted just after its deadline went by was sent to that edition, not the next one
+(`just_passed`).
 """
 from __future__ import annotations
 
@@ -20,6 +24,7 @@ from typing import Any
 OPEN = ("planning", "writing")  # still to be sent: its deadlines are the target's
 CLOSED = ("submitted", "accepted")  # sent: the rest of its edition no longer needs reminding for this paper
 EARLY = timedelta(days=45)
+JUST_PASSED = timedelta(days=21)  # a deadline this recent is the one a paper being marked submitted went to
 TOLERANCE = timedelta(days=30)
 MIN_YEAR, MAX_YEAR = 2000, 2100
 
@@ -80,6 +85,12 @@ def infer(e: dict[str, Any], closed: bool, anchor: datetime, now: datetime) -> i
     return min(ahead)[1] if ahead else None
 
 
+def just_passed(e: dict[str, Any], now: datetime) -> int | None:
+    """The edition of the latest deadline that went by within JUST_PASSED, if any."""
+    recent = [d for d in _deadlines(e) if now - JUST_PASSED <= d[0] <= now]
+    return max(recent)[1] if recent else None
+
+
 def resolve(t: dict[str, Any], e: dict[str, Any] | None, now: datetime | None = None) -> tuple[int | None, str | None]:
     """(edition, how) of a target: how is 'set' (stored), 'nearest' or 'status' (worked out), None (unknown)."""
     year = stored_year(t)
@@ -89,7 +100,7 @@ def resolve(t: dict[str, Any], e: dict[str, Any] | None, now: datetime | None = 
         return None, None
     now = now or datetime.now(timezone.utc)
     closed = t.get("status") in CLOSED
-    year = infer(e, closed, stamp(t.get("updated_at") or t.get("created_at")) or now, now)
+    year = infer(e, closed, stamp(t.get("status_at") or t.get("updated_at") or t.get("created_at")) or now, now)
     return (year, "status" if closed else "nearest") if year else (None, None)
 
 

@@ -23,9 +23,13 @@ const SENT = ["submitted", "accepted"];  // 已投出：这一届剩下的截稿
 const names = (list) => (list || []).map((x) => x.title).join("、");
 // the deadline event of a target still being prepared (an edition can hold several papers)
 const evOf = (events, t) => events.find((e) => e.type === "target" && e.days >= 0 && (e.targets || []).some((x) => x.id === t.id));
-// what to say about a target's deadlines when there is no upcoming one to count down to
+// what to say about a target's deadlines when the calendar has no event for it to count down to (an event past the
+// window, or at a venue that is not watched): go by the target's own state, never "not published" for a published one
 const noDeadline = (t) => SENT.includes(t.status) ? `${T_STATUS[t.status]} · 本届其余截稿不再提醒`
+  : t.state === "upcoming" ? `${t.edition ? t.edition + " 届" : ""}截稿 ${fmt(t.next_at)}`
   : !t.edition ? "下一届截稿未公布" : t.state === "past" ? `${t.edition} 届截稿已过` : `${t.edition} 届截稿未公布`;
+// days to the target's next deadline: its calendar event, else the date the target itself reports
+const daysOf = (t, ev) => ev ? daysTo(ev.at) : t.state === "upcoming" && t.next_at ? daysTo(t.next_at) : null;
 const roundLabel = (r) => `${r.comment ? r.comment.replace("（官网）", "") : "主会"} · ${r.abstract ? "摘要 " + md(r.abstract) + " · " : ""}${r.deadline ? "全文 " + md(r.deadline) : "全文未公布"}`;
 
 function Ranks({ core, ccf }) {
@@ -55,8 +59,9 @@ function DaysRing({ d, max = HORIZON, size = 64, stroke = 6, color }) {
 // ---------------- edition + round picker for a submission target ----------------
 
 // Chooses which edition (year) of a venue a paper aims at, and optionally one round of it. `onChange({edition, deadline})`
-// gets "" for "automatic" / "the whole edition"; a venue the catalog does not know shows nothing.
-export function EditionPicker({ venue, edition, deadline, onChange }) {
+// gets "" for "automatic" / "the whole edition"; `auto` is the edition "automatic" gives this target (default: the
+// nearest upcoming one); a venue the catalog does not know shows nothing.
+export function EditionPicker({ venue, edition, deadline, auto, onChange }) {
   const [opts, setOpts] = useState(null);
   useEffect(() => {
     setOpts(null);
@@ -71,10 +76,11 @@ export function EditionPicker({ venue, edition, deadline, onChange }) {
   if (edition && !eds.some((e) => e.year === edition)) eds.push({ year: edition, rounds: [], extra: true });
   eds.sort((a, b) => b.year - a.year);
   const cur = eds.find((e) => e.year === (edition || opts.default));
+  const autoYear = auto || opts.default;
   const edLabel = (e) => `${e.year}${e.year === opts.default ? " · 最近一届" : e.past ? " · 已截稿" : e.rounds.length || e.extra ? "" : " · 截稿未公布"}`;
   return html`<span class="ed-pick">
     <select value=${edition || ""} title="投稿哪一届" onChange=${(e) => onChange({ edition: e.target.value ? Number(e.target.value) : "", deadline: "" })}>
-      <option value="">${opts.default ? `自动（${opts.default}）` : "自动（下一届）"}</option>
+      <option value="">${autoYear ? `自动（${autoYear}）` : "自动（下一届）"}</option>
       ${eds.map((e) => html`<option value=${e.year}>${edLabel(e)}</option>`)}</select>
     ${edition && cur && cur.rounds.length > 0 && html`<select value=${deadline || ""} title="只看其中一轮的截稿" onChange=${(e) => onChange({ edition, deadline: e.target.value })}>
       <option value="">整届（所有轮次）</option>
@@ -144,7 +150,7 @@ export function TimelineChart({ events, days = 120, onPick }) {
 
 function Countdown({ c, onClick, i }) {
   const sent = c.kind === "target" && SENT.includes(c.t.status);
-  const d = c.ev ? daysTo(c.ev.at) : null;
+  const d = c.kind === "target" ? daysOf(c.t, c.ev) : c.ev ? daysTo(c.ev.at) : null;
   const kicker = c.kind === "target" ? `投稿目标 · ${(c.t.venue || "").toUpperCase()}${c.t.edition ? " " + c.t.edition : ""}` : c.kind === "milestone" ? (c.ev.kind === "gate" ? "下一个 Gate" : "下一个里程碑") : "最近会议截稿";
   const title = c.kind === "target" ? c.t.title : c.ev.title;
   return html`<button class="cd click" style=${{ "--i": i }} onClick=${onClick}>
@@ -435,7 +441,7 @@ function TargetCard({ x, ev, call, onOpenVenue }) {
   const patch = (json) => call(() => api(`/api/plan/targets/${x.id}`, { method: "PATCH", json }));
   return html`<div class=${"tcard" + (sent ? " sent" : "")}>
     ${sent ? html`<${Ring} value=${1} max=${1} size=${58} stroke=${5} color=${C.aqua} title=${T_STATUS[x.status]}><b>✓</b><small>${T_STATUS[x.status]}</small></${Ring}>`
-      : html`<${DaysRing} d=${ev ? daysTo(ev.at) : null} max=${180} size=${58} stroke=${5} color=${C.orange} />`}
+      : html`<${DaysRing} d=${daysOf(x, ev)} max=${180} size=${58} stroke=${5} color=${C.orange} />`}
     <div class="tc-body">
       <div class="tc-top"><b>${x.title}</b>
         <button class="abtn" title="删除" onClick=${() => confirm("删除这个目标？") && call(() => api(`/api/plan/targets/${x.id}`, { method: "DELETE" }))}><${Icon} name="x" sm /></button></div>
@@ -446,8 +452,8 @@ function TargetCard({ x, ev, call, onOpenVenue }) {
         ${x.line && html`<span class="tag">${x.line}</span>`}
         <span class="muted small">${ev ? ev.title.replace(/^\S+\s\d{4}\s/, "") + " " + fmt(ev.at) : noDeadline(x)}</span></div>
       <${Collapse} open=${editing}>${editing && html`<div class="ed-edit">
-        <${EditionPicker} venue=${x.venue} edition=${x.edition_from === "set" ? x.edition : ""} deadline=${x.deadline} onChange=${(p) => patch(p).then(() => !p.edition && setEditing(false))} />
-        <span class="muted small">${x.edition_from === "set" ? "选「自动」让它跟随最近一届" : "现在是按日历推断的，选一个就保存下来"}</span></div>`}</${Collapse}>
+        <${EditionPicker} venue=${x.venue} edition=${x.edition_from === "set" ? x.edition : ""} deadline=${x.deadline} auto=${x.edition_auto} onChange=${(p) => patch(p).then(() => !p.edition && setEditing(false))} />
+        <span class="muted small">${x.edition_from === "set" ? "选「自动」让它按状态和日历推断" : "现在是按状态和日历推断的，选一个就保存下来"}</span></div>`}</${Collapse}>
       <div class="stepper">${T_STEPS.map((s, k) => html`<button class=${"step" + (k < step ? " done" : k === step ? " on" : "")} title=${"设为" + T_STATUS[s]}
           onClick=${() => patch({ status: s })}><i />${T_STATUS[s]}</button>`)}
         ${step < 0 && html`<span class="tag warn">${T_STATUS[x.status] || x.status}</span>`}
