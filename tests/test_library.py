@@ -355,15 +355,16 @@ def test_a_half_copied_snapshot_with_stray_wal_files_heals(zdb):
 
 
 def test_read_zotero_retries_once_on_a_fresh_copy(zdb):
+    _bad_newer_copy(zdb)
     calls = []
 
     def work(con):
-        calls.append(library._ZOTERO_SNAPSHOT.stat().st_ino)
+        calls.append(library._ZOTERO_SNAPSHOT.read_bytes()[:14])
         raise sqlite3.DatabaseError("database disk image is malformed")
 
     with pytest.raises(sqlite3.DatabaseError):
         library.read_zotero(work)
-    assert len(calls) == 2 and calls[0] != calls[1]  # a second, freshly made copy; no third try
+    assert calls == [b"not a database", b"SQLite format "]  # the bad copy, then a fresh one; no third try
 
 
 def test_the_paper_list_survives_a_bad_original_and_says_so(zdb, make_note, caplog):
