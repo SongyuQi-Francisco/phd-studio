@@ -23,6 +23,7 @@ from typing import Any
 
 from . import library, reading
 from .config import BILINGUAL_DIR, load_settings, secret
+from .providers import PROVIDERS
 
 UVX = shutil.which("uvx") or str(Path.home() / ".local" / "bin" / "uvx")
 _jobs: dict[str, dict[str, Any]] = {}
@@ -122,10 +123,14 @@ def status(stem: str) -> dict[str, Any]:
 
 
 def engine() -> tuple[str, list[str]]:
-    """The translate engine setting, falling back to Google when there is no DeepSeek key."""
+    """The translate engine setting, falling back to Google when that engine has no key."""
+    setting = load_settings().get("translate_engine")
     key = secret("DEEPSEEK_API_KEY", "deepseek")
-    if load_settings().get("translate_engine") == "deepseek" and key:
+    if setting == "deepseek" and key:
         return "DeepSeek", ["--deepseek", "--deepseek-model", "deepseek-chat", "--deepseek-api-key", key]
+    glm = PROVIDERS["glm"]
+    if setting == "glm" and glm.key():
+        return "智谱 GLM", ["--zhipu", "--zhipu-model", glm.translate_model(), "--zhipu-api-key", glm.key()]
     return "Google 翻译", ["--google"]
 
 

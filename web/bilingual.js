@@ -28,9 +28,9 @@ export function BilingualSettings({ settings, save }) {
     setErr("");
     try { setQ(await api(path, init)); } catch (e) { setErr(e.message); }
   };
-  const noKey = q.engine_setting === "deepseek" && !q.deepseek_key;
+  const noKey = (q.engine_setting === "deepseek" && !q.deepseek_key) || (q.engine_setting === "glm" && !q.glm_key);
   const hint = q.mode === "off" ? "论文定为 T1 / T2 时先在后台翻好，打开即读"
-    : `进入 ${q.mode === "T1" ? "T1" : "T1 或 T2"} 时后台生成，一次一篇；${noKey ? "没有 DeepSeek 密钥，用 Google 翻译" : "用 " + q.engine}`;
+    : `进入 ${q.mode === "T1" ? "T1" : "T1 或 T2"} 时后台生成，一次一篇；${noKey ? `没有 ${q.engine_setting === "glm" ? "智谱" : "DeepSeek"} 密钥，用 Google 翻译` : "用 " + q.engine}`;
   const clean = q.disk.cleanable[days] || { papers: 0, bytes: 0 };
   const n = q.queued.length;
   const summary = [q.running ? "1 篇生成中" : null, n ? `${n} 篇排队` : null, q.paused ? "已暂停" : null,
@@ -39,7 +39,7 @@ export function BilingualSettings({ settings, save }) {
 
   return html`<div class="bqset">
     <div class="field"><div><label>预生成双语</label><small>${hint}</small>
-        <small class="bq-cost">只在这台 Mac 生效：每台各自生成、各存一份${q.engine === "DeepSeek" ? "，两台都开会各花一次 DeepSeek 额度" : ""}</small></div>
+        <small class="bq-cost">只在这台 Mac 生效：每台各自生成、各存一份${q.engine === "DeepSeek" || q.engine === "智谱 GLM" ? `，两台都开会各花一次 ${q.engine} 额度` : ""}</small></div>
       <div class="seg">${MODES.map(([v, l]) => html`<button class=${settings.bilingual_prefetch === v ? "on" : ""}
         onClick=${() => save({ bilingual_prefetch: v })}>${l}</button>`)}</div></div>
     ${show && html`<div class="field col">

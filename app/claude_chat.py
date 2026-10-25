@@ -5,6 +5,9 @@ so the conversation keeps its context across turns and server restarts.
 Read-only tools run freely; Edit/Write are forwarded to the browser as a diff and
 only run after the user approves. No silent fallback to another model: if Claude
 is unavailable the UI says so.
+
+A conversation can also be bound to another provider (Codex, Gemini, GLM, DeepSeek): those
+turns run read-only through model_chat; switching provider starts a new thread.
 """
 from __future__ import annotations
 
@@ -35,7 +38,7 @@ from claude_agent_sdk import (
 )
 from fastapi import WebSocket
 
-from . import library, line_chat
+from . import library, line_chat, model_chat, providers
 from .config import (
     AGENTS_MD,
     CHATS_DIR,
@@ -209,6 +212,7 @@ class PaperChat:
         self.pending: dict[str, asyncio.Future[bool]] = {}
         self.last_used = time.time()
         self.task: asyncio.Task | None = None
+        self.other: asyncio.Task | None = None  # a non-Claude turn's stream, cancelled by "stop"
 
     async def emit(self, payload: dict[str, Any]) -> None:
         if self.ws is not None:
@@ -249,6 +253,13 @@ class PaperChat:
     def _prompt(self) -> str:
         return _system_prompt(self.stem)
 
+    def instructions(self) -> str:
+        """Role and context for a non-Claude model of this conversation (built fresh for each turn)."""
+        return self._prompt()
+
+    def log(self, entry: dict[str, Any]) -> None:
+        _append_log(self.stem, entry)
+
     def _options(self) -> ClaudeAgentOptions:
         settings = load_settings()
         return ClaudeAgentOptions(
@@ -261,7 +272,7 @@ class PaperChat:
             setting_sources=[],
             include_partial_messages=True,
             resume=_load_sessions().get(self.stem),
-            model=settings.get("claude_model") or None,
+            model=model_chat.binding(self.stem)["model"] or settings.get("claude_model") or None,
             env=_claude_env(),
             cli_path=str(CLAUDE_CLI) if CLAUDE_CLI.exists() else None,
         )
@@ -299,6 +310,7 @@ class PaperChat:
     async def reset(self) -> None:
         await self.close()
         _save_session(self.stem, None)
+        model_chat.drop_thread(self.stem)
         log = _log_path(self.stem)
         if log.exists():
             log.rename(log.with_name(f"{library.safe_name(self.stem)}.{int(time.time())}.archived.jsonl"))
@@ -309,8 +321,35 @@ class PaperChat:
             fut.set_result(allow)
 
     async def interrupt(self) -> None:
+        if self.other is not None:
+            self.other.cancel()
         if self.client is not None:
             await self.client.interrupt()
+
+    async def set_model(self, provider: str, model: str) -> dict[str, Any]:
+        """Bind this conversation to a provider and model. Another provider starts a new thread
+        (the new model doesn't see the earlier turns); the transcript gets a labelled divider."""
+        if self.lock.locked():
+            raise RuntimeError("正在回答，等这条回答完再换模型")
+        old = model_chat.binding(self.stem)
+        if (provider, model) == (old["provider"], old["model"]):
+            return {"binding": model_chat.public(self.stem), "event": None}
+        new_thread = provider != old["provider"]
+        if old["provider"] == "claude":
+            await self.close()  # the next Claude turn connects with the new model, or never
+            if new_thread:
+                _save_session(self.stem, None)
+        if new_thread:
+            model_chat.drop_thread(self.stem)
+        model_chat.save(self.stem, provider, model, None if new_thread else old.get("thread"))
+        event = None
+        if _log_path(self.stem).exists():
+            p = providers.get(provider)
+            shown = model or (p.default_model() if p and provider != "claude" else "")
+            event = {"role": "event", "kind": "provider" if new_thread else "model", "provider": provider,
+                     "model": shown, "label": model_chat.answered_by(provider, shown), "ts": time.time()}
+            _append_log(self.stem, event)
+        return {"binding": model_chat.public(self.stem), "event": event}
 
     async def send(self, text: str, page: int | None, selection: str | None,
                    images: list[str], include_page_text: bool, display: str | None = None) -> None:
@@ -333,6 +372,11 @@ class PaperChat:
             content.append({"type": "text", "text": full_text})
             _append_log(self.stem, {"role": "user", "text": display or text, "selection": selection, "page": page,
                                     "images": images, "ts": time.time()})
+            bound = model_chat.binding(self.stem)
+            if bound["provider"] != "claude":
+                await model_chat.run_turn(self, bound, full_text, images)
+                self.last_used = time.time()
+                return
 
             segments: list[dict[str, Any]] = []
             model = ""
@@ -370,7 +414,7 @@ class PaperChat:
                     elif isinstance(msg, ResultMessage):
                         if msg.session_id:
                             _save_session(self.stem, msg.session_id)
-                        done = {"type": "done", "model": model, "duration_ms": msg.duration_ms,
+                        done = {"type": "done", "provider": "claude", "model": model, "duration_ms": msg.duration_ms,
                                 "segments": segments, "is_error": msg.is_error}
                         if msg.is_error and not any(x["type"] == "error" for x in segments):
                             err = _friendly_error(msg.result or (msg.errors and str(msg.errors)) or msg.subtype)
@@ -381,7 +425,7 @@ class PaperChat:
                 msg_text = _friendly_error(str(e))
                 await self.emit({"type": "error", "message": msg_text})
                 segments.append({"type": "error", "text": msg_text})
-            _append_log(self.stem, {"role": "assistant", "segments": segments, "model": model,
+            _append_log(self.stem, {"role": "assistant", "segments": segments, "provider": "claude", "model": model,
                                     "ts": time.time()})
             self.last_used = time.time()
 
@@ -480,6 +524,9 @@ class LineChat(StudioChat):
 
     def _prompt(self) -> str:
         return self.line_prompt or self._line_prompt()
+
+    def instructions(self) -> str:
+        return self._line_prompt()
 
 
 class ChatRegistry:

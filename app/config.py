@@ -141,7 +141,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "bilingual_prefetch": "off",
     # "" = whatever the Claude CLI defaults to for this account.
     "claude_model": "",
-    # Engine for selection translation and full-PDF translation: "deepseek" | "google".
+    # Engine for selection translation and full-PDF translation: "deepseek" | "glm" | "google".
     "translate_engine": "deepseek",
     # Add papers to Zotero by themselves: "off" | "triage" (given a tier, or a note) | "all" (also inbox).
     "zotero_auto": "off",

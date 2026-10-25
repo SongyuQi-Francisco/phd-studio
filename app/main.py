@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import bilingual, direction, excerpt, idea_ops, library, line_chat, notes, plan, reading, tracking, venues
+from . import bilingual, direction, excerpt, idea_ops, library, line_chat, model_chat, notes, plan, reading, tracking, venues
 from .claude_chat import claude_status, draft_takeaway, history, registry
 from .config import CROPS_DIR, IDEA_RADAR, PROFILE, STUDIO_DIR, load_settings, save_settings
 from .translate import translate
@@ -541,7 +541,7 @@ async def update_settings(patch: dict[str, Any]) -> dict[str, Any]:
 @app.get("/api/chat/{stem}")
 def chat_history(stem: str) -> dict[str, Any]:
     _stem_or_404(stem)
-    return {"messages": history(stem)}
+    return {"messages": history(stem), "binding": model_chat.public(stem)}
 
 
 @app.delete("/api/chat/{stem}")
@@ -602,4 +602,6 @@ from .zotero_api import router as zotero_router  # noqa: E402  (push papers into
 app.include_router(zotero_router)
 from .reminders_api import router as reminders_router  # noqa: E402  (Settings → 截稿提醒)
 app.include_router(reminders_router)
+from .model_api import router as model_router  # noqa: E402  (model picker: providers, per-conversation binding)
+app.include_router(model_router)
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
