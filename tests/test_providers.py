@@ -716,7 +716,8 @@ def test_the_codex_model_list_never_blocks_the_event_loop(fake_cli, monkeypatch,
     assert codex._catalog() == []  # a failure is remembered for a minute, not retried on every call
     assert calls.read_text().splitlines() == ["debug models"]
     # a stale list is served at once while a background thread refreshes it
-    codex._models = (0.0, [{"slug": "old", "visibility": "list"}])
+    # fetched 10 minutes ago (relative: monotonic time can be under 300 s on a freshly booted machine)
+    codex._models = (__import__("time").monotonic() - 600, [{"slug": "old", "visibility": "list"}])
     monkeypatch.setenv("FAKE_EXIT", "0")
     Path(os.environ["FAKE_OUT"]).write_text(json.dumps({"models": [{"slug": "new", "visibility": "list"}]}))
     assert [m["slug"] for m in codex._catalog()] == ["old"]
