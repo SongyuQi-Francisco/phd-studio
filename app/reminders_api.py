@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from . import remind_agent, reminders
+from . import notify, remind_agent, reminders
 
 router = APIRouter(prefix="/api/reminders")
 
@@ -28,6 +28,11 @@ def reminder_settings(patch: dict[str, Any]) -> dict[str, Any]:
 @router.post("/test")
 def reminder_test() -> dict[str, Any]:
     return reminders.test_notification()
+
+
+@router.post("/notification-settings")
+def reminder_notification_settings() -> dict[str, bool]:
+    return {"ok": notify.open_settings()}
 
 
 @router.post("/agent")

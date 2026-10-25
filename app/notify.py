@@ -57,12 +57,17 @@ def method() -> str:
 
 
 def send(title: str, body: str = "", subtitle: str = "", open_: dict[str, Any] | None = None,
-         ident: str | None = None, wait: float = 20.0) -> dict[str, Any]:
-    """Post one notification. Returns {"ok", "via", "error"?}; never raises."""
+         ident: str | None = None, wait: float = 20.0, ask: bool = False) -> dict[str, Any]:
+    """Post one notification. Returns {"ok", "via", "error"?, "denied"?}; never raises.
+
+    ask: may show macOS's "allow notifications?" prompt. Only for a process that stays up while the user
+    answers (the test button): a prompt left open by a background check that then exits ended up as
+    "denied" on macOS 26. "denied" in the result means further sends in this run are pointless.
+    """
     via = method()
     try:
         if via == "app":
-            return _send_un(title, body, subtitle, open_, ident or uuid.uuid4().hex, wait)
+            return _send_un(title, body, subtitle, open_, ident or uuid.uuid4().hex, wait, ask)
         if via == "osascript":
             return _send_osascript(title, body, subtitle)
     except Exception as e:  # noqa: BLE001 - a failed notification must not break the caller
@@ -147,10 +152,13 @@ def authorization(wait: float = 5.0) -> str:
 
 
 def _send_un(title: str, body: str, subtitle: str, open_: dict[str, Any] | None, ident: str,
-             wait: float) -> dict[str, Any]:
-    un = _load()
+             wait: float, ask: bool) -> dict[str, Any]:
     status = authorization()
+    if status == "not_determined" and not ask:
+        return {"ok": False, "via": "app", "denied": True, "auth": status,
+                "error": "还没允许 PhD Studio 发通知：在设置 → 截稿提醒里点「发一条测试通知」，再在系统提示里允许"}
     if status == "not_determined":  # first time: macOS asks the user
+        un = _load()
         done = threading.Event()
         answer: dict[str, Any] = {}
 
@@ -161,11 +169,18 @@ def _send_un(title: str, body: str, subtitle: str, open_: dict[str, Any] | None,
         un.center.requestAuthorizationWithOptions_completionHandler_(_ALERT_SOUND, asked)
         if not _wait(done, max(wait, 60.0)):
             return {"ok": False, "via": "app", "error": "还在等你在系统弹窗里允许 PhD Studio 发通知"}
-        status = "authorized" if answer["granted"] else "denied"
+        if not answer["granted"]:
+            why = answer["error"].localizedDescription() if answer["error"] is not None else "没有给出原因"
+            # "Notifications are not allowed for this application" with the status still undetermined:
+            # macOS could not validate the app, e.g. a copy run from a temporary folder.
+            return {"ok": False, "via": "app", "denied": True, "auth": authorization(),
+                    "error": f"macOS 没有允许 PhD Studio 发通知（{why}）"}
+        status = "authorized"
     if status == "denied":
-        return {"ok": False, "via": "app", "denied": True,
+        return {"ok": False, "via": "app", "denied": True, "auth": status,
                 "error": "PhD Studio 的通知被关掉了：系统设置 → 通知 → PhD Studio，打开「允许通知」"}
 
+    un = _load()
     content = un.Content.alloc().init()
     content.setTitle_(title)
     if subtitle:
@@ -189,6 +204,15 @@ def _send_un(title: str, body: str, subtitle: str, open_: dict[str, Any] | None,
     if result.get("error") is not None:
         return {"ok": False, "via": "app", "error": str(result["error"].localizedDescription())}
     return {"ok": True, "via": "app"}
+
+
+def open_settings() -> bool:
+    """System Settings → Notifications, at this app when macOS supports the deep link."""
+    if sys.platform != "darwin":
+        return False
+    url = "x-apple.systempreferences:com.apple.Notifications-Settings.extension"
+    app = bundle_id() or BUNDLE_PREFIX
+    return subprocess.run(["open", f"{url}?id={app}"], capture_output=True, timeout=10).returncode == 0
 
 
 def _open_from(response: Any) -> dict[str, Any] | None:

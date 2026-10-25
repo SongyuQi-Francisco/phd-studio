@@ -365,7 +365,7 @@ def _finish(res: dict[str, Any]) -> dict[str, Any]:
 
 def test_notification() -> dict[str, Any]:
     out = notify.send("PhD Studio 截稿提醒", "测试通知：之后截稿和里程碑临近时会这样提醒你。",
-                      subtitle="这是一条测试通知", open_={"view": "timeline"})
+                      subtitle="这是一条测试通知", open_={"view": "timeline"}, ask=True)
     local = _read_local()
     local["last_test"] = {"at": _stamp(), **{k: out.get(k) for k in ("ok", "via", "error")}}
     _write_local(local)
@@ -389,7 +389,7 @@ def status(now: datetime | None = None) -> dict[str, Any]:
         "is_designated": not cfg["device"] or cfg["device"] == DEVICE,
         "devices": [{k: d.get(k) for k in ("id", "seen_at", "agent")} for d in devices],
         "agent": remind_agent.status(),
-        "notify": {"via": notify.method(), "in_app": notify.in_app()},
+        "notify": {"via": notify.method(), "in_app": notify.in_app(), "auth": notify.authorization()},
         "last_check": local.get("last"), "last_test": local.get("last_test"),
         "upcoming": [{**message(r), "on": r["on"], "lead": r["lead"], "type": r["type"],
                       "days": (date.fromisoformat(r["on"]) - _local(now, None).date()).days} for r in upcoming[:12]],

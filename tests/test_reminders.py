@@ -43,8 +43,9 @@ class Sender:
     def __init__(self, ok: bool = True, denied: bool = False):
         self.ok, self.denied, self.sent = ok, denied, []
 
-    def __call__(self, title: str, body: str = "", subtitle: str = "", open_: Any = None, ident: Any = None) -> dict:
-        self.sent.append({"title": title, "body": body, "subtitle": subtitle, "open": open_, "ident": ident})
+    def __call__(self, title: str, body: str = "", subtitle: str = "", open_: Any = None, ident: Any = None,
+                 ask: bool = False) -> dict:
+        self.sent.append({"title": title, "body": body, "subtitle": subtitle, "open": open_, "ident": ident, "ask": ask})
         out = {"ok": self.ok, "via": "fake"}
         if not self.ok:
             out["error"] = "nope"
@@ -265,6 +266,7 @@ def test_check_sends_once_and_remembers_across_restarts() -> None:
     assert first["sent"] == ["Gate 2 · 还有 3 天"]
     assert send.sent[0]["open"] == {"view": "plan", "milestone": m["id"]}
     assert send.sent[0]["subtitle"] == "Gate" and send.sent[0]["ident"].startswith("s")
+    assert send.sent[0]["ask"] is False  # a background check never shows the permission prompt
     assert reminders.check(send=send)["sent"] == [] and len(send.sent) == 1
     log = yaml.safe_load(reminders.FILE.read_text(encoding="utf-8"))["sent"]
     assert [(r["lead"], r["device"]) for r in log] == [(3, "test")]
@@ -401,7 +403,7 @@ def test_test_notification(monkeypatch: pytest.MonkeyPatch) -> None:
     send = Sender()
     monkeypatch.setattr(notify, "send", send)
     assert reminders.test_notification()["ok"]
-    assert send.sent[0]["title"] == "PhD Studio 截稿提醒"
+    assert send.sent[0]["title"] == "PhD Studio 截稿提醒" and send.sent[0]["ask"] is True  # only it may prompt
     assert reminders.status()["last_test"]["ok"] is True
 
 
@@ -450,7 +452,7 @@ def test_agent_install_and_uninstall(no_system: list, monkeypatch: pytest.Monkey
     plist = remind_agent.plist_path()
     assert plist.is_relative_to(tmp_path) and st["installed"] and st["loaded"] and st["current"]
     assert plistlib.loads(plist.read_bytes())["ProgramArguments"][0] == str(py)
-    assert [c[0] for c in no_system] == ["bootout", "bootstrap", "print"]
+    assert [c[0] for c in no_system] == ["bootout", "bootstrap", "kickstart", "print"]
     st = remind_agent.uninstall()
     assert not plist.exists() and not st["installed"]
     assert no_system[-1][0] == "bootout"
@@ -500,6 +502,15 @@ def test_notify_never_raises_and_skips_the_center_outside_the_app(monkeypatch: p
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(notify, "bundle_id", lambda: "")
     assert REAL_SEND("t")["via"] == "none"
+
+
+def test_only_an_asking_send_may_prompt_for_permission(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(notify, "_load", lambda: pytest.fail("must not touch the center before the check"))
+    monkeypatch.setattr(notify, "authorization", lambda wait=5.0: "not_determined")
+    out = notify._send_un("t", "b", "", None, "id", 1.0, False)
+    assert out["denied"] and out["auth"] == "not_determined" and "发一条测试通知" in out["error"]
+    monkeypatch.setattr(notify, "authorization", lambda wait=5.0: "denied")
+    assert notify._send_un("t", "b", "", None, "id", 1.0, True)["denied"]
 
 
 def test_desktop_task_only_runs_remind(monkeypatch: pytest.MonkeyPatch) -> None:

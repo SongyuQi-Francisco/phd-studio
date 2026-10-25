@@ -91,7 +91,7 @@ def definition(found: tuple[Path, Path] | None | bool = True) -> dict[str, Any]:
         **d,
         "EnvironmentVariables": env,
         "StartCalendarInterval": [{"Hour": h, "Minute": m} for h, m in CHECK_TIMES],
-        "RunAtLoad": True,  # also at login, and right after installing
+        "RunAtLoad": True,  # also at login
         "ProcessType": "Background",
         "AssociatedBundleIdentifiers": ["local.phd-studio"],  # Login Items lists it under PhD Studio
         "StandardOutPath": str(LOG),
@@ -140,6 +140,8 @@ def install() -> dict[str, Any]:
     r = _launchctl("bootstrap", _domain(), str(plist_path()))
     if r.returncode:
         raise RuntimeError(f"launchctl bootstrap 失败：{(r.stderr or r.stdout).strip()[:300]}")
+    # RunAtLoad alone may be deferred for a Background job ("speculative" spawn): check once right now.
+    _launchctl("kickstart", f"{_domain()}/{LABEL}")
     return status()
 
 

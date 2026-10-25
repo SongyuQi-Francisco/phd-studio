@@ -93,6 +93,7 @@ function RemindersSheet({ initial, onClose }) {
     try { setSt(await api("/api/reminders/agent", { json: { install } })); } catch (e) { setErr(e.message); }
     setBusy("");
   };
+  const openNotifSettings = () => api("/api/reminders/notification-settings", { method: "POST" }).catch(() => {});
   const test = async () => {
     setBusy("test"); setSent(null);
     try { setSent(await api("/api/reminders/test", { method: "POST" })); } catch (e) { setSent({ ok: false, error: e.message }); }
@@ -161,7 +162,11 @@ function RemindersSheet({ initial, onClose }) {
               : `没发出去：${sent.error || "未知原因"}`)
             : last?.at ? `上次检查 ${clock(last.at)}${last.skipped ? ` · ${SKIPPED[last.skipped] || last.skipped}` : ` · 发出 ${last.sent?.length || 0} 条`}${last.failed?.length ? ` · ${last.failed.length} 条失败` : ""}`
             : "还没检查过"}</small></div>
-        <button class="btn" disabled=${busy === "test"} onClick=${test}>${busy === "test" ? "发送中…" : "发一条测试通知"}</button></div>
+        <span class="rm-row-end">
+          ${(sent?.denied || st.notify.auth === "denied") && html`<button class="btn ghost" onClick=${openNotifSettings}>打开通知设置</button>`}
+          <button class="btn" disabled=${busy === "test"} onClick=${test}>${busy === "test" ? "发送中…" : "发一条测试通知"}</button></span></div>
+      ${st.notify.auth === "not_determined" && !sent && html`<p class="rm-note">第一次使用：点「发一条测试通知」，在系统提示里选「允许」。提示可能直接进通知中心（开着专注模式时）；后台检查不会自己请求授权。</p>`}
+      ${st.notify.auth === "denied" && !sent && html`<p class="rm-err">PhD Studio 的通知被关掉了，提醒发不出来：点「打开通知设置」，打开「允许通知」。</p>`}
 
       ${s.enabled && st.upcoming.length > 0 && html`<div class="rm-list">
         ${st.upcoming.slice(0, 6).map((u) => html`<div class="rm-item">
