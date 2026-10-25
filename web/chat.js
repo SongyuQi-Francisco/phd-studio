@@ -1,6 +1,10 @@
 // Right panel: Claude co-reader (one persistent session per paper) and the paper's Obsidian note.
+// Each conversation can be switched to another model (models.js); only Claude may write.
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { html, Icon, renderMarkdown, api, composing } from "/lib.js";
+import { ModelPicker, answeredBy, providerLabel } from "/models.js";
+
+const NEEDS_CLAUDE = "这一步要改 vault，只有 Claude 能做：在面板顶部把模型换成 Claude 再试。";
 
 export const PROMPTS = {
   brief: "给我这篇论文的中文速读：①要解决的问题 ②方法核心（一句话 + 关键机制）③主要证据（关键数字，带页码）④局限 ⑤和我当前课题的关系。先读全文再回答。",
@@ -59,8 +63,13 @@ function AssistantMsg({ m, onPage, onSection, answer }) {
       ? html`<div class="change"><${Icon} name="check" sm /><span>${s.text}</span></div>`
       : html`<div class="err">${s.text}</div>`)}
     ${m.streaming && html`<div class="typing"><i /><i /><i /></div>`}
-    ${!m.streaming && m.model && html`<div class="foot"><span>${m.model}</span>${m.duration_ms ? html`<span>${(m.duration_ms / 1000).toFixed(1)}s</span>` : ""}</div>`}
+    ${!m.streaming && answeredBy(m) && html`<div class="foot"><span>${answeredBy(m)}</span>${m.duration_ms ? html`<span>${(m.duration_ms / 1000).toFixed(1)}s</span>` : ""}</div>`}
   </div>`;
+}
+
+// A provider or model switch, kept in the transcript where it happened.
+function EventMsg({ m }) {
+  return html`<div class="msg-event"><span>${m.kind === "provider" ? `以下由 ${m.label} 回答 · 新线程，看不到上面的内容` : `改用 ${m.label}`}</span></div>`;
 }
 
 function UserMsg({ m }) {
@@ -75,6 +84,9 @@ export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, r
   chips, emptyHint, title, onStudioChanged, onBack, backLabel, banner }) {
   const [msgs, setMsgs] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [binding, setBinding] = useState({ provider: "claude", model: "" });
+  const isClaude = binding.provider === "claude";
+  const who = providerLabel(binding.provider);
   const [text, setText] = useState("");
   const wsRef = useRef(null);
   const listRef = useRef();
@@ -117,7 +129,7 @@ export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, r
           // keep live permission cards (they carry the user's decision); take text/tools from the server
           const perms = m.segments.filter((s) => s.type === "perm" || s.type === "change");
           const segs = d.segments.length ? [...d.segments, ...perms] : m.segments;
-          return { ...m, segments: segs, streaming: false, model: d.model, duration_ms: d.duration_ms };
+          return { ...m, segments: segs, streaming: false, provider: d.provider, model: d.model, duration_ms: d.duration_ms };
         });
         setBusy(false);
       }
@@ -127,9 +139,10 @@ export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, r
 
   useEffect(() => {
     let alive = true;
-    setMsgs([]); setBusy(false);
+    setMsgs([]); setBusy(false); setBinding({ provider: "claude", model: "" });
     api(`/api/chat/${encodeURIComponent(stem)}`).then((r) => {
       if (!alive) return;
+      if (r.binding) setBinding(r.binding);
       // keep anything sent before the history arrived (a prompt handed to a panel that just mounted)
       setMsgs((prev) => [...r.messages.map((m) => m.role === "assistant" ? { ...m, segments: m.segments } : m), ...prev]);
       stick.current = true;
@@ -144,6 +157,10 @@ export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, r
 
   const send = useCallback(async (body, opts = {}) => {
     if (busy) return;
+    if (opts.write && !isClaude) {  // never hand a write to a read-only model, never switch for the user
+      setMsgs((prev) => [...prev, { role: "user", text: opts.label || body }, { role: "assistant", segments: [{ type: "error", text: NEEDS_CLAUDE }] }]);
+      return;
+    }
     const sel = opts.selection !== undefined ? opts.selection : attachments.selection;
     const imgs = opts.images !== undefined ? opts.images : attachments.images;
     const page = opts.page || sel?.page || imgs[0]?.page || getPage?.() || null;
@@ -168,15 +185,25 @@ export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, r
       update((m) => ({ ...m, streaming: false, segments: [{ type: "error", text: e.message }] }));
       setBusy(false);
     }
-  }, [busy, attachments, connect, getPage]);
+  }, [busy, attachments, connect, getPage, isClaude]);
 
   // busy: answering or waiting on an approval (send changes with it, so this re-registers)
   useEffect(() => { registerSend?.({ send, focus: () => taRef.current?.focus(), busy }); }, [send]);
 
   const answer = (id, allow) => wsRef.current?.send(JSON.stringify({ type: "permission", id, allow }));
   const stop = () => wsRef.current?.send(JSON.stringify({ type: "stop" }));
+  const pick = async (provider, model) => {
+    if (provider === binding.provider && model === binding.model) return;
+    if (provider !== binding.provider && msgs.some((m) => m.role === "user")
+      && !confirm(`换成 ${providerLabel(provider)} 会开始新线程：它看不到上面的对话（记录会保留在这里）。`)) return;
+    try {
+      const r = await api(`/api/chat/${encodeURIComponent(stem)}/model`, { json: { provider, model } });
+      setBinding(r.binding);
+      if (r.event) setMsgs((prev) => [...prev, r.event]);
+    } catch (e) { alert(e.message); }
+  };
   const reset = async () => {
-    if (!confirm("开始新对话？当前对话会存档，Claude 不再记得之前的内容。")) return;
+    if (!confirm(`开始新对话？当前对话会存档，${who} 不再记得之前的内容。`)) return;
     wsRef.current?.close();
     await api(`/api/chat/${encodeURIComponent(stem)}`, { method: "DELETE" });
     setMsgs([]);
@@ -201,33 +228,36 @@ export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, r
     stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
   };
 
-  const lastModel = [...msgs].reverse().find((m) => m.model)?.model;
   const hasAttach = !!(attachments.selection || attachments.images.length);
 
   return html`
     <div class="side-head">
       ${onBack && html`<button class="tb-btn back" title=${"回到" + backLabel} onClick=${onBack}><${Icon} name="left" sm />${backLabel}</button>`}
-      <div class="meta"><span class=${"dot " + (claudeOk ? "ok" : "bad")} /><span>${claudeOk ? (title ? `${title} · ${lastModel || "Claude"}` : lastModel || "Claude") : "Claude 未连接"}</span></div>
+      <div class="meta">${title && html`<span class="side-title">${title}</span>`}
+        <${ModelPicker} binding=${binding} busy=${busy} fallbackOk=${claudeOk} onPick=${pick} /></div>
       <button class="tb-btn" title="新对话" onClick=${reset}><${Icon} name="refresh" sm /></button>
     </div>
     ${banner}
     <div class="chat" ref=${listRef} onScroll=${onScroll}>
       ${msgs.length === 0
         ? html`<div class="chat-empty"><${Icon} name="sparkle" /><div>${emptyHint || "划选文字，或按住 ⌥ 框选图表 / 公式"}</div></div>`
-        : msgs.map((m) => m.role === "user" ? html`<${UserMsg} m=${m} />` : html`<${AssistantMsg} m=${m} onPage=${onPage} onSection=${onSection} answer=${answer} />`)}
+        : msgs.map((m) => m.role === "user" ? html`<${UserMsg} m=${m} />` : m.role === "event" ? html`<${EventMsg} m=${m} />`
+          : html`<${AssistantMsg} m=${m} onPage=${onPage} onSection=${onSection} answer=${answer} />`)}
     </div>
     <div class="composer">
-      ${chips ? html`<div class="chips">${chips.map((c) => html`<button class="chip" disabled=${busy}
-          onClick=${() => c.run ? c.run(send) : c.fill ? (setText(c.prompt), setTimeout(() => taRef.current?.focus(), 0)) : send(c.prompt, { selection: null, images: [], label: c.label })}>${c.label}</button>`)}</div>` : html`
+      ${chips ? html`<div class="chips">${chips.map((c) => html`<button class="chip" disabled=${busy || (c.write && !isClaude)}
+          title=${c.write && !isClaude ? "要改数据，只有 Claude 能做" : ""}
+          onClick=${() => c.run ? c.run(send) : c.fill ? (setText(c.prompt), setTimeout(() => taRef.current?.focus(), 0)) : send(c.prompt, { selection: null, images: [], label: c.label, write: c.write })}>${c.label}</button>`)}</div>` : html`
       <div class="chips">
         <button class="chip" disabled=${busy} onClick=${() => send(PROMPTS.brief, { selection: null, images: [], label: "速读" })}>速读</button>
         <button class="chip" disabled=${busy} onClick=${() => { const p = getPage(); send(PROMPTS.page(p), { includePageText: true, page: p, selection: null, images: [], label: `讲解第 ${p} 页` }); }}>讲解本页</button>
         <button class="chip" disabled=${busy} onClick=${() => send(PROMPTS.relate, { selection: null, images: [], label: "和我的课题有什么关系" })}>和我的课题</button>
-        <button class="chip" disabled=${busy || !paper} onClick=${() => paper.note_rel
-          ? send(PROMPTS.note(paper.note_rel), { selection: null, images: [], label: "更新笔记" })
-          : send(PROMPTS.intake, { selection: null, images: [], label: "建笔记" })}>${paper && !paper.note_rel ? "建笔记" : "更新笔记"}</button>
-        <button class="chip" disabled=${busy || !paper?.note_rel} title=${paper?.note_rel ? "逐条核对笔记论断和发表状态，更新 Claim Gate" : "先建笔记"}
-          onClick=${() => send(PROMPTS.audit(paper.note_rel, new Date().toLocaleDateString("sv")), { selection: null, images: [], label: "Claim Gate 审计" })}>Claim Gate 审计</button>
+        <button class="chip" disabled=${busy || !paper || !isClaude} title=${isClaude ? "" : "要改笔记，只有 Claude 能做"} onClick=${() => paper.note_rel
+          ? send(PROMPTS.note(paper.note_rel), { selection: null, images: [], label: "更新笔记", write: true })
+          : send(PROMPTS.intake, { selection: null, images: [], label: "建笔记", write: true })}>${paper && !paper.note_rel ? "建笔记" : "更新笔记"}</button>
+        <button class="chip" disabled=${busy || !paper?.note_rel || !isClaude}
+          title=${!isClaude ? "要改笔记，只有 Claude 能做" : paper?.note_rel ? "逐条核对笔记论断和发表状态，更新 Claim Gate" : "先建笔记"}
+          onClick=${() => send(PROMPTS.audit(paper.note_rel, new Date().toLocaleDateString("sv")), { selection: null, images: [], label: "Claim Gate 审计", write: true })}>Claim Gate 审计</button>
       </div>`}
       ${hasAttach && html`<div class="attach">
         ${attachments.selection && html`<div class="att"><${Icon} name="quote" sm /><span>${attachments.selection.text}</span>
@@ -236,7 +266,7 @@ export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, r
           <button onClick=${() => setAttachments({ ...attachments, images: attachments.images.filter((_, j) => j !== i) })}><${Icon} name="x" sm /></button></div>`)}
       </div>`}
       <div class="inputbox">
-        <textarea ref=${taRef} rows="1" placeholder=${hasAttach ? "问点什么，或直接发送让 Claude 讲解" : "问 Claude…"} value=${text} onInput=${autosize} onKeyDown=${onKey} />
+        <textarea ref=${taRef} rows="1" placeholder=${hasAttach ? `问点什么，或直接发送让 ${who} 讲解` : `问 ${who}…`} value=${text} onInput=${autosize} onKeyDown=${onKey} />
         ${busy
           ? html`<button class="send" title="停止" onClick=${stop}><${Icon} name="stop" sm /></button>`
           : html`<button class="send" title="发送 (Enter)" disabled=${!text.trim() && !hasAttach} onClick=${submit}><${Icon} name="send" sm /></button>`}

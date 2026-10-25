@@ -4,6 +4,7 @@ import { html, Icon, api, prefs, copyText, composing } from "/lib.js";
 import { PdfView } from "/pdfview.js";
 import { BilingualSettings } from "/bilingual.js";
 import { ChatPanel, NotePanel, PROMPTS } from "/chat.js";
+import { ProviderSettings } from "/models.js";
 import { ReadingPage, DoneDialog } from "/reading.js";
 import { OverviewPage, TimelinePage, VenueSheet, IdeaCapture } from "/plan.js";
 import { IdeasPage } from "/ideas.js";
@@ -348,7 +349,7 @@ function Settings({ status, onClose, onSaved }) {
   const save = async (patch) => { const n = await api("/api/settings", { json: patch }); setS(n); onSaved(); };
   const c = status.claude;
   return html`<div class="modal-bg" onClick=${(e) => e.target === e.currentTarget && onClose()}>
-    <div class="modal">
+    <div class="modal settings">
       <h2>设置</h2>
       <div class="field"><div><label>Claude</label>
         <small>${c.ok ? "已连接 · " + c.method : "未登录：" + c.hint}</small></div><span class=${"dot " + (c.ok ? "ok" : "bad")} /></div>
@@ -356,10 +357,11 @@ function Settings({ status, onClose, onSaved }) {
         <select value=${s.claude_model} onChange=${(e) => save({ claude_model: e.target.value })}>
           <option value="">默认</option><option value="opus">Opus</option><option value="sonnet">Sonnet</option><option value="haiku">Haiku（快）</option>
         </select></div>
+      <${ProviderSettings} />
       <${ZoteroSettings} settings=${s} save=${save} />
       <div class="field"><div><label>翻译引擎</label><small>划词翻译和整篇双语 PDF</small></div>
         <select value=${s.translate_engine} onChange=${(e) => save({ translate_engine: e.target.value })}>
-          <option value="deepseek">DeepSeek</option><option value="google">Google 翻译（免费）</option>
+          <option value="deepseek">DeepSeek</option><option value="glm">智谱 GLM</option><option value="google">Google 翻译（免费）</option>
         </select></div>
       <${BilingualSettings} settings=${s} save=${save} />
       <${ReminderRow} />
@@ -373,8 +375,8 @@ function Settings({ status, onClose, onSaved }) {
 const STUDIO_CHIPS = [
   { label: "今天该做什么", prompt: "看看我的时间线、阅读清单和想法，告诉我今天最该做的 3 件事（按截止紧迫度排）。" },
   { label: "最近截稿", prompt: "未来 60 天我关注的会议有哪些截稿？按时间列出，标出和我投稿目标相关的。" },
-  { label: "加里程碑", prompt: "帮我加一个里程碑：", fill: true },
-  { label: "记想法", prompt: "记一个想法：", fill: true },
+  { label: "加里程碑", prompt: "帮我加一个里程碑：", fill: true, write: true },
+  { label: "记想法", prompt: "记一个想法：", fill: true, write: true },
 ];
 
 function App() {
@@ -610,8 +612,8 @@ function App() {
           onNoteChanged=${() => setNoteVersion((n) => n + 1)} />
       </div>
       ${tab === "note" && html`<${NotePanel} paper=${paper} version=${noteVersion} onPage=${goPage} onSection=${goSection}
-        onAskUpdate=${() => { setTab("claude"); chatRef.current?.send(PROMPTS.note(paper.note_rel), { selection: null, images: [], label: "更新笔记" }); }}
-        onAskIntake=${() => { setTab("claude"); chatRef.current?.send(PROMPTS.intake, { selection: null, images: [], label: "建笔记" }); }} />`}
+        onAskUpdate=${() => { setTab("claude"); chatRef.current?.send(PROMPTS.note(paper.note_rel), { selection: null, images: [], label: "更新笔记", write: true }); }}
+        onAskIntake=${() => { setTab("claude"); chatRef.current?.send(PROMPTS.intake, { selection: null, images: [], label: "建笔记", write: true }); }} />`}
     </aside>`}
     ${studioSide && html`<div class="resizer" onMouseDown=${startResize} />
     <aside class="side">

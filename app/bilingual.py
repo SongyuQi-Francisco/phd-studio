@@ -23,6 +23,7 @@ from typing import Any
 
 from . import library, reading
 from .config import BILINGUAL_DIR, load_settings, secret
+from .providers import PROVIDERS
 
 UVX = shutil.which("uvx") or str(Path.home() / ".local" / "bin" / "uvx")
 _jobs: dict[str, dict[str, Any]] = {}
@@ -121,12 +122,23 @@ def status(stem: str) -> dict[str, Any]:
     return {"state": "none"}
 
 
-def engine() -> tuple[str, list[str]]:
-    """The translate engine setting, falling back to Google when there is no DeepSeek key."""
+def _engine() -> tuple[str, list[str], dict[str, str]]:
+    """The translate engine setting, falling back to Google when that engine has no key: label, pdf2zh
+    arguments, and the key as pdf2zh reads it from the environment (PDF2ZH_<FIELD>), so it never shows
+    up in the process list."""
+    setting = load_settings().get("translate_engine")
     key = secret("DEEPSEEK_API_KEY", "deepseek")
-    if load_settings().get("translate_engine") == "deepseek" and key:
-        return "DeepSeek", ["--deepseek", "--deepseek-model", "deepseek-chat", "--deepseek-api-key", key]
-    return "Google 翻译", ["--google"]
+    if setting == "deepseek" and key:
+        return "DeepSeek", ["--deepseek", "--deepseek-model", "deepseek-chat"], {"PDF2ZH_DEEPSEEK_API_KEY": key}
+    glm = PROVIDERS["glm"]
+    if setting == "glm" and (key := glm.key()):
+        return "智谱 GLM", ["--zhipu", "--zhipu-model", glm.translate_model()], {"PDF2ZH_ZHIPU_API_KEY": key}
+    return "Google 翻译", ["--google"], {}
+
+
+def engine() -> tuple[str, list[str]]:
+    label, args, _ = _engine()
+    return label, args
 
 
 def _command(pdf: Path, out: Path, engine_args: list[str]) -> list[str]:
@@ -137,12 +149,13 @@ def _command(pdf: Path, out: Path, engine_args: list[str]) -> list[str]:
     ]
 
 
-def _child_env() -> dict[str, str]:
-    return {k: v for k, v in os.environ.items() if k not in _ENV_DROP}
+def _child_env(keys: dict[str, str] | None = None) -> dict[str, str]:
+    env = {k: v for k, v in os.environ.items() if k not in _ENV_DROP and not k.startswith("PDF2ZH_")}
+    return {**env, **(keys or {})}
 
 
 def start(stem: str, source: str = "reader") -> dict[str, Any]:
-    label, engine_args = engine()
+    label, engine_args, keys = _engine()
     with _lock:
         if _running_job(stem) or output(stem, "dual"):  # already running, or already made (maybe under its other key)
             return status(stem)
@@ -167,7 +180,7 @@ def start(stem: str, source: str = "reader") -> dict[str, Any]:
                         job.update(state="error", error="工作台正在关闭")
                         return
                     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                            bufsize=1, env=_child_env())
+                                            bufsize=1, env=_child_env(keys))
                     job["proc"] = proc
                 assert proc.stdout is not None
                 for line in proc.stdout:

@@ -13,7 +13,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
 
-from claude_agent_sdk import create_sdk_mcp_server, tool
+from claude_agent_sdk import SdkMcpTool, create_sdk_mcp_server, tool
 
 from . import idea_ops, plan, reading, tracking, venue_check, venues
 
@@ -36,7 +36,21 @@ def _err(msg: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": f"错误：{msg}"}], "is_error": True}
 
 
+# What the non-Claude models may call (through ro_tools): queries only.
+READ_ONLY = ("reading_list", "idea_list", "timeline", "venue_search", "tracker_latest")
+
+
 def build(emit: Callable[[dict[str, Any]], Awaitable[None]]):
+    tools = _tools(emit)
+    names = [f"mcp__{SERVER}__{t.name}" for t in tools]
+    return create_sdk_mcp_server(SERVER, tools=tools), names
+
+
+def read_only(emit: Callable[[dict[str, Any]], Awaitable[None]]) -> list[SdkMcpTool]:
+    return [t for t in _tools(emit) if t.name in READ_ONLY]
+
+
+def _tools(emit: Callable[[dict[str, Any]], Awaitable[None]]) -> list[SdkMcpTool]:
     async def changed(area: str, summary: str, record: Any) -> None:
         await emit({"type": "studio_changed", "area": area, "summary": summary, "record": record})
 
@@ -257,5 +271,4 @@ def build(emit: Callable[[dict[str, Any]], Awaitable[None]]):
     tools = [reading_push, reading_list, reading_update, milestone_add, milestone_update, target_add,
              target_update, venue_search, venue_watch, idea_add, idea_update, idea_merge, idea_list, follow,
              tracker_latest, timeline, venue_details_propose]
-    names = [f"mcp__{SERVER}__{t.name}" for t in tools]
-    return create_sdk_mcp_server(SERVER, tools=tools), names
+    return tools

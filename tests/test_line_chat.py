@@ -515,7 +515,7 @@ def test_routes(line_vault, client):
     assert r.status_code == 200 and r.json()["context"]["note"].endswith("Project A Ranking Study.md")
     r = client.get(f"/api/lines/{key}/packet")
     assert r.status_code == 200 and r.json()["label"] == "起草导师汇报包"
-    assert client.get(f"/api/chat/{key}").json() == {"messages": []}
+    assert client.get(f"/api/chat/{key}").json() == {"messages": [], "binding": {"provider": "claude", "model": ""}}
     nobody = line_chat.line_key("Nobody")
     assert client.get(f"/api/lines/{nobody}").status_code == 404
     assert client.get(f"/api/chat/{nobody}").status_code == 404

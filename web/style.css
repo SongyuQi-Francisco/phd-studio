@@ -1008,3 +1008,38 @@ rect.heat-4, i.heat-4 { fill: var(--heat-4); background: var(--heat-4); }
 .ed-edit { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 6px 0 2px; }
 .tcard.sent .tc-top b { color: var(--text-2); }
 .tl-chart .pt-mark.muted { opacity: .35; }
+
+/* ---------- model picker (#15) ---------- */
+.side-head .meta .side-title { flex: 0 1 auto; min-width: 3em; color: var(--text-2); }
+.mpick { position: relative; flex: 0 0 auto; max-width: 70%; display: flex; }
+.mpick-btn { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 6px 0 8px; border-radius: 8px; color: var(--text-2); font-size: 12px; min-width: 0; max-width: 100%; transition: background .15s var(--ease); }
+.mpick-btn:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.mpick-btn:disabled { opacity: .55; cursor: default; }
+.mpick-btn .mpick-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mpick-btn svg.i { flex: none; opacity: .7; }
+.mpick-menu { top: 30px; right: 0; width: 300px; max-height: min(70vh, 520px); overflow-y: auto; padding: 6px; animation: popIn .2s var(--spring); }
+.mpick-note { font-size: 11.5px; color: var(--text-3); padding: 6px 8px 8px; line-height: 1.5; }
+.mpick-group { padding: 4px 0; border-top: 1px solid var(--line); }
+.mpick-head { display: flex; align-items: center; gap: 7px; padding: 6px 8px 4px; font-size: 12.5px; min-width: 0; }
+.mpick-head b { font-weight: 600; flex: none; }
+.mpick-head small { color: var(--text-3); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mpick-item { width: 100%; display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 23px; border-radius: 8px; font-size: 13px; text-align: left; color: var(--text); }
+.mpick-item span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mpick-item small { color: var(--text-3); font-size: 11px; }
+.mpick-item:hover { background: var(--hover); }
+.mpick-item.on { color: var(--accent); }
+.mpick-fix { font-size: 12px; color: var(--text-2); padding: 2px 8px 6px 23px; line-height: 1.55; }
+.pv-cmd { display: inline-flex; align-items: center; gap: 5px; margin-top: 3px; padding: 2px 7px; border-radius: 6px; background: var(--hover); color: var(--text); font-size: 12px; max-width: 100%; }
+.pv-cmd code { font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pv-cmd:hover { background: var(--accent-soft); }
+.msg-event { display: flex; align-items: center; gap: 10px; color: var(--text-3); font-size: 11.5px; margin: 2px 0; }
+.msg-event::before, .msg-event::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.msg-event span { flex: 0 1 auto; text-align: center; }
+.modal.settings { max-height: calc(100vh - 40px); overflow-y: auto; }
+.pv-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.pv-row { display: flex; gap: 9px; align-items: flex-start; }
+.pv-row > .dot { margin-top: 5px; }
+.pv-text { min-width: 0; flex: 1; font-size: 13px; }
+.pv-text b { font-weight: 600; }
+.pv-kind { margin-left: 6px; font-size: 11px; color: var(--text-3); }
+.pv-text small { line-height: 1.5; }

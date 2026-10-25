@@ -190,13 +190,13 @@ export function LinePanel({ line, claudeOk, registerSend, onBack, onStudioChange
     drafting.current = true;
     try {
       const p = await api(`/api/lines/${enc}/packet`);
-      send(p.prompt, opts(`起草导师汇报包 → ${p.path.split("/").pop()}`));
+      send(p.prompt, { ...opts(`起草导师汇报包 → ${p.path.split("/").pop()}`), write: true });
     } catch (e) { toast?.(e.message); } finally { drafting.current = false; }
   };
   const chips = [
     { label: "现状与下一步", prompt: LINE_ASKS.kickoff }, { label: "Kill criteria 体检", prompt: LINE_ASKS.kills },
-    { label: "两周计划", prompt: LINE_ASKS.plan }, { label: "起草导师汇报包", run: draft },
-    { label: "记想法", prompt: "给这条线记一个想法：", fill: true },
+    { label: "两周计划", prompt: LINE_ASKS.plan }, { label: "起草导师汇报包", run: draft, write: true },
+    { label: "记想法", prompt: "给这条线记一个想法：", fill: true, write: true },
   ];
   const register = (a) => registerSend?.({ ...a, kickoff: () => a.send(LINE_ASKS.kickoff, opts("现状与下一步")), packet: () => draft(a.send) });
   return html`<${ChatPanel} stem=${line.key} paper=${null} attachments=${att} setAttachments=${setAtt} registerSend=${register}

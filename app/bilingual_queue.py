@@ -26,6 +26,7 @@ from typing import Any
 
 from . import bilingual, library, reading
 from .config import BILINGUAL_DIR, DATA_DIR, READING_LIST, load_settings, secret
+from .providers import PROVIDERS
 
 QUEUE_FILE = DATA_DIR / "bilingual-queue.json"
 MODES: dict[str, tuple[str, ...]] = {"off": (), "T1": ("T1",), "T1T2": ("T1", "T2")}
@@ -214,6 +215,7 @@ def snapshot() -> dict[str, Any]:
                 and not bilingual.output(reading.key_of(i), "dual")]
     return {"mode": mode(), "paused": st["paused"], "engine": label,
             "deepseek_key": bool(secret("DEEPSEEK_API_KEY", "deepseek")),
+            "glm_key": bool(PROVIDERS["glm"].key()),
             "engine_setting": load_settings().get("translate_engine", "deepseek"),
             "running": running, "queued": [j for j in st["jobs"] if j["state"] == "queued"],
             "recent": finished[::-1][:8],

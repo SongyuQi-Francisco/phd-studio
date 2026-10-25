@@ -4,6 +4,7 @@ from __future__ import annotations
 import httpx
 
 from .config import load_settings, secret
+from .providers import PROVIDERS
 
 _PROMPT = (
     "把下面这段学术英文翻译成准确、通顺的中文。专业术语第一次出现时用“中文（English）”格式保留原词；"
@@ -29,6 +30,26 @@ def _deepseek(text: str) -> str:
     return r.json()["choices"][0]["message"]["content"].strip()
 
 
+def _glm(text: str) -> str:
+    glm = PROVIDERS["glm"]
+    key = glm.key()
+    if not key:
+        raise RuntimeError("no ZHIPU_API_KEY")
+    r = httpx.post(
+        f"{glm.base()}/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": glm.translate_model(),
+            "messages": [{"role": "system", "content": _PROMPT}, {"role": "user", "content": text}],
+            "temperature": 0.2,
+            "thinking": {"type": "disabled"},  # a translation, not a reasoning task: answer in ~1-2 s
+        },
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()["choices"][0]["message"]["content"].strip()
+
+
 def _google(text: str) -> str:
     r = httpx.get(
         "https://translate.googleapis.com/translate_a/single",
@@ -39,7 +60,7 @@ def _google(text: str) -> str:
     return "".join(seg[0] for seg in r.json()[0] if seg and seg[0])
 
 
-ENGINES = {"deepseek": ("DeepSeek", _deepseek), "google": ("Google 翻译", _google)}
+ENGINES = {"deepseek": ("DeepSeek", _deepseek), "glm": ("智谱 GLM", _glm), "google": ("Google 翻译", _google)}
 
 
 def translate(text: str) -> dict[str, str]:
