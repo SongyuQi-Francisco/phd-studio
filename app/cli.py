@@ -13,6 +13,7 @@
     studio idea merge i1a2b3 i4d5e6 [--text "the merged idea"]
     studio idea restore i1a2b3
     studio deadlines [--days 90]
+    studio remind [--check [--dry-run] [--now 2026-11-01T09:00] | --test] [--json]
 
 `studio milestone "Title" ...` and `studio idea "text"` are short for `milestone add` / `idea add`.
 `idea list` hides ideas that were merged into another one (--all or --status merged shows them).
@@ -23,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime
 
 from . import idea_ops, plan, reading
 
@@ -58,6 +60,44 @@ def _default_to_add(argv: list[str]) -> list[str]:
     if len(argv) > 1 and argv[0] in _SUBCOMMANDS and argv[1] not in (*_SUBCOMMANDS[argv[0]], "-h", "--help"):
         return [argv[0], "add", *argv[1:]]
     return argv
+
+
+def _remind(a: argparse.Namespace) -> int:
+    from . import reminders
+
+    if a.now and not (a.check and a.dry_run):
+        raise ValueError("--now only works with --check --dry-run")
+    if a.test:
+        out = reminders.test_notification()
+        print(json.dumps(out, ensure_ascii=False) if a.json else
+              f"sent via {out['via']}" if out["ok"] else f"failed ({out['via']}): {out.get('error')}")
+        return 0 if out["ok"] else 1
+    if a.check:
+        now = datetime.fromisoformat(a.now).astimezone() if a.now else None
+        out = reminders.check(now=now, dry_run=a.dry_run)
+        if a.json:
+            print(json.dumps(out, ensure_ascii=False, indent=2))
+        else:
+            print(f"{out['at']}  {out['device']}" + (f"  skipped: {out['skipped']}" if out.get("skipped") else ""))
+            for d in out["due"]:
+                print(f"  {'would send' if a.dry_run else 'due'}  {d['title']}  ({d['subtitle']}; {d['body']})")
+            for t in out["sent"]:
+                print(f"  sent  {t}")
+            for f in out["failed"]:
+                print(f"  failed  {f['title']}: {f['error']}")
+        return 1 if out["failed"] else 0
+    st = reminders.status()
+    if a.json:
+        print(json.dumps(st, ensure_ascii=False, indent=2))
+        return 0
+    cfg, ag = st["settings"], st["agent"]
+    names = {d["id"]: d["name"] for d in st["devices"]}
+    print(f"reminders {'on' if cfg['enabled'] else 'off'} · leads {cfg['leads']} at {cfg['time']}"
+          f" · sending Mac {names.get(st['designated'], st['designated'] or '-')} (this Mac: {st['device_name']})"
+          f" · LaunchAgent {'installed' if ag['installed'] else 'not installed'}")
+    for u in st["upcoming"]:
+        print(f"  {u['on']}  {u['title']}  ({u['subtitle']})")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -127,6 +167,14 @@ def main(argv: list[str] | None = None) -> int:
 
     dl = sub.add_parser("deadlines", help="upcoming watched-venue deadlines, targets and milestones")
     dl.add_argument("--days", type=int, default=90)
+
+    r = sub.add_parser("remind", help="deadline reminders (macOS notifications); no flag shows what is coming")
+    rg = r.add_mutually_exclusive_group()
+    rg.add_argument("--check", action="store_true", help="send the reminders that are due (what the LaunchAgent runs)")
+    rg.add_argument("--test", action="store_true", help="send a test notification")
+    r.add_argument("--dry-run", action="store_true", help="with --check: show what would be sent; send and record nothing")
+    r.add_argument("--now", help="with --check --dry-run: pretend it is this local time, e.g. 2026-11-01T09:00")
+    r.add_argument("--json", action="store_true")
 
     a = ap.parse_args(_default_to_add(list(sys.argv[1:] if argv is None else argv)))
     try:
@@ -199,6 +247,8 @@ def main(argv: list[str] | None = None) -> int:
                 if e["days"] >= 0:
                     tag = {"venue": "venue", "target": "TARGET", "milestone": "plan"}[e["type"]]
                     print(f"{e['at'][:16].replace('T', ' ')} UTC  {e['days']:>3}d  {tag:<6} {e['title']}")
+        elif a.cmd == "remind":
+            return _remind(a)
     except KeyError as e:
         if a.cmd != "idea":
             raise

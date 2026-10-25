@@ -10,13 +10,14 @@ import os
 import sys
 import threading
 import time
+from typing import Any, Callable
 
 import httpx
 import uvicorn
 
 from .config import STUDIO_DIR
 
-PORT = 8770
+PORT = int(os.environ.get("STUDIO_PORT") or 8770)  # another port only for a second, development window
 URL = f"http://127.0.0.1:{PORT}"
 ICON = STUDIO_DIR / "launcher" / "icon.png"
 
@@ -76,7 +77,37 @@ def _native_menus() -> None:
     AppHelper.callAfter(add)
 
 
+def _task(task: str) -> int:
+    """PHD_STUDIO_TASK: the reminders LaunchAgent runs this app's executable (the stub ignores
+    arguments) so the check runs as PhD Studio; see remind_agent.py. Only `remind …` is accepted."""
+    import shlex
+
+    from .cli import main as cli
+
+    args = shlex.split(task)
+    if args[:1] != ["remind"]:
+        print(f"PHD_STUDIO_TASK: not allowed: {task}", file=sys.stderr)
+        return 2
+    return cli(args)
+
+
+def _open_target(window: Any, focus: Callable[[], None]) -> Callable[[dict[str, Any]], None]:
+    """A clicked reminder: bring the window forward and show its event (the page may still be loading)."""
+    import json
+
+    def run(target: dict[str, Any]) -> None:
+        def go() -> None:
+            focus()
+            detail = json.dumps(target, ensure_ascii=False)
+            window.evaluate_js(f"(window.studioOpen || (d => {{ window.studioOpenPending = d; }}))({detail})")
+        threading.Thread(target=go, daemon=True).start()
+    return run
+
+
 def main() -> int:
+    task = os.environ.pop("PHD_STUDIO_TASK", "")
+    if task:
+        return _task(task)
     if _up():
         # Already running: ask that instance to show its window.
         try:
@@ -111,6 +142,11 @@ def main() -> int:
             pass
 
     app.state.focus = focus
+    try:
+        from . import notify
+        notify.watch_clicks(_open_target(window, focus))  # before start(): a click may be what launched us
+    except Exception as e:  # noqa: BLE001 - reminders still post; clicks just open the app
+        print(f"notifications: {e}", file=sys.stderr)
     if os.environ.get("STUDIO_DEBUG") == "1":
         # Test hook: lets a local test script run JS inside this WebKit window. Off by default.
         app.state.eval_js = window.evaluate_js

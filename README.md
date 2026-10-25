@@ -46,6 +46,9 @@ built on top of an Obsidian vault and a Zotero library you already have.
 ./studio idea merge i1a2b3 i4d5e6 --text "..."   # one idea from several; the originals stay, hidden
 ./studio idea restore i1a2b3                     # bring a merged-away idea back
 ./studio deadlines --days 90
+./studio remind                                   # deadline reminders coming up
+./studio remind --check --dry-run                 # what a check would notify now (also --now 2026-11-01T09:00)
+./studio remind --test                            # one test notification
 ```
 
 `--reason` is required. Papers already read or dismissed are not re-added.
@@ -53,6 +56,8 @@ built on top of an Obsidian vault and a Zotero library you already have.
 `milestone done` needs a title or id that matches exactly one milestone, and prefers open ones when titles repeat.
 The CLI works with or without the server running: it uses the same stores and the same locked, atomic writes as the app.
 Tell your agents about it in the vault rules file (e.g. `AGENTS.md`).
+
+Deadline reminders (macOS notifications) are set up in Settings → 截稿提醒; the background check that sends them with the app closed is a LaunchAgent installed only from the button there. See `docs/设计文档.md` §4.6.
 
 ## Setup
 
