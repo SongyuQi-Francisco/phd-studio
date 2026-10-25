@@ -477,10 +477,12 @@ def _run_job() -> None:
                 return
             s = _todo[i] if i < n else None
         if s is None:
+            _job["current"] = "机构 logo"
             try:
                 _institutions()
             except Exception as e:  # logos are optional
                 _job["error"] = redact(f"机构信息：{e}")
+            _fetch_logos()
             inst_for = n
             _prune(CACHE / "img", keep=300, days=180)
             continue
@@ -528,6 +530,9 @@ def activity(refresh: bool = False) -> dict[str, Any]:
     listed = {i.get("arxiv"): i["status"] for i in items if i.get("arxiv")}
     idx = library.arxiv_index()
     insts = (_cache_get("institutions") or ({}, 0))[0]
+    if _logos_pending(insts) and time.time() - _logos_tried[0] > 1800:  # a job with no scholars: just the logos
+        _logos_tried[0] = time.time()
+        refresh_in_background(ids=set())
     today = _today()
     cut = {k: (today - timedelta(days=k)).isoformat() for k in (30, 90, 365)}
     months = _months(12)
@@ -588,7 +593,8 @@ def activity(refresh: bool = False) -> dict[str, Any]:
                                "n_authors": len(w.get("authors", []))}
         ws = list(own.values())
         author = data.get("author") or {}
-        inst = insts.get((author.get("inst") or {}).get("id") or "", {})
+        inst_id = (author.get("inst") or {}).get("id") or ""
+        inst = insts.get(inst_id, {})
         rows.append({
             **s, "tracked_lab": labs.get(s.get("lab_id") or ""),
             "metrics": {"citations": author.get("cited_by_count"), "h_index": author.get("h_index"),
@@ -596,7 +602,8 @@ def activity(refresh: bool = False) -> dict[str, Any]:
                         "d30": sum(w["date"] >= cut[30] and not w["date_approx"] for w in ws),
                         "d90": sum(w["date"] >= cut[90] and not w["date_approx"] for w in ws),
                         "d365": len(ws), "relevant": rel, "this_year": sum(w["date"][:4] == str(today.year) for w in ws)},
-            "inst": {**(author.get("inst") or {}), "logo": bool(inst.get("logo")), "url": inst.get("homepage")},
+            "inst": {**(author.get("inst") or {}), "logo": bool(inst.get("logo")) and _logo_ready(inst_id),
+                     "url": inst.get("homepage")},
             "by_year": [y for y in data.get("by_year", []) if y["year"] <= today.year][-10:],
             "monthly": [monthly.get(m, 0) for m in months],
             "venues": venues.most_common(6), "coauthors": coauthors.most_common(10),
@@ -688,10 +695,16 @@ def _prune(folder: Path, keep: int, days: int) -> None:
             f.unlink(missing_ok=True)
 
 
+_IMG_EXTS = (".jpg", ".png", ".gif", ".webp", ".svg")
+
+
+def _cached_image(dest_stem: Path) -> Path | None:
+    return next((p for e in _IMG_EXTS if (p := dest_stem.with_suffix(e)).exists()), None)
+
+
 def _download_image(url: str, dest_stem: Path) -> Path | None:
-    for ext in (".jpg", ".png", ".gif", ".webp", ".svg"):
-        if dest_stem.with_suffix(ext).exists():
-            return dest_stem.with_suffix(ext)
+    if hit := _cached_image(dest_stem):
+        return hit
     fail = dest_stem.with_suffix(".fail")
     if _fresh(fail):
         return None
@@ -733,11 +746,38 @@ def avatar(sid: str) -> Path | None:
     return None
 
 
+def _logo_stem(inst_id: str) -> Path:
+    return CACHE / "img" / f"i-{inst_id}"
+
+
 def logo(inst_id: str) -> Path | None:
     if not re.fullmatch(r"I\d+", inst_id):
         return None
     info = (_cache_get("institutions") or ({}, 0))[0].get(inst_id) or {}
-    return _download_image(info["logo"], CACHE / "img" / f"i-{inst_id}") if info.get("logo") else None
+    return _download_image(info["logo"], _logo_stem(inst_id)) if info.get("logo") else None
+
+
+def _logo_ready(inst_id: str) -> bool:
+    """The logo is on disk. The page only asks for logos that are: a link that turned out dead would be a 404 in its console."""
+    return bool(re.fullmatch(r"I\d+", inst_id)) and _cached_image(_logo_stem(inst_id)) is not None
+
+
+def _logos_pending(insts: dict[str, Any]) -> list[str]:
+    """Institutions with a logo link that has neither been downloaded nor failed lately: still to try."""
+    return [i for i, v in insts.items() if v.get("logo") and re.fullmatch(r"I\d+", i)
+            and not _logo_ready(i) and not _fresh(_logo_stem(i).with_suffix(".fail"))]
+
+
+_logos_tried = [0.0]  # when activity() last started a logo-only job
+
+
+def _fetch_logos() -> None:
+    """Download the logos not yet tried; a dead link leaves a marker, so it is skipped for a day (see FAIL_TTL)."""
+    for inst_id in _logos_pending((_cache_get("institutions") or ({}, 0))[0]):
+        try:
+            logo(inst_id)
+        except OSError:  # a full disk or the like: the next job tries again
+            continue
 
 
 # Thumbnails are rendered by a small paced worker pool; the page asks which are ready

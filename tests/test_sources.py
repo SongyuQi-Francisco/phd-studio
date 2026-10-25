@@ -114,7 +114,7 @@ def test_parse_bib_reads_entries_fields_and_macros():
 def test_parse_bib_volume_has_a_proceedings_entry_and_latex_names():
     rec = sources.parse_bib(fixture("acl_volume.bib"))
     assert [r["_type"] for r in rec] == ["inproceedings", "proceedings", "inproceedings", "inproceedings", "inproceedings", "inproceedings"]
-    assert sources._bib_authors(rec[2]["author"]) == ["Cleo Fixture", "Lluís Màrquez", "Dana Üller"]
+    assert sources._bib_authors(rec[2]["author"]) == ["Cleo Fixture", "Maía Fixtùre", "Dana Üller"]
     assert sources.unlatex(rec[2]["title"]) == "EcomScriptBench: A Benchmark for E-commerce Script Planning"
 
 
@@ -127,7 +127,7 @@ def test_terms_keep_quoted_phrases_whole():
 def test_has_terms_needs_every_term_and_ignores_case_and_accents():
     assert sources.has_terms("Trustworthy Memory Consolidation for Agents", ["memory", "agents"])
     assert not sources.has_terms("Trustworthy Memory Consolidation", ["memory", "recommendation"])
-    assert sources.has_terms("Màrquez on memory", ["marquez"]) and not sources.has_terms("anything", [])
+    assert sources.has_terms("Fixtùre on memory", ["fixture"]) and not sources.has_terms("anything", [])
 
 
 @pytest.mark.parametrize("text, wanted, hit", [
@@ -147,7 +147,7 @@ def test_has_terms_matches_whole_words_not_substrings(text, wanted, hit):
 @pytest.mark.parametrize("followed, author, same", [
     ("Ada Example", "Ada Example", True), ("Ada Example", "ada  EXAMPLE", True), ("Ada Example", "A. Example", True),
     ("A. Example", "Ada Example", True), ("Ada Example", "Ben Example", False), ("Ada Example", "Ada Sample", False),
-    ("Lluís Màrquez", "Lluis Marquez", True), ("Example", "Ada Example", False), ("Example", "Example", True),
+    ("Maía Fixtùre", "Maia Fixture", True), ("Example", "Ada Example", False), ("Example", "Example", True),
 ])
 def test_same_person(followed, author, same):
     assert sources.same_person(followed, author) is same

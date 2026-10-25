@@ -119,12 +119,12 @@ def test_acl_papers_are_dated_by_the_month_of_their_event(net):
     assert "acl:2024.acl-long.99" not in acl  # the 2024 paper in the same recorded volume is outside the year-long window
 
 
-def test_acl_matches_the_title_and_the_marquez_style_names(net):
+def test_acl_matches_the_title_and_accented_bibtex_names(net):
     routes(net)
     follow("keyword", "E-commerce script")
     [f] = feed()
     assert [p["title"] for p in by_source(f)["acl"]] == ["EcomScriptBench: A Benchmark for E-commerce Script Planning"]
-    assert by_source(f)["acl"][0]["authors"][1] == "Lluís Màrquez"
+    assert by_source(f)["acl"][0]["authors"][1] == "Maía Fixtùre"
 
 
 def test_acl_ignores_the_days_window_but_arxiv_does_not(net):
