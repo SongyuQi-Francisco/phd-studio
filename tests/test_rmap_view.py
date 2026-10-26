@@ -245,7 +245,7 @@ def test_canvas_is_written_after_changes_and_only_when_it_changes(slug: str):
     [edge] = data["edges"]
     assert (edge["fromNode"], edge["toNode"]) == (node_id(slug, "Q"), node_id(slug, "H"))
     q, h = (next(n for n in data["nodes"] if n["id"] == node_id(slug, t_)) for t_ in ("Q", "H"))
-    assert h["x"] > q["x"] and h["color"] == canvas.COLOR["active"] and "假设 · 进行中" in h["text"]
+    assert h["x"] > q["x"] and h["color"] == canvas.COLOR["active"] and "Hypothesis · 进行中" in h["text"]  # D14: node types in English, statuses in Chinese
     mtime = path.stat().st_mtime_ns
     assert canvas.write(project.get(slug)) is False and path.stat().st_mtime_ns == mtime
     ops.apply(slug, [{"op": "attach.add", "kind": "evidence", "node": node_id(slug, "H"), "set": {"type": "paper", "target": "P 2024"}}])

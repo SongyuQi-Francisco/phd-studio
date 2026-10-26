@@ -61,6 +61,29 @@ def test_values_are_text_or_plural_forms_with_matching_placeholders(tree: Path):
             assert "n" in ph["en"], f"{key}: plural forms are picked by {{n}}"
 
 
+# Words docs/glossary.md retired (#56): the Chinese interface writes the right-hand form instead.
+RETIRED = {"想法": "Idea", "路线图": "Roadmap", "实验室": "lab", "截稿": "Deadline", "赛道": "Track",
+           "主会": "Main track", "一句话收获": "Takeaway", "h 指数": "h-index", "摘要截止": "Abstract deadline",
+           "全文截止": "Full paper deadline", "子线": "Branch", "开放问题": "Open question", "已读": "读完"}
+
+
+def test_chinese_text_follows_the_glossary():
+    found = []
+    for tree in TREES.values():
+        for f in sorted((tree / "zh").glob("*.json")):
+            for key, v in json.loads(f.read_text(encoding="utf-8")).items():
+                found += [(f"{f.stem}.{key}", old, new) for s_ in forms(v) for old, new in RETIRED.items() if old in s_]
+    assert not found, [f"{k}: {old} → {new}" for k, old, new in found]
+
+
+def test_shared_terms_match_the_glossary():
+    zh = i18n.web_messages()["zh"]
+    assert {k: zh["common." + k] for k in ("term.deadline", "term.roadmap", "term.idea", "term.lab", "term.tier",
+                                            "term.takeaway", "rmap_type.subline", "status.done")} == {
+        "term.deadline": "Deadline", "term.roadmap": "Roadmap", "term.idea": "Idea", "term.lab": "Lab",
+        "term.tier": "Tier", "term.takeaway": "Takeaway", "rmap_type.subline": "Branch", "status.done": "读完"}
+
+
 def test_keys_are_snake_case_with_dots():
     for tree in TREES.values():
         for key in i18n.load_tree(tree)["zh"]:
@@ -190,10 +213,9 @@ def test_vault_language_is_fixed_by_studio_toml(monkeypatch):
     config.save_settings({"ui_language": "en"})
     assert i18n.vault_lang() == "zh" and i18n.tv("reading.view.title") == "阅读清单"
     monkeypatch.setitem(config.PROFILE, "vault_language", "en")
-    assert i18n.vault_lang() == "en"
-    monkeypatch.setitem(config.PROFILE, "vault_language", "ui")
-    assert i18n.vault_lang() == "en"
     config.save_settings({"ui_language": "zh"})
+    assert i18n.vault_lang() == "en"
+    monkeypatch.setitem(config.PROFILE, "vault_language", "ui")  # not an option: never per Mac
     assert i18n.vault_lang() == "zh"
 
 
