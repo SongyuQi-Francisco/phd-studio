@@ -29,6 +29,7 @@
     "one": "Research map: the first draft of {title} awaits your confirmation ({n} change)",
     "other": "Research map: the first draft of {title} awaits your confirmation ({n} changes)"
   },
+  "changed.map_peers": {"one": "Research map: {n} peer on {title} is waiting for your confirmation", "other": "Research map: {n} peers on {title} are waiting for your confirmation"},
   "changed.map_update": {
     "one": "Research map: the update proposal for {title} awaits your confirmation ({n} change)",
     "other": "Research map: the update proposal for {title} awaits your confirmation ({n} changes)"

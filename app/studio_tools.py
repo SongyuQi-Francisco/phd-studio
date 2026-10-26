@@ -418,7 +418,7 @@ def _tools(emit: Callable[[dict[str, Any]], Awaitable[None]]) -> list[SdkMcpTool
         if out.get("is_error") or "_prop" not in out:
             return out
         prop, n, title = out.pop("_prop")
-        await changed("rmap", f"研究地图：{title} 有 {n} 个同行待你确认", prop)
+        await changed("rmap", i18n.t("tools.changed.map_peers", title=title, n=n), prop)
         return out
 
     tools = [reading_push, reading_list, reading_update, milestone_add, milestone_update, target_add,

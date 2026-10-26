@@ -20,6 +20,7 @@
   "changed.follow_person": "关注学者：{value}",
   "changed.follow_keyword": "关注关键词：{value}",
   "changed.map_seed": "研究地图：{title} 的第一版草稿待你确认（{n} 处改动）",
+  "changed.map_peers": "研究地图：{title} 有 {n} 个同行待你确认",
   "changed.map_update": "研究地图：{title} 的更新提议待你确认（{n} 处改动）",
   "reading_result.added": "已加入收件箱",
   "reading_result.listed": "已在阅读清单里，已合并",

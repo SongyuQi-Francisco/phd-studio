@@ -207,6 +207,7 @@ def test_change_cards_follow_the_interface_language(card):
         "follow a scholar": lambda: card("follow", kind="person", value="Ada Lovelace"),
         "follow a keyword": lambda: card("follow", kind="keyword", value="ranking"),
         "unfollow": unfollow,
+        "map peers": lambda: i18n.t("tools.changed.map_peers", title="Atlas", n=2),  # the card map_peer_propose sends
     }
     assert not problems(cases)
 
