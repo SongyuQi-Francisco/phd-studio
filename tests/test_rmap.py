@@ -244,7 +244,7 @@ def test_attachment_rules(slug: str):
         with pytest.raises(ValueError):
             ops.apply(slug, [{"op": "attach.add", "kind": "evidence", "node": refs["$x"], "set": bad}])
     with pytest.raises(ValueError, match="没有这种挂载"):
-        ops.apply(slug, [{"op": "attach.add", "kind": "peer", "node": refs["$x"], "set": {}}])
+        ops.apply(slug, [{"op": "attach.add", "kind": "nope", "node": refs["$x"], "set": {}}])
     r = ops.apply(slug, [{"op": "attach.add", "ref": "$u", "kind": "evidence", "node": refs["$x"],
                           "set": {"type": "url", "target": "https://example.org/a?b=1", "title": "Blog"}}])
     vid = r["refs"]["$u"]

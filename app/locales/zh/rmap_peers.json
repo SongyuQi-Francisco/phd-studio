@@ -1,0 +1,11 @@
+{
+  "err.date": "日期写成 YYYY、YYYY-MM 或 YYYY-MM-DD",
+  "err.key": "不认识的论文键（应为 paper:…、doi:…、openreview:… 这类）",
+  "err.kind": "只能挂同行或证据",
+  "err.paper": "论文笔记名只能写 vault 里的相对路径",
+  "err.relation": "同行的 relation 只能是 {allowed}",
+  "err.source": "同行的 source 只能是 {allowed}",
+  "err.title": "同行需要名字（论文标题、学者或 Lab 名）",
+  "err.type": "同行的 type 只能是 {allowed}",
+  "err.url": "同行链接只能是 http(s) 地址"
+}
