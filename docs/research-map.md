@@ -106,7 +106,7 @@ Things hung on a node. Each kind has its own file and the same generic routes; e
 | kind | file | fields | phase |
 |---|---|---|---|
 | `evidence` 证据 | `evidence.yaml` | `type`: `paper` (paper note name) / `note` (vault path) / `file` (vault path) / `url`; `target`; `title`; `note`; `stance`: `supports` / `contradicts` / `context` | 1 |
-| peers 同行 | registered by #47 | e.g. paper / scholar / lab, relation: same approach / competing / builds on | 3 |
+| `peer` 同行 | `peers.yaml` | `type` paper / scholar / lab, `title`, `relation` same / competing / builds_on, … ([research-map-peers.md](research-map-peers.md)) | 3 |
 | results 结果记录 | registered by #48 | e.g. config, dataset, metric, value, date, source | 4 |
 
 A `url` target opens only with `http`, `https`, `obsidian` or `zotero`; a paper name, note or file is a
