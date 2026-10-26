@@ -1,9 +1,12 @@
 // 「挂到地图」 in the reader's toolbar (#47): hang the open paper on a research map node, as evidence or as a peer.
-// Registered through /reader-tools.js (web/main.js imports this file). The likely nodes and where the paper
-// already hangs come from GET /api/rmap/peers/paper; the write is one batch to that map, the user's own edit.
+// Registered through /reader-tools.js, which loads this file on its own (a failure here never breaks the
+// reader). The likely nodes and where the paper already hangs (by any of its ids or its note, evidence from
+// before #47 included) come from GET /api/rmap/peers/paper; POST /api/rmap/peers/attach adds nothing when the
+// paper already hangs on that node.
 // i18n: done
 // i18n-keys: rmap_peers.rel.{same,competing,builds_on} rmap.stance.{supports,contradicts,context}
 // i18n-keys: rmap.type.{question,hypothesis,subline,experiment,result,decision,kill,open}
+import { Component } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { html, Icon, api } from "/lib.js";
 import { t } from "/i18n.js";
@@ -20,14 +23,17 @@ function ensureCss(href) {
   document.head.appendChild(l);
 }
 
-// The ops that hang this paper on a node: evidence (the paper note, else its link) or a peer.
-export function attachOp(info, node, how, choice) {
+const clip = (s, n) => (s && s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s);
+
+// What hangs this paper on a node: evidence (the paper note, else its link) or a peer. Titles are cut to what
+// the kind accepts (evidence 200 characters, peers 300).
+export function attachSet(info, how, choice) {
   if (how === "evidence") {
     const set = info.note ? { type: "paper", target: info.note } : { type: "url", target: info.url };
-    return { op: "attach.add", kind: "evidence", node, set: { ...set, title: info.title, stance: choice, entity: info.entity || null } };
+    return { ...set, title: clip(info.title, 200), stance: choice, entity: info.entity || null };
   }
-  return { op: "attach.add", kind: "peer", node, set: { type: "paper", title: info.title, relation: choice, url: info.url || null,
-    paper: info.note || null, date: info.year ? String(info.year) : null, source: "reader", entity: info.entity || null } };
+  return { type: "paper", title: clip(info.title, 300), relation: choice, url: info.url || null, paper: info.note || null,
+    date: info.year ? String(info.year) : null, source: "reader", entity: info.entity || null };
 }
 
 function Picker({ onPick, picked }) {
@@ -86,10 +92,12 @@ function AttachButton({ stem, toast }) {
     if (!picked) return;
     setBusy(true);
     try {
-      await api(`${base(picked.slug)}/batch`, { json: { ops: [attachOp(info, picked.node, mode, choice[mode])] } });
-      toast(t("rmap_peers.sug.attached", { node: picked.title }));
-      const r = await load(); // the node it now hangs on drops out of the likely ones
-      setPicked(r?.matches?.[0] || null); setOther(!r?.matches?.length);
+      const r = await api("/api/rmap/peers/attach", { json: { slug: picked.slug, node: picked.node, kind: mode, set: attachSet(info, mode, choice[mode]) } });
+      toast(r.state === "exists" ? t("rmap_peers.attach.exists", { node: picked.title })
+        : r.state === "updated" ? t("rmap_peers.attach.updated", { node: picked.title, relation: t("rmap_peers.rel." + choice.peer) })
+        : t("rmap_peers.sug.attached", { node: picked.title }));
+      const fresh = await load(); // the node it now hangs on drops out of the likely ones
+      setPicked(fresh?.matches?.[0] || null); setOther(!fresh?.matches?.length);
       setOpen(false);
     } catch (e) { toast(e.message); } finally { setBusy(false); }
   };
@@ -128,4 +136,11 @@ function AttachButton({ stem, toast }) {
   </span>`;
 }
 
-readerTool({ id: "rmap-attach", order: 50, render: ({ stem, toast }) => html`<${AttachButton} key=${stem} stem=${stem} toast=${toast} />` });
+// A failure inside the button (a render error) hides it; the reader goes on.
+class Guard extends Component {
+  componentDidCatch(e) { console.error("research map: the reader's add-to-map button failed", e); this.setState({ failed: true }); }
+  render() { return this.state.failed ? null : this.props.children; }
+}
+
+readerTool({ id: "rmap-attach", order: 50,
+  render: ({ stem, toast }) => html`<${Guard} key=${stem}><${AttachButton} stem=${stem} toast=${toast} /></${Guard}>` });

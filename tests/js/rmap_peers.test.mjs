@@ -2,7 +2,7 @@
 // jsc (WebKit's engine, the one the desktop window uses). Prints "ok" or throws.
 // The test copies peerlib.js next to this file (as .mjs), with cases.mjs: what app/rmap/peers.py answers for
 // the same names, so the two sides agree on entity keys.
-import { nodeStats, ruleOf, statsOf, gaps, risks, entityFor, keyText, idsOf, initials, peersByNode } from "./peerlib.mjs";
+import { nodeStats, ruleOf, statsOf, gaps, risks, entityFor, keyText, idsOf, keysOf, initials, peersByNode, aliasesOf, mergePeers } from "./peerlib.mjs";
 import cases from "./cases.mjs";
 
 const out = typeof print === "function" ? print : console.log.bind(console);
@@ -44,6 +44,26 @@ eq(ruleOf({}).same_dense, 2, "default rule");
 for (const [text, want] of Object.entries(cases.keys)) eq(keyText(text), want, `keyText(${text})`);
 for (const [kind, kw, want] of cases.entities) eq(entityFor(kind, kw), want, `entityFor(${kind}, ${JSON.stringify(kw)})`);
 
+// 3b. the ids in a link and a peer's aliases: the same as the server finds them
+for (const [link, want] of Object.entries(cases.links)) eq(keysOf(link).sort(), want, `keysOf(${link})`);
+for (const [p, want] of cases.aliases) eq([...aliasesOf(p)].sort(), want, `aliasesOf(${p.title})`);
+
+// 3c. one peer recorded twice (both Macs, or once more from the reader; any shared id) counts once
+{
+  const dup = [
+    { id: "a", node: "s1", type: "paper", relation: "same", title: "Late-Interaction Rerankers Are Strong Attribution Judges", entity: "paper:2610.90002", clock: { title: "1" } },
+    { id: "b", node: "s1", type: "paper", relation: "competing", title: "Late-Interaction Rerankers Are Strong Attribution Judges", entity: "openreview:xyz", clock: { title: "2" } },
+    { id: "c", node: "s1", type: "paper", relation: "same", title: "Another Paper Entirely Different", url: "https://arxiv.org/html/2610.90002v2", clock: { title: "3" } },
+    { id: "d", node: "s1", type: "lab", relation: "competing", title: "Lakeside Retrieval Lab", clock: { title: "4" } },
+  ];
+  const m = mergePeers(dup);
+  eq(m.map((p) => p.ids), [["a", "b", "c"], ["d"]], "merged by any shared id, transitively");
+  eq(m[0].relation, "same", "the closest relation wins");
+  const map = { nodes: [{ id: "s1", type: "subline", status: "active" }], attachments: { peer: dup.slice(0, 3) } };
+  const s = statsOf(map.nodes[0], map, meta);
+  eq([s.n, s.same, s.risk], [1, 1, false], "duplicates are not a crowd");
+}
+
 // 4. links and ids typed into the add form
 eq(idsOf("https://arxiv.org/abs/2310.11511v2"), { arxiv: "2310.11511" }, "arXiv link");
 eq(idsOf("2310.11511"), { arxiv: "2310.11511" }, "bare arXiv id");
@@ -51,6 +71,9 @@ eq(idsOf("https://openreview.net/forum?id=abC-12"), { ext: "openreview:abC-12" }
 eq(idsOf("https://doi.org/10.1145/3626772.3657834"), { ext: "doi:10.1145|3626772.3657834" }, "DOI link");
 eq(idsOf("https://aclanthology.org/2024.acl-long.12/"), { ext: "acl:2024.acl-long.12" }, "ACL Anthology link");
 eq(idsOf("https://example.org/paper"), {}, "other link");
+eq(idsOf("https://arxiv.org/abs/2310.11511v2?context=cs.CL"), { arxiv: "2310.11511" }, "arXiv link with a query");
+eq(idsOf("https://arxiv.org/abs/2310.11511/"), { arxiv: "2310.11511" }, "arXiv link with a trailing slash");
+eq(idsOf("https://arxiv.org/html/2310.11511v1"), { arxiv: "2310.11511" }, "arXiv HTML link");
 
 // 5. initials for the orange rings
 eq(initials("Elena Marchetti"), "EM", "a person");

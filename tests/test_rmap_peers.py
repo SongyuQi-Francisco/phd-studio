@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -16,6 +17,13 @@ from app import config, reading, studio_tools, tracking
 from app.rmap import ops, peers, project, proposals, registry
 
 from .conftest import PROJECT
+
+
+@pytest.fixture(autouse=True)
+def fresh_caches():
+    peers.clear_cache()  # suggestion / overview caches are module-level; every test has its own vault
+    yield
+    peers.clear_cache()
 
 
 def node_id(slug: str, title: str) -> str:
@@ -296,7 +304,17 @@ def test_peer_rules_in_a_javascript_engine(engine, tmp_path):
         pytest.skip(f"{engine} is not installed")
     shutil.copy(PROJECT / "web" / "rmap" / "peerlib.js", tmp_path / "peerlib.mjs")
     shutil.copy(PROJECT / "tests" / "js" / "rmap_peers.test.mjs", tmp_path / "test.mjs")
+    links = ["https://arxiv.org/abs/2310.11511v2?context=cs", "https://arxiv.org/abs/2310.11511/", "https://arxiv.org/html/2310.11511v1",
+             "https://arxiv.org/pdf/2310.11511v3.pdf", "arXiv:2310.11511", "2310.11511v2", "https://doi.org/10.48550/arXiv.2310.11511",
+             "https://openreview.net/forum?id=abC-12&noteId=x", "https://doi.org/10.1145/3626772.3657834", "10.1145/3626772.3657834",
+             "https://aclanthology.org/2024.acl-long.12/", "https://aclanthology.org/P19-1001.pdf", "https://example.org/2024.12345", ""]
     cases = {"keys": {k: peers.key_text(k) for k in ("Citations That Hold Up: Verifying", "Tomás  Herrera", "a_-b  C", "引用 核验")},
+             "links": {u: sorted(peers.ids_in(u)) for u in links},
+             "aliases": [[p, sorted(peers.aliases(p))] for p in [
+                 {"type": "paper", "title": "Citations That Hold Up", "entity": "openreview:abc", "url": "https://arxiv.org/abs/2310.11511v2?x=1", "paper": "CTHU 2026"},
+                 {"type": "paper", "title": "Short", "entity": "paper:short"},
+                 {"type": "lab", "title": "Lakeside Retrieval Lab", "entity": "lab:lakeside-ir"},
+                 {"type": "scholar", "title": "Elena Marchetti", "entity": "scholar:openalex:A5900000001"}]],
              "entities": [[k, kw, peers.entity_for(k, **kw)] for k, kw in [
                  ("paper", {"arxiv": "2310.11511v2", "title": "x"}), ("paper", {"ext": "openreview:abc", "title": "x"}),
                  ("paper", {"title": "Self-RAG: Learning to Retrieve"}), ("lab", {"lab": "Lakeside Retrieval Lab"}),
@@ -320,12 +338,14 @@ def test_reader_tool_registry_in_a_javascript_engine(engine, tmp_path):
 
 
 def test_the_hooks_stay_wired():
-    """The reader renders the registered tools and loads 挂到地图; the map page hands views ctx.open (documented)."""
+    """The reader renders the registered tools (loaded on their own, guarded); the map page hands views ctx.open."""
     main = (PROJECT / "web" / "main.js").read_text(encoding="utf-8")
-    assert 'import { readerTools } from "/reader-tools.js";' in main and 'import "/rmap/attach.js";' in main
-    assert "readerTools().map((tool) =>" in main and "tool.render({ stem, paper, toast })" in main
+    assert 'import { renderReaderTools } from "/reader-tools.js";' in main and "/rmap/attach.js" not in main
+    assert "renderReaderTools({ stem, paper, toast }).map(" in main
+    tools = (PROJECT / "web" / "reader-tools.js").read_text(encoding="utf-8")
+    assert 'MODULES = ["/rmap/attach.js"]' in tools and not re.search(r"^import ", tools, re.M)
     attach = (PROJECT / "web" / "rmap" / "attach.js").read_text(encoding="utf-8")
-    assert 'readerTool({ id: "rmap-attach"' in attach
+    assert 'readerTool({ id: "rmap-attach"' in attach and "componentDidCatch" in attach
     page = (PROJECT / "web" / "rmap" / "page.js").read_text(encoding="utf-8")
     assert "open: openNode" in page and "wantNode.current" in page
     assert "| `open(slug, node?)` |" in (PROJECT / "docs" / "research-map.md").read_text(encoding="utf-8")
@@ -339,3 +359,177 @@ def test_a_paper_without_a_note_takes_its_title_from_the_reading_list(slug: str,
     assert r["title"] == "Late-Interaction Rerankers Are Strong Attribution Judges" and r["note"] is None
     assert r["entity"] == "paper:2610.90002" and r["url"] == "https://arxiv.org/abs/2610.90002"
     assert r["matches"][0]["title"] == "Late-interaction reranker as verifier"
+
+
+# ---------- review fixes: duplicates, aliases, old evidence, caching, noise, limits ----------
+
+
+def test_one_peer_recorded_twice_counts_once_and_is_merged_on_read(slug: str, client: TestClient):
+    s1 = node_id(slug, "Late-interaction reranker as verifier")
+    title = "Late-Interaction Rerankers Are Strong Attribution Judges"
+    # both Macs confirmed the same suggestion (two records), and the OpenReview copy came in from the reader
+    ops.apply(slug, [peer(s1, title, entity="paper:2610.90002"), peer(s1, title, entity="paper:2610.90002"),
+                     peer(s1, title, "competing", entity="openreview:abc123", url="https://openreview.net/forum?id=abc123")])
+    a = peers.analyze(slug)
+    row = next(r for r in a["nodes"] if r["id"] == s1)
+    assert row["n"] == 1 and row["same"] == 1 and not row["risk"] and len(row["peers"][0]["ids"]) == 3
+    assert {"paper:2610.90002", "openreview:abc123"} <= set(row["peers"][0]["aliases"])
+    o = client.get("/api/rmap/peers/overview").json()
+    assert len(o["columns"]) == 1 and o["columns"][0]["key"] == "paper:2610.90002" and o["columns"][0]["nodes"] == 1
+
+
+def test_attach_adds_nothing_when_the_paper_already_hangs_there(slug: str, client: TestClient):
+    s1 = node_id(slug, "Late-interaction reranker as verifier")
+    body = {"slug": slug, "node": s1, "kind": "peer",
+            "set": {"type": "paper", "title": "Late-Interaction Rerankers Are Strong Attribution Judges", "relation": "same",
+                    "url": "https://arxiv.org/abs/2610.90002v2?context=cs"}}
+    r = client.post("/api/rmap/peers/attach", json=body).json()
+    assert r["state"] == "added"
+    got = project.get(slug).read()["attachments"]["peer"]
+    assert got[0]["entity"] == "paper:2610.90002"  # the best id the record names, not just its title
+    assert client.post("/api/rmap/peers/attach", json=body).json() == {"state": "exists", "id": r["id"]}
+    # the same paper by another id (its OpenReview copy, same title) with another relation: the relation changes
+    other = {**body, "set": {"type": "paper", "title": "Late-interaction rerankers are strong attribution judges.",
+                             "relation": "competing", "entity": "openreview:zz9"}}
+    assert client.post("/api/rmap/peers/attach", json=other).json()["state"] == "updated"
+    got = project.get(slug).read()["attachments"]["peer"]
+    assert len(got) == 1 and got[0]["relation"] == "competing"
+    assert client.post("/api/rmap/peers/attach", json={**body, "kind": "nope"}).status_code == 400
+    assert client.post("/api/rmap/peers/attach", json={**body, "node": "nfake"}).status_code == 404
+    assert client.post("/api/rmap/peers/attach", json={**body, "slug": "nope-1234"}).status_code == 404
+
+
+def test_long_derived_titles_are_cut_to_what_the_kind_accepts(slug: str):
+    s1 = node_id(slug, "Late-interaction reranker as verifier")
+    long = "A Very Long Title " * 20  # 360 characters
+    r = peers.attach(slug, s1, "evidence", {"type": "url", "target": "https://arxiv.org/abs/2610.90007", "title": long, "stance": "context"})
+    ev = next(a for a in project.get(slug).read()["attachments"]["evidence"] if a["id"] == r["id"])
+    assert len(ev["title"]) == 200 and ev["title"].endswith("…") and ev["entity"] == "paper:2610.90007"
+    r = peers.attach(slug, s1, "peer", {"type": "paper", "title": long, "relation": "same"})
+    assert len(next(p for p in project.get(slug).read()["attachments"]["peer"] if p["id"] == r["id"])["title"]) == 300
+
+
+def test_the_assistant_does_not_propose_a_peer_already_there(call, slug: str):
+    s1 = node_id(slug, "Late-interaction reranker as verifier")
+    ops.apply(slug, [peer(s1, "Late-Interaction Rerankers Are Strong Attribution Judges", entity="paper:2610.90002")])
+    out, _ = call("map_peer_propose", {"project": slug, "summary": "x", "peers": [
+        {"node": s1, "title": "Late-Interaction Rerankers Are Strong Attribution Judges", "relation": "same", "arxiv": "2610.90002"},
+        {"node": s1, "type": "lab", "title": "Lakeside Retrieval Lab", "relation": "competing"},
+        {"node": s1, "type": "lab", "title": "Lakeside Retrieval Lab", "relation": "competing"}]})
+    assert out["skipped_already_there"] == ["Late-Interaction Rerankers Are Strong Attribution Judges", "Lakeside Retrieval Lab"]
+    assert sum(1 for e in proposals.pending(slug)[0]["events"] if e["kind"] == "peer") == 1
+    err, _ = call("map_peer_propose", {"project": slug, "summary": "x", "peers": [
+        {"node": s1, "title": "Late-Interaction Rerankers Are Strong Attribution Judges", "relation": "same"}]})
+    assert "已经挂在" in err
+
+
+def test_a_paper_is_one_suggestion_whatever_id_it_comes_with(slug: str, feed: dict):
+    s1 = node_id(slug, "Late-interaction reranker as verifier")
+    # the arXiv version hangs there; the feed now brings its OpenReview copy (same title, another id)
+    ops.apply(slug, [peer(s1, "Late-Interaction Rerankers Are Strong Attribution Judges", entity="paper:2610.90002")])
+    cache = next(tracking.FEED_CACHE.glob(f"{feed['id']}.json"))
+    rows = json.loads(cache.read_text(encoding="utf-8"))
+    (tracking.FEED_CACHE / f"{feed['id']}.openreview.json").write_text(json.dumps([
+        {"ext": "openreview:abc123", "title": "Late-interaction rerankers are strong attribution judges",
+         "published": rows[0]["published"], "summary": rows[0]["summary"], "url": "https://openreview.net/forum?id=abc123"}]), encoding="utf-8")
+    peers.clear_cache()
+    found = [s for s in peers.suggestions() if "attribution judges" in s["title"].lower()]
+    assert found == [] or all(m["node"] != s1 for s in found for m in s["matches"])
+    assert len([c for c in peers.candidates() if "attribution judges" in c["title"].lower()]) == 1  # merged across sources
+    # dismissed by one id, gone by the other too
+    check = next(s for s in peers.suggestions() if s["key"] == "paper:2610.90005")
+    peers.dismiss(check["key"], [slug], check["aliases"])
+    (tracking.FEED_CACHE / f"{feed['id']}.openreview.json").write_text(json.dumps([
+        {"ext": "openreview:dup5", "title": check["title"], "published": rows[0]["published"], "summary": "verifier flags unsupported"}]),
+        encoding="utf-8")
+    assert all("Self-Checking" not in s["title"] for s in peers.suggestions())
+
+
+def test_the_reader_recognises_evidence_hung_before_peers_existed(slug: str, make_note, client: TestClient):
+    make_note("Rerankers 2026", arxiv="2610.90002", title="Late-Interaction Rerankers Are Strong Attribution Judges",
+              body="A late interaction reranker as an attribution verifier.\n")
+    s1 = node_id(slug, "Late-interaction reranker as verifier")
+    # phase-1 evidence: a paper note by name, no entity
+    ops.apply(slug, [{"op": "attach.add", "kind": "evidence", "node": s1, "set": {"type": "paper", "target": "Rerankers 2026"}}])
+    r = client.get("/api/rmap/peers/paper", params={"stem": "Rerankers 2026"}).json()
+    assert [(h["kind"], h["node"]) for h in r["attached"]] == [("evidence", s1)]
+    assert all(m["node"] != s1 for m in r["matches"])
+    # saving it again from the reader adds nothing; nor does its arXiv-only copy
+    body = {"slug": slug, "node": s1, "kind": "evidence", "set": {"type": "paper", "target": "Rerankers 2026", "stance": "supports"}}
+    assert client.post("/api/rmap/peers/attach", json=body).json()["state"] == "exists"
+    url = {**body, "set": {"type": "url", "target": "https://arxiv.org/abs/2610.90002", "stance": "supports"}}
+    assert client.post("/api/rmap/peers/attach", json=url).json()["state"] == "exists"
+    assert len(project.get(slug).read()["attachments"]["evidence"]) == 1
+    # an arXiv-only stem of the same paper is recognised too
+    r = client.get("/api/rmap/peers/paper", params={"stem": "arxiv:2610.90002"}).json()
+    assert [h["node"] for h in r["attached"]] == [s1]
+
+
+def test_suggestions_are_cached_until_a_map_or_a_source_changes(slug: str, feed: dict, monkeypatch):
+    calls = []
+    real = peers._targets
+    monkeypatch.setattr(peers, "_targets", lambda s=None: (calls.append(s), real(s))[1])
+    first = peers.suggestions(slug)
+    assert peers.suggestions(slug) == first and calls == [slug]  # read this map only, once
+    peers.suggestions(slug, node=node_id(slug, "Late-interaction reranker as verifier"))
+    assert calls == [slug]  # narrowing to a node reuses it
+    ops.apply(slug, [{"op": "node.update", "id": node_id(slug, "Annotate 300 answers"), "set": {"status": "verified"}}])
+    peers.suggestions(slug)
+    assert calls == [slug, slug]  # the map changed
+    with reading.editing() as items:
+        items[0]["reason"] = "changed"
+    peers.suggestions(slug)
+    assert calls == [slug, slug, slug]  # a source changed
+
+
+def test_tool_work_runs_off_the_event_loop(call, slug: str, monkeypatch):
+    seen = []
+    real = asyncio.to_thread
+
+    async def spy(fn, *a, **kw):
+        seen.append(fn.__name__)
+        return await real(fn, *a, **kw)
+    monkeypatch.setattr(studio_tools.asyncio, "to_thread", spy)
+    call("map_gaps", {})
+    call("map_peer_suggest", {})
+    assert seen == ["_map_gaps", "_map_peer_suggest"]
+
+
+def test_matching_ignores_stop_words_after_stemming_and_needs_whole_words():
+    assert not peers.terms("results works improves uses") and "verifi" in peers.terms("verifiers")
+    assert not peers._line_hit("IR", "irrelevant results on iris images")
+    assert not peers._line_hit("RAG", "a ragged edge")
+    assert peers._line_hit("RAG", "RAG pipelines cite passages")
+    assert peers._line_hit("long context + sparse attention", "Sparse attention for long context models")
+    assert not peers._line_hit("long context + sparse attention", "long context only")
+
+
+def test_overview_totals_leave_out_refuted_and_dropped_nodes(slug: str, client: TestClient):
+    h3 = node_id(slug, "Train the generator to cite")  # dropped
+    s1 = node_id(slug, "Late-interaction reranker as verifier")
+    ops.apply(slug, [peer(h3, "Old Peer On A Dropped Branch", entity="paper:2601.00001"), peer(s1, "Live Peer On A Live Branch")])
+    o = client.get("/api/rmap/peers/overview").json()
+    assert o["maps"][0]["peers"] == 1 and [c["title"] for c in o["columns"]] == ["Live Peer On A Live Branch"]
+    assert h3 not in {r["id"] for r in o["maps"][0]["rows"]}
+
+
+@pytest.mark.parametrize("engine", ["node", "jsc"])
+def test_the_research_map_scripts_parse(engine, tmp_path):
+    """Every research map script (extensions and the reader's button included) is valid module syntax: a typo
+    there would only show in the browser."""
+    exe = shutil.which("node") if engine == "node" else (str(JSC) if JSC.exists() else None)
+    if not exe:
+        pytest.skip(f"{engine} is not installed")
+    files = sorted((PROJECT / "web" / "rmap").rglob("*.js")) + [PROJECT / "web" / "reader-tools.js"]
+    if engine == "jsc":
+        (tmp_path / "check.js").write_text(
+            'for (const f of arguments) { try { checkModuleSyntax(read(f)); } catch (e) { print("ERR " + f + ": " + e); } }\nprint("done");\n',
+            encoding="utf-8")
+        r = subprocess.run([exe, str(tmp_path / "check.js"), "--", *map(str, files)], capture_output=True, text=True, timeout=60)
+        assert r.stdout.strip().endswith("done") and "ERR" not in r.stdout, r.stdout + r.stderr
+    else:
+        for f in files:
+            copy = tmp_path / (f.stem + ".mjs")
+            shutil.copy(f, copy)
+            r = subprocess.run([exe, "--check", str(copy)], capture_output=True, text=True, timeout=60)
+            assert r.returncode == 0, f"{f.name}: {r.stderr}"

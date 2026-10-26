@@ -97,36 +97,47 @@ function loadSuggestions(slug, stamp, fresh = false) {
   return sugCache.get(key);
 }
 
-function useSuggestions(slug, stamp) {
+// delay: wait that long after the map changed (an edit, a sync) before asking, and only while the page is
+// visible, so a burst of edits asks once; the server answers from its cache until a map or a source changes.
+function useSuggestions(slug, stamp, delay = 0) {
   const [list, setList] = useState(null);
   const [bump, setBump] = useState(0);
   useEffect(() => {
-    let live = true;
-    loadSuggestions(slug, stamp, bump > 0).then((l) => live && setList(l));
-    return () => { live = false; };
-  }, [slug, stamp, bump]);
+    let live = true, timer = null;
+    const go = () => {
+      if (document.hidden) { timer = setTimeout(go, 2000); return; }
+      loadSuggestions(slug, stamp, bump > 0).then((l) => live && setList(l));
+    };
+    if (delay > 0) timer = setTimeout(go, delay); else go();
+    return () => { live = false; clearTimeout(timer); };
+  }, [slug, stamp, bump, delay > 0]);
   return [list, () => setBump((b) => b + 1)];
 }
 
 const VENUE_MAX = 80;
 function peerSet(sug, relation) {
-  return { type: "paper", title: sug.title, relation, url: safeUrl(sug.url) && /^https?:/i.test(sug.url) ? sug.url : null,
+  return { type: "paper", title: short(sug.title, 300), relation, url: safeUrl(sug.url) && /^https?:/i.test(sug.url) ? sug.url : null,
     paper: sug.paper || null, authors: (sug.authors || []).slice(0, 4).join(", ").slice(0, 290) || null,
     venue: sug.venue ? sug.venue.slice(0, VENUE_MAX) : null, date: sug.date || null, source: sug.sources?.[0] || "manual", entity: sug.key };
 }
 function evidenceSet(sug) {
-  return sug.paper ? { type: "paper", target: sug.paper, title: sug.title, stance: "context", entity: sug.key }
-    : { type: "url", target: sug.url, title: sug.title, stance: "context", entity: sug.key };
+  const title = short(sug.title, 200); // evidence titles hold at most 200 characters
+  return sug.paper ? { type: "paper", target: sug.paper, title, stance: "context", entity: sug.key }
+    : { type: "url", target: sug.url, title, stance: "context", entity: sug.key };
 }
 
-// Attach a suggestion to a node (as a peer with a relation, or as evidence): on this map through ctx.api.apply,
-// on another map (the analysis view) through its batch route.
+// What the attach route did: added, already there (any of the paper's ids), or a peer's relation changed.
+const attachedText = (r, node, relation) => (r.state === "exists" ? t("rmap_peers.attach.exists", { node })
+  : r.state === "updated" ? t("rmap_peers.attach.updated", { node, relation: t("rmap_peers.rel." + relation) })
+  : t("rmap_peers.sug.attached", { node }));
+
+// Hang a suggestion on a node, as a peer with a relation or as evidence, through /api/rmap/peers/attach (which
+// adds nothing when the paper already hangs there); then this map is re-read.
 async function confirm(ctx, sug, m, how) {
-  const op = how === "evidence" ? { op: "attach.add", kind: "evidence", node: m.node, set: evidenceSet(sug) }
-    : { op: "attach.add", kind: "peer", node: m.node, set: peerSet(sug, how) };
-  if (m.slug === ctx.slug) await ctx.api.apply([op]);
-  else await api(`${base(m.slug)}/batch`, { json: { ops: [op] } });
-  ctx.toast(t("rmap_peers.sug.attached", { node: short(m.title, 40) }));
+  const kind = how === "evidence" ? "evidence" : "peer";
+  const r = await api("/api/rmap/peers/attach", { json: { slug: m.slug, node: m.node, kind, set: kind === "evidence" ? evidenceSet(sug) : peerSet(sug, how) } });
+  if (m.slug === ctx.slug) await ctx.api.refresh();
+  ctx.toast(attachedText(r, short(m.title, 40), how));
 }
 
 function SuggestionCard({ sug, ctx, slug, node, onDone, onOpen }) {
@@ -134,7 +145,7 @@ function SuggestionCard({ sug, ctx, slug, node, onDone, onOpen }) {
   const matches = sug.matches.filter((m) => (!slug || m.slug === slug) && (!node || m.node === node));
   const run = async (fn) => { setBusy(true); try { await fn(); onDone?.(); } catch (e) { ctx.toast(e.message); } finally { setBusy(false); } };
   const dismiss = () => run(async () => {
-    await api("/api/rmap/peers/dismiss", { json: { key: sug.key, slugs: [...new Set(matches.map((m) => m.slug))] } });
+    await api("/api/rmap/peers/dismiss", { json: { key: sug.key, aliases: sug.aliases || [], slugs: [...new Set(matches.map((m) => m.slug))] } });
     ctx.toast(t("rmap_peers.sug.dismissed"));
   });
   const link = safeUrl(sug.url);
@@ -160,7 +171,7 @@ function SuggestionCard({ sug, ctx, slug, node, onDone, onOpen }) {
 
 function SuggestTool({ ctx }) {
   const [open, setOpen] = useState(false);
-  const [list, reload] = useSuggestions(ctx.slug, ctx.map?.stamp);
+  const [list, reload] = useSuggestions(ctx.slug, ctx.map?.stamp, open ? 0 : 1500);
   const ref = useRef();
   useEffect(() => {
     if (!open) return;
@@ -190,14 +201,14 @@ rmap.tool({ id: "peer-suggest", label: "rmap_peers.suggest", order: 30, render: 
 
 // ---------------------------------------------------------------- detail panel: the node's peers
 
-const entCache = new Map(); // stamp of the map -> promise of /api/rmap/entities
-function entities(ctx) {
+const ovCache = new Map(); // "<slug>|<stamp>" -> promise of the overview's columns (peers merged across projects)
+function sharedColumns(ctx) {
   const key = ctx.slug + "|" + ctx.map.stamp;
-  if (!entCache.has(key)) {
-    if (entCache.size > 8) entCache.clear();
-    entCache.set(key, ctx.api.call("/api/rmap/entities").then((r) => r.entities).catch(() => ({})));
+  if (!ovCache.has(key)) {
+    if (ovCache.size > 8) ovCache.clear();
+    ovCache.set(key, ctx.api.call("/api/rmap/peers/overview").then((r) => r.columns.filter((c) => c.projects.length > 1)).catch(() => []));
   }
-  return entCache.get(key);
+  return ovCache.get(key);
 }
 
 function PeerAdd({ node, ctx, onDone }) {
@@ -210,7 +221,12 @@ function PeerAdd({ node, ctx, onDone }) {
     const url = /^https?:\/\//i.test(f.link.trim()) ? f.link.trim() : ids.arxiv ? `https://arxiv.org/abs/${ids.arxiv}` : null;
     const set = { type: f.type, title, relation: f.relation, url, date: f.date.trim() || null, venue: f.venue.trim() || null, source: "manual",
       entity: entityFor(f.type, { title, ...ids, lab: f.type === "lab" ? title : undefined }) };
-    try { await ctx.api.apply([{ op: "attach.add", kind: "peer", node: node.id, set }]); onDone(); } catch (err) { ctx.toast(err.message); }
+    try {
+      const r = await ctx.api.call("/api/rmap/peers/attach", { json: { slug: ctx.slug, node: node.id, kind: "peer", set } });
+      await ctx.api.refresh();
+      if (r.state !== "added") ctx.toast(attachedText(r, short(node.title, 40), f.relation));
+      onDone();
+    } catch (err) { ctx.toast(err.message); }
   };
   const guard = (e) => { if (e.key === "Escape") onDone(); };
   return html`<form class="mp-evadd" onSubmit=${save} onKeyDown=${guard}>
@@ -234,20 +250,21 @@ function PeerSection({ node, ctx }) {
   const [shared, setShared] = useState({});
   const items = peersByNode(ctx.map).get(node.id) || [];
   const s = statsOf(node, ctx.map, ctx.meta);
-  const [sugs, reload] = useSuggestions(ctx.slug, ctx.map.stamp);
+  const [sugs, reload] = useSuggestions(ctx.slug, ctx.map.stamp, 600);
   const mine = (sugs || []).filter((x) => x.matches.some((m) => m.slug === ctx.slug && m.node === node.id)).slice(0, 3);
   useEffect(() => setAdding(false), [node.id]);
+  // where else each peer hangs: the overview merges a peer across projects by any of its ids
   useEffect(() => {
-    const keys = items.map((p) => p.entity).filter(Boolean);
-    if (!keys.length) { setShared({}); return; }
+    if (!items.length) { setShared({}); return; }
     let live = true;
     const title = (slug) => ctx.projects.find((p) => p.slug === slug)?.title || slug;
-    entities(ctx).then((all) => {
+    sharedColumns(ctx).then((cols) => {
       if (!live) return;
       const out = {};
-      for (const k of keys) {
-        const other = [...new Set((all[k] || []).filter((h) => h.slug !== ctx.slug).map((h) => title(h.slug)))];
-        if (other.length) out[k] = other;
+      for (const p of items) {
+        const col = cols.find((c) => c.aliases.some((a) => p.aliases.includes(a)));
+        const other = (col?.projects || []).filter((s) => s !== ctx.slug).map(title);
+        if (other.length) out[p.id] = other;
       }
       setShared(out);
     });
@@ -268,13 +285,13 @@ function PeerSection({ node, ctx }) {
       <div class="mpp-main">
         ${p.paper || safeUrl(p.url) ? html`<button class="mpp-t" title=${p.title} onClick=${() => open(p)}>${p.title}</button>` : html`<span class="mpp-t" title=${p.title}>${p.title}</span>`}
         <div class="mpp-meta">${[t("rmap_peers.type." + p.type), p.venue, p.date, p.authors && short(p.authors, 40)].filter(Boolean).join(" · ")}
-          ${shared[p.entity] && html` · <span class="mpp-also">${t("rmap_peers.also", { projects: shared[p.entity].join(t("rmap_peers.sep")) })}</span>`}</div>
+          ${shared[p.id] && html` · <span class="mpp-also">${t("rmap_peers.also", { projects: shared[p.id].join(t("rmap_peers.sep")) })}</span>`}</div>
         ${p.note && html`<div class="mpp-note">${p.note}</div>`}
       </div>
       <select class=${"mpp-rel r-" + p.relation} value=${p.relation} title=${t("rmap_peers.rel.title")}
-        onChange=${(e) => apply([{ op: "attach.update", kind: "peer", id: p.id, set: { relation: e.target.value } }])}>
+        onChange=${(e) => apply(p.ids.map((id) => ({ op: "attach.update", kind: "peer", id, set: { relation: e.target.value } })))}>
         ${RELATIONS.map((r) => html`<option value=${r}>${t("rmap_peers.rel." + r)}</option>`)}</select>
-      <button class="mp-chip-x" title=${t("rmap_peers.remove")} onClick=${() => apply([{ op: "attach.delete", kind: "peer", id: p.id }])}><${Icon} name="x" sm /></button>
+      <button class="mp-chip-x" title=${t("rmap_peers.remove")} onClick=${() => apply(p.ids.map((id) => ({ op: "attach.delete", kind: "peer", id })))}><${Icon} name="x" sm /></button>
     </div>`)}</div>`}
     ${!items.length && !adding && html`<p class="mp-quiet">${t("rmap_peers.none")}</p>`}
     ${adding && html`<${PeerAdd} node=${node} ctx=${ctx} onDone=${() => setAdding(false)} />`}

@@ -22,6 +22,8 @@
   "an.shared": "Shared across projects",
   "an.shared_sub": "Peers hung on several projects show up here",
   "an.sum": "Total",
+  "attach.exists": "Already on “{node}”",
+  "attach.updated": "Already on “{node}”: relation changed to {relation}",
   "cancel": "Cancel",
   "flag.gap": "Gap: nobody else works on this branch yet. An opening, or not searched yet.",
   "flag.risk": "Collision risk: {n} peers take the same or a competing approach while this is in progress.",

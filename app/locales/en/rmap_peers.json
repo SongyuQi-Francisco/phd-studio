@@ -1,6 +1,7 @@
 {
   "err.date": "Write the date as YYYY, YYYY-MM or YYYY-MM-DD",
   "err.key": "Unknown paper key (expected paper:…, doi:…, openreview:… and so on)",
+  "err.kind": "Only peers or evidence can be attached here",
   "err.paper": "A paper note name must be a relative path in the vault",
   "err.relation": "A peer's relation must be one of {allowed}",
   "err.source": "A peer's source must be one of {allowed}",

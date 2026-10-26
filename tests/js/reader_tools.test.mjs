@@ -1,6 +1,6 @@
 // web/reader-tools.js without a browser: run by tests/test_rmap_peers.py with node or JavaScriptCore's jsc.
 // The test copies reader-tools.js next to this file (as .mjs). Prints "ok" or throws.
-import { readerTool, readerTools } from "./reader-tools.mjs";
+import { readerTool, readerTools, renderReaderTools, loadReaderTools } from "./reader-tools.mjs";
 
 const out = typeof print === "function" ? print : console.log.bind(console);
 function eq(actual, expected, what) {
@@ -24,4 +24,11 @@ eq(ids(), ["a", "b"], "the list handed out is a copy");
 let threw = false;
 try { readerTool({ id: "x" }); } catch { threw = true; }
 eq(threw, true, "a render function is required");
+// a tool whose render throws is left out; the others still render
+readerTool({ id: "boom", order: 1, render: () => { throw new Error("broken"); } });
+eq(renderReaderTools({ stem: "s" }).map(([id]) => id), ["a", "b"], "a throwing tool is skipped");
+// a module that fails to load is logged, never thrown; the ones that load register
+const loaded = [];
+await loadReaderTools(["/ok.js", "/bad.js"], (src) => { if (src === "/bad.js") throw new Error("404"); loaded.push(src); return {}; });
+eq(loaded, ["/ok.js"], "modules load one by one, a failure is contained");
 out("ok");
