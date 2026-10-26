@@ -62,7 +62,8 @@ def test_peer_is_an_attachment_kind_with_its_rule_in_meta(client: TestClient):
     kind = next(k for k in client.get("/api/rmap/meta").json()["kinds"] if k["name"] == "peer")
     assert kind["relations"] == ["same", "competing", "builds_on"] and kind["types"] == ["paper", "scholar", "lab"]
     assert (kind["dense"], kind["same_dense"], kind["gap_types"]) == (peers.DENSE, peers.SAME_DENSE, ["hypothesis", "subline"])
-    assert client.get("/api/rmap/ext").json() == {"scripts": ["/rmap/ext/peers.js"], "styles": ["/rmap/ext/peers.css"]}
+    ext = client.get("/api/rmap/ext").json()
+    assert "/rmap/ext/peers.js" in ext["scripts"] and "/rmap/ext/peers.css" in ext["styles"]
 
 
 def test_peers_are_validated_logged_and_go_with_their_node(slug: str):

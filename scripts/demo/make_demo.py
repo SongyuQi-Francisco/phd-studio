@@ -906,7 +906,7 @@ RMAP_BEACON_PEERS = [
         _peer("$s1", "competing", "IO-Aware Sparse Attention on Consumer GPUs"),
         _peer("$s1", "builds_on", "Chunked Prefill Scheduling for Efficient Long-Context Serving"),
         _peer("$h2", "same", "Memory-Efficient Long-Context Fine-Tuning with Shifted Windows"),
-        _peer("$h2", "competing", "Context Compression for Retrieval-Augmented Generation"),
+        _peer("$q", "competing", "Context Compression for Retrieval-Augmented Generation"),  # shared with Atlas
         _peer("$q", "competing", "Aurora Language Models Team", "lab"),
     ]),
 ]
