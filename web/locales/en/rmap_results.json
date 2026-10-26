@@ -28,6 +28,7 @@
   "form.value": "Value",
   "imp.baselines": "Which are baselines",
   "imp.choose": "Choose a column",
+  "imp.decimal": "Decimal mark",
   "imp.done": {
     "one": "Imported {n} result",
     "other": "Imported {n} results"

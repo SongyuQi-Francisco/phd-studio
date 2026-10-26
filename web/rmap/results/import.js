@@ -58,6 +58,8 @@ function MappingEditor({ pre, mp, setMp, configs }) {
     ${wide && html`<div class="imp-metrics"><span>${t("rmap_results.imp.metrics")}</span>
       ${pre.columns.filter((c) => !used.has(c)).map((c) => html`<button type="button" key=${c} class=${"rs-chip rs-mono" + (mp.metrics.includes(c) ? " on" : "")}
         aria-pressed=${mp.metrics.includes(c)} onClick=${() => toggle("metrics", c)}>${c}</button>`)}</div>`}
+    <label class="imp-decimal"><span>${t("rmap_results.imp.decimal")}</span>
+      <select value=${mp.decimal || "."} onChange=${(e) => setMp((m) => ({ ...m, decimal: e.target.value }))}><option value=".">0.5</option><option value=",">0,5</option></select></label>
     ${configs.length > 0 && html`<div class="imp-metrics"><span>${t("rmap_results.imp.baselines")}</span>
       ${configs.map((c) => html`<button type="button" key=${c} class=${"rs-chip" + ((mp.baselines || []).includes(c) ? " on" : "")}
         aria-pressed=${(mp.baselines || []).includes(c)} onClick=${() => toggle("baselines", c)}>${c}</button>`)}</div>`}
@@ -74,7 +76,7 @@ export function ImportDialog({ ctx, node, onClose }) {
   const [check, setCheck] = useState(null);
   const [error, setError] = useState("");
   const [remember, setRemember] = useState(true);
-  const [watch, setWatch] = useState(false);
+  const [watch, setWatch] = useState(null); // null: not touched, the file keeps whatever watch it has
   const [busy, setBusy] = useState(false);
   const stale = useRef(0);
   const base = `${ctx.api.base}/results`;
@@ -89,11 +91,11 @@ export function ImportDialog({ ctx, node, onClose }) {
   const read = async () => {
     setError(""); setCheck(null); setBusy(true);
     try {
-      const r = await ctx.api.call(`${base}/preview`, { json: source });
+      const r = await ctx.api.call(`${base}/preview`, { json: { ...source, node: node.id } });
       // a pasted table has no file to remember the mapping on: this browser keeps it for the same header
       const mine = src === "paste" && !r.remembered ? prefs.get("rmap:rs:map:" + signature(r.columns), null) : null;
       const usable = mine && Object.values(mine).every((v) => !v?.col || r.columns.includes(v.col));
-      setPre(usable ? { ...r, remembered: true } : r); setMp(usable ? mine : r.mapping); setWatch(false);
+      setPre(usable ? { ...r, remembered: true } : r); setMp(usable ? mine : r.mapping); setWatch(null);
     } catch (e) { setPre(null); setError(e.message); } finally { setBusy(false); }
   };
 
@@ -113,7 +115,7 @@ export function ImportDialog({ ctx, node, onClose }) {
   const go = async () => {
     setBusy(true);
     try {
-      const r = await ctx.api.call(`${base}/import`, { json: { node: node.id, ...source, mapping: mp, remember, watch: src === "file" ? watch : null } });
+      const r = await ctx.api.call(`${base}/import`, { json: { node: node.id, ...source, mapping: mp, remember, watch: src === "file" ? watch : null } }); // watch: only what the person chose
       if (src === "paste") prefs.set("rmap:rs:map:" + signature(pre.columns), mp);
       await ctx.api.refresh();
       ctx.toast(t("rmap_results.imp.done", { n: r.added + r.updated }));
@@ -121,6 +123,8 @@ export function ImportDialog({ ctx, node, onClose }) {
     } catch (e) { setError(e.message); setBusy(false); }
   };
   const changes = check ? check.added + check.updated : 0;
+  const mine = !!(pre?.existing?.watch && pre.existing.device === pre.device); // this Mac watches the file already
+  const other = !!(pre?.existing?.watch && pre.existing.device !== pre.device); // the other Mac does: ticking takes it over
   const near = (files?.files || []).filter((f) => !path || f.path.toLowerCase().includes(path.trim().toLowerCase())).slice(0, 6);
 
   return html`<div class="rs-import" onKeyDown=${(e) => e.key === "Escape" && onClose()}>
@@ -147,7 +151,8 @@ export function ImportDialog({ ctx, node, onClose }) {
       <${MappingEditor} pre=${pre} mp=${mp} setMp=${setMp} configs=${check?.configs || pre.configs || []} />
       <div class="imp-foot">
         ${src === "file" && html`<label class="rs-check"><input type="checkbox" checked=${remember} onChange=${(e) => setRemember(e.target.checked)} />${t("rmap_results.imp.remember")}</label>
-          <label class="rs-check"><input type="checkbox" checked=${watch} onChange=${(e) => setWatch(e.target.checked)} />${t("rmap_results.imp.watch")}</label>`}
+          <label class="rs-check" title=${other ? t("rmap_results.src.watched_by", { device: pre.existing.device }) : ""}><input type="checkbox" checked=${watch ?? mine}
+            onChange=${(e) => setWatch(e.target.checked)} />${t("rmap_results.imp.watch")}${other && html`<small>${pre.existing.device}</small>`}</label>`}
         <span class="grow" />
         ${check && html`<span class="imp-sum rs-mono">${t("rmap_results.imp.sum", { added: check.added, updated: check.updated, unchanged: check.unchanged })}${check.skipped ? " · " + t("rmap_results.imp.skipped", { n: check.skipped }) : ""}</span>`}
         <button class="btn primary sm" disabled=${busy || !check || (!changes && !(src === "file" && (watch || remember)))} onClick=${go}>${t("rmap_results.imp.go")}</button>

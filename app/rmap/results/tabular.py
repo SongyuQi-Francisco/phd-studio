@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import math
 import os
 import re
 from dataclasses import dataclass, field
@@ -16,13 +17,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ... import i18n
+from ... import config, i18n
 from ...config import DATA_DIR, SECRETS_DIR, STATE_ROOT
 
 MAX_BYTES = 8_000_000
 MAX_ROWS = 19_000  # one import is one atomic batch of at most 20000 operations (ops.MAX_IMPORT_OPS)
 EXT_FORMAT = {".csv": "csv", ".tsv": "tsv", ".json": "json", ".jsonl": "jsonl", ".ndjson": "jsonl"}
-# Folders whose files are never read, whatever the extension says.
+# Folders whose files are never read, even inside a results root.
 _HOME = Path.home()
 DENIED = [SECRETS_DIR, DATA_DIR, STATE_ROOT, _HOME / ".ssh", _HOME / ".aws", _HOME / ".gnupg", _HOME / ".config",
           _HOME / "Library" / "Keychains", _HOME / "Library" / "Application Support"]
@@ -35,6 +36,7 @@ class Table:
     format: str
     truncated: bool = False
     meta: dict[str, Any] = field(default_factory=dict)  # file info: path, mtime (date), size
+    delimiter: str = ","  # of a csv / tsv: ";" is the sign of a file written where "," is the decimal mark
 
 
 def _unique(names: list[str]) -> list[str]:
@@ -64,13 +66,13 @@ def sniff(text: str) -> str:
 def _delimiter(text: str, fmt: str) -> str:
     if fmt == "tsv":
         return "\t"
-    first = next((ln for ln in text.splitlines() if ln.strip() and not ln.startswith("#")), "")
+    first = next((ln for ln in text.splitlines() if ln.strip()), "")
     counts = {d: first.count(d) for d in (",", ";", "|")}
     best = max(counts, key=counts.get)
     return best if counts[best] else ","
 
 
-def _grid(rows: list[list[Any]], fmt: str) -> Table:
+def _grid(rows: list[list[Any]], fmt: str, delimiter: str = ",") -> Table:
     rows = [r for r in rows if any(str(c).strip() for c in r)]
     if len(rows) < 2:
         raise ValueError(i18n.t("rmap_results.table_empty"))
@@ -79,7 +81,7 @@ def _grid(rows: list[list[Any]], fmt: str) -> Table:
     for r in rows[1:]:
         r = list(r) + [""] * (len(cols) - len(r))
         out.append({c: (v.strip() if isinstance(v, str) else v) for c, v in zip(cols, r)})
-    return Table(cols, out[:MAX_ROWS], fmt, truncated=len(out) > MAX_ROWS)
+    return Table(cols, out[:MAX_ROWS], fmt, truncated=len(out) > MAX_ROWS, delimiter=delimiter)
 
 
 def _markdown(text: str) -> Table:
@@ -99,6 +101,8 @@ def _flat(prefix: str, v: Any, out: dict[str, Any], depth: int = 0) -> None:
     if isinstance(v, dict) and depth < 3:
         for k, x in v.items():
             _flat(f"{prefix}.{k}" if prefix else str(k), x, out, depth + 1)
+    elif isinstance(v, float) and not math.isfinite(v):
+        out[prefix] = None  # NaN and Infinity are valid in Python's JSON and are no measurement
     elif isinstance(v, (str, int, float, bool)) or v is None:
         out[prefix] = v
     # lists and deeper objects are not cells
@@ -140,9 +144,13 @@ def _json_table(items: list[dict[str, Any]], fmt: str) -> Table:
     return Table(cols, rows, fmt, truncated=len(items) > MAX_ROWS)
 
 
+def _json_load(text: str) -> Any:
+    return json.loads(text, parse_constant=lambda _: None)  # NaN, Infinity, -Infinity become empty cells
+
+
 def parse(text: str, fmt: str | None = None) -> Table:
     """Pasted text or a file's content. fmt: csv | tsv | json | jsonl (default: sniffed)."""
-    text = text.lstrip("﻿")
+    text = text.lstrip("\ufeff")
     if not text.strip():
         raise ValueError(i18n.t("rmap_results.table_empty"))
     fmt = fmt or sniff(text)
@@ -150,17 +158,35 @@ def parse(text: str, fmt: str | None = None) -> Table:
         if fmt == "md":
             return _markdown(text)
         if fmt in ("csv", "tsv"):
-            lines = [ln for ln in text.splitlines() if not ln.lstrip().startswith("#")]
-            body = "\n".join(lines)
-            rows = list(csv.reader(io.StringIO(body), delimiter=_delimiter(body, fmt)))
-            return _grid(rows, fmt)
+            delim = _delimiter(text, fmt)
+            return _grid(list(csv.reader(io.StringIO(text), delimiter=delim)), fmt, delim)
         if fmt == "jsonl":
-            return _json_table([json.loads(ln) for ln in text.splitlines() if ln.strip()], fmt)
+            return _json_table([_json_load(ln) for ln in text.splitlines() if ln.strip()], fmt)
         if fmt == "json":
-            return _json_table(_objects(json.loads(text)), fmt)
-    except (json.JSONDecodeError, csv.Error) as e:
+            return _json_table(_objects(_json_load(text)), fmt)
+    except (json.JSONDecodeError, csv.Error, RecursionError) as e:
         raise ValueError(i18n.t("rmap_results.unreadable", error=str(e)[:120])) from e
     raise ValueError(i18n.t("rmap_results.bad_format", allowed="csv, tsv, json, jsonl"))
+
+
+_COMMA_DECIMAL = (re.compile(r"[-+]?\d{1,3}(\.\d{3})+,\d+"), re.compile(r"[-+]?\d+,(\d{1,2}|\d{4,})"))
+_POINT_DECIMAL = (re.compile(r"[-+]?\d{1,3}(,\d{3})+\.\d+"), re.compile(r"[-+]?\d+\.(\d{1,2}|\d{4,})"))
+
+
+def decimal_mark(table: Table) -> str:
+    """The decimal mark a table is written with: "," or ".". The cells vote (1.234,5 and 0,5 are commas; 1,234.5 and
+    0.5 are points); with no vote a ";"-separated file counts as written in a comma locale, anything else as points."""
+    comma = point = 0
+    for row in table.rows[:500]:
+        for v in row.values():
+            if not isinstance(v, str):
+                continue
+            cell = v.strip().split(" ")[0]
+            comma += any(p.fullmatch(cell) for p in _COMMA_DECIMAL)
+            point += any(p.fullmatch(cell) for p in _POINT_DECIMAL)
+    if comma != point:
+        return "," if comma > point else "."
+    return "," if table.delimiter == ";" else "."
 
 
 # ---- files ----
@@ -173,9 +199,22 @@ def collapse(path: Path) -> str:
         return str(path)
 
 
-def resolve(path: str) -> Path:
-    """A results file the user named. Absolute or ~/, an allowed extension, a regular file, not too big,
-    not in a folder of secrets or of this app's own data. ValueError says what is wrong."""
+def roots() -> list[Path]:
+    """The folders results files may be read from: `[paths] results_roots` in studio.toml (none: paste only)."""
+    out = []
+    for r in config.RESULTS_ROOTS:
+        try:
+            out.append(Path(r).resolve())
+        except OSError:
+            continue
+    return out
+
+
+def resolve(path: str, *, in_roots: bool = True) -> Path:
+    """A results file the user named: an absolute path or ~/, a regular .csv / .tsv / .json / .jsonl file of at most
+    8 MB, with symbolic links resolved first, inside one of the results roots (in_roots=False: the command line, where
+    the person at the shell names the file themselves), and never in a folder of secrets or of this app's own data.
+    ValueError says what is wrong."""
     raw = (path or "").strip()
     if not raw:
         raise ValueError(i18n.t("rmap_results.no_path"))
@@ -187,6 +226,8 @@ def resolve(path: str) -> Path:
         raise ValueError(i18n.t("rmap_results.path_missing", path=raw[:120]))
     if p.suffix.lower() not in EXT_FORMAT:
         raise ValueError(i18n.t("rmap_results.path_ext", ext=p.suffix or "?", allowed=", ".join(EXT_FORMAT)))
+    if in_roots and not any(p.is_relative_to(r) for r in roots()):
+        raise ValueError(i18n.t("rmap_results.path_outside", path=raw[:120]))
     for d in DENIED:
         try:
             if p.is_relative_to(d.resolve()):
@@ -198,8 +239,8 @@ def resolve(path: str) -> Path:
     return p
 
 
-def read_file(path: str) -> Table:
-    p = resolve(path)
+def read_file(path: str, *, in_roots: bool = True) -> Table:
+    p = resolve(path, in_roots=in_roots)
     try:
         text = p.read_text(encoding="utf-8-sig")
     except UnicodeDecodeError:

@@ -5,6 +5,7 @@
   "edge.conflicts": "冲突",
   "edge.depends": "依赖",
   "edge.refines": "细分",
+  "exists": "{record}上已经有同样的 {kind} 记录（{what}）",
   "gone": "{record}已被删除",
   "moved": "{record}的 {fields} 被改过",
   "record": "「{title}」",

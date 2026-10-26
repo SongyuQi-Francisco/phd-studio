@@ -77,7 +77,8 @@ roadmap = "Atlas/PhD Roadmap.md"
 idea_radar = "Ideas/Idea Radar.md"
 lab_tracker = "Lab Tracker"
 tracker = "{tracker}"
-extra_read_dirs = ["{experiments}"]
+extra_read_dirs = []
+results_roots = ["{experiments}"]
 
 [profile]
 about = "Second-year PhD student in NLP (a fictional demo profile). Works on retrieval-augmented generation and long-context Transformers. Prefers answers in Chinese; reads English papers slowly."

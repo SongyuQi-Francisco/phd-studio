@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from ... import i18n
-from ...config import DEVICE, EXTRA_READ_DIRS, TRACKER_DIR
+from ...config import DEVICE
 from .. import project, registry
 from ..results import importer, model, tabular, watcher
 
@@ -27,14 +27,14 @@ def _run(fn, *args, **kwargs) -> Any:
         return fn(*args, **kwargs)
     except KeyError as e:
         raise HTTPException(404, str(e.args[0]) if e.args else "not found")
-    except ValueError as e:
+    except (ValueError, OverflowError) as e:
         raise HTTPException(400, str(e))
 
 
 @router.post("/projects/{slug}/results/preview")
 def preview(slug: str, body: dict[str, Any]) -> dict[str, Any]:
     """Columns, a few rows and the mapping to start from, for pasted text (`text`) or a file (`path`)."""
-    return _run(importer.preview, slug, text=body.get("text"), path=body.get("path"), fmt=body.get("format"))
+    return _run(importer.preview, slug, text=body.get("text"), path=body.get("path"), fmt=body.get("format"), node=body.get("node"))
 
 
 @router.post("/projects/{slug}/results/import")
@@ -47,6 +47,13 @@ def import_table(slug: str, body: dict[str, Any]) -> dict[str, Any]:
     if body.get("watch") and not body.get("dry_run"):
         watcher.start()
     return r
+
+
+@router.post("/projects/{slug}/results/set")
+def set_flags(slug: str, body: dict[str, Any]) -> dict[str, Any]:
+    """Mark a config as a baseline (`baseline`) or say which way a metric improves (`better`) on every matching result
+    record, however many: {node?, config?, metric?, set: {baseline | better}}."""
+    return _run(importer.bulk_set, slug, body.get("set") or {}, node=body.get("node"), config=body.get("config"), metric=body.get("metric"))
 
 
 @router.post("/projects/{slug}/results/sync")
@@ -66,19 +73,16 @@ def status(slug: str) -> dict[str, Any]:
     return {"watching": [w["id"] for w in mine], "running": watcher.running(), "errors": importer.source_states(slug), "device": DEVICE}
 
 
-def _roots() -> list[str]:
-    return [d for d in ([str(TRACKER_DIR)] if TRACKER_DIR else []) + EXTRA_READ_DIRS if os.path.isdir(d)]
-
-
 @router.get("/results/files")
 def files(q: str = "") -> dict[str, Any]:
-    """CSV / JSON files under the folders the app already knows as code folders (`paths.tracker`,
-    `paths.extra_read_dirs`), newest first, for picking one instead of typing a path."""
+    """CSV / JSON files under the results roots (`[paths] results_roots`), newest first, for picking one instead of
+    typing a path. Without roots there is nothing to list and nothing can be imported from a file."""
     q = q.strip().lower()
     found: list[tuple[float, os.stat_result, str]] = []
     seen = 0
-    for root in _roots():
-        base_depth = root.rstrip(os.sep).count(os.sep)
+    roots = tabular.roots()
+    for root in roots:
+        base_depth = str(root).rstrip(os.sep).count(os.sep)
         for dirpath, dirs, names in os.walk(root):
             dirs[:] = [d for d in dirs if d not in _SKIP and not d.startswith(".") and dirpath.count(os.sep) - base_depth < 4]
             for name in names:
@@ -95,6 +99,6 @@ def files(q: str = "") -> dict[str, Any]:
             if seen > _MAX_SCAN:
                 break
     found.sort(key=lambda x: x[0], reverse=True)
-    return {"roots": [tabular.collapse(Path(r)) for r in _roots()],
+    return {"roots": [tabular.collapse(r) for r in roots],
             "files": [{"path": tabular.collapse(Path(f)), "size": st.st_size, "mtime": int(mt)} for mt, st, f in found[:60]],
-            "message": None if _roots() else i18n.t("rmap_results.no_roots")}
+            "message": None if roots else i18n.t("rmap_results.no_roots")}

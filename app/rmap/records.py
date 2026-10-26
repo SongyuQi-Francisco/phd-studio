@@ -11,6 +11,10 @@ cascaded edges and attachments carry `deleted_by: <node id>` and follow that nod
 """
 from __future__ import annotations
 
+import re
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
+from pathlib import Path
 from typing import Any
 
 import yaml
@@ -86,6 +90,7 @@ class FieldStore(Store):
     """A Store whose Syncthing conflict copies merge field by field (see the module docstring)."""
 
     loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+    dumper = getattr(yaml, "CSafeDumper", yaml.SafeDumper)
 
     @staticmethod
     def _merge_record(mine: dict[str, Any], theirs: dict[str, Any]) -> None:
@@ -97,3 +102,75 @@ class FieldStore(Store):
         if "clock" in out:  # after the fields, so the YAML still reads top-down
             out["clock"] = out.pop("clock")
         return out
+
+
+class ShardedStore:
+    """The records of one attachment kind, one FieldStore file per node (`<folder>/<node id>.yaml`), behind the
+    interface the rest of the map uses (`load`, `editing`). A write rewrites only the files whose records changed, so
+    a 10000-row import on one experiment does not make every other node's results part of the dump, and one node's
+    records can be read alone (`load_node`). Syncthing conflict copies merge per file, like any FieldStore."""
+
+    def __init__(self, folder: Path, collection: str, header: str, name: str):
+        self.folder, self.collection, self.header, self.name = folder, collection, header, name
+
+    def shard(self, node: str) -> FieldStore:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", node or ""):
+            raise ValueError(f"no such node: {node!r}")
+        return FieldStore(self.folder / f"{node}.yaml", (self.collection,), self.header, name=f"{self.name}.{node}")
+
+    def nodes(self) -> list[str]:
+        """Nodes that have a file (a lone conflict copy counts: its base file comes with the next sync)."""
+        if not self.folder.is_dir():
+            return []
+        found = {p.name.split(".sync-conflict-")[0].removesuffix(".yaml") for p in self.folder.glob("*.yaml")}
+        return sorted(n for n in found if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", n))
+
+    def load_node(self, node: str, include_deleted: bool = False) -> list[dict[str, Any]]:
+        if not (self.folder / f"{node}.yaml").exists() and not list(self.folder.glob(f"{node}.sync-conflict-*.yaml")):
+            return []
+        return self.shard(node).load(include_deleted=include_deleted)[self.collection]
+
+    def load(self, include_deleted: bool = False) -> dict[str, list[dict[str, Any]]]:
+        return {self.collection: [r for n in self.nodes() for r in self.load_node(n, include_deleted)]}
+
+    @staticmethod
+    def _mark(recs: list[dict[str, Any]]) -> tuple[int, str, str]:
+        """Cheap change detector: how many records, the latest field stamp and the latest `updated_at`. Every write
+        of the map's operations sets a stamp later than any stamp the batch has seen, so a changed shard differs."""
+        stamp = ""
+        for r in recs:
+            c = r.get("clock")
+            if isinstance(c, dict) and c:
+                top = max(c.values())
+                if top > stamp:
+                    stamp = top
+        return (len(recs), stamp, max((r.get("updated_at") or "" for r in recs), default=""))
+
+    @contextmanager
+    def editing(self, skip_unchanged: bool = False) -> Iterator[dict[str, list[dict[str, Any]]]]:
+        """Every shard under its lock; the block works on one list of all the records and may append new ones (each
+        goes to its node's file). Only the files whose records changed are rewritten (the others are not even
+        copied). Nothing is written if the block raises."""
+        with ExitStack() as stack:
+            loaded: dict[str, tuple[FieldStore, dict[str, list[dict[str, Any]]], bool, tuple]] = {}
+
+            def open_shard(node: str) -> list[dict[str, Any]]:
+                st = self.shard(node)
+                stack.enter_context(st._locked())
+                data = st._read(st.path)
+                merged = st._merge_conflicts(data)
+                loaded[node] = (st, data, merged, self._mark(data[self.collection]))
+                return data[self.collection]
+
+            combined = [r for n in self.nodes() for r in open_shard(n)]
+            known = {id(r) for r in combined}
+            yield {self.collection: combined}
+            for r in combined:
+                if id(r) in known:
+                    continue
+                if r["node"] not in loaded:  # the node's first record: its file comes into being
+                    open_shard(r["node"])
+                loaded[r["node"]][1][self.collection].append(r)
+            for st, data, merged, before in loaded.values():
+                if merged or self._mark(data[self.collection]) != before:
+                    st._write(data)

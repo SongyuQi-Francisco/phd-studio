@@ -107,7 +107,7 @@ Things hung on a node. Each kind has its own file and the same generic routes; e
 |---|---|---|---|
 | `evidence` 证据 | `evidence.yaml` | `type`: `paper` (paper note name) / `note` (vault path) / `file` (vault path) / `url`; `target`; `title`; `note`; `stance`: `supports` / `contradicts` / `context` | 1 |
 | `peer` 同行 | `peers.yaml` | `type` paper / scholar / lab, `title`, `relation` same / competing / builds_on, … ([research-map-peers.md](research-map-peers.md)) | 3 |
-| `results` 结果记录 | `results.yaml` | `config`, `dataset`, `metric`, `value` (a number), `date`, `source`, and optionally `run`, `baseline`, `better` (`higher` / `lower`), `note`; only on experiment and result nodes. Logged once per batch. See "Experiment results" | 4 |
+| `results` 结果记录 | `results/<node id>.yaml` (one file per node) | `config`, `dataset`, `metric`, `value` (a number), `date`, `source`, and optionally `run`, `baseline`, `better` (`higher` / `lower`), `date_inferred`, `note`; only on experiment and result nodes. Logged once per batch. See "Experiment results" | 4 |
 | `result_sources` 结果文件 | `result_sources.yaml` | `path`, `format`, `columns`, `mapping`, `watch`, `device`: the CSV / JSON file an experiment reads its results from | 4 |
 
 A `url` target opens only with `http`, `https`, `obsidian` or `zotero`; a paper name, note or file is a
@@ -201,8 +201,11 @@ confirmed on the same Mac). A proposal keeps its base: the clock stamps of every
 every record it deletes, and the existing nodes it hangs new things on, as they were when it was made.
 Confirming first compares them with the map now: if any field it changes was changed meanwhile (here, or
 synced from the other Mac), or a record it builds on is gone, nothing is written, the reason is shown and
-the proposal stays (the user discards it and asks again). Changes to other fields don't matter. Then the
-batch is written as `who: assistant`.
+the proposal stays (the user discards it and asks again). Changes to other fields don't matter. Kinds logged per batch
+(results) have no per-record events, so their `attach.update` / `attach.delete` operations are read for the base
+directly, and an `attach.add` of a kind with an `identity` is refused if a record with the same identity has appeared
+on that node by then (two proposals for one measurement never write it twice). Then the batch is written as
+`who: assistant`.
 
 ## Obsidian Canvas
 
@@ -228,34 +231,56 @@ method), `dataset` (optional), `metric` (as typed: `Recall@10`; the page shows i
 `run` (a seed), `baseline: true` (the config is a baseline: it is grey in the charts and the gap is measured against the
 best of them), `better` (`lower` for loss or latency; otherwise guessed from the metric name, the same word list in
 `app/rmap/results/model.py` and `web/rmap/results/data.js`) and `note`. A value may be written `41.2%`, `1,234.5`,
-`0.412 ± 0.003`. Several records per metric make the trend: a measurement is told apart by (config, dataset, metric, run,
-date) within its source, so writing the same measurement again updates it, and the same one on another date is a new point.
+`0.412 ± 0.003`. Several records per metric make the trend. A measurement is told apart by `model.identity`: (source,
+config, dataset, metric, run, date), so writing the same measurement again updates it, and the same one on another date
+is a new point. When the data has **no date** for a row (a table without a date column), the record gets the day of the
+import (the file's date for a file) and `date_inferred: true`, and that date is *not* part of the identity: reading
+the same table again on another day finds the same measurements (nothing is added), a changed number is updated in place
+and takes the new date, and only rows that are new are added. Give the table a date column, or `--date`, for a trend.
 The change log gets one line per batch (`kind: results`, `count`), plus the sentence ("imported results.csv", or the
 numbers themselves for a report).
+
+Results are stored **one file per node** (`results/<node id>.yaml`, the kind registers `shard="node"`, see "Back-end
+extension points"): writing to a node rewrites only its file, an import reads only its node's records, and a listing
+reads none. A write through `ops.apply` on this kind still reads all the shards (about 1.5 s per 17000 records, so a
+write takes about 3 s in a map with that many); an import is capped at 19998 records (rows × metrics), checked before
+anything is written.
 
 **Tables.** `app/rmap/results/tabular.py` reads pasted text or a file: CSV, TSV (a spreadsheet paste), a Markdown table,
 JSON (an array of objects, an object of `name -> metrics`, or an object holding such an array; nested objects become
 `a.b` columns) and JSON lines. A file is read only when it is named (an absolute path or `~/`), must be a regular
-`.csv .tsv .json .jsonl .ndjson` file of at most 8 MB, and never in the secrets folder, the app's data or state
-folders, `~/.ssh`, `~/.aws`, `~/.config`, `~/Library/Application Support` (symbolic links are resolved first). The file
-picker lists CSV / JSON files under `paths.tracker` and `paths.extra_read_dirs`.
+`.csv .tsv .json .jsonl .ndjson` file of at most 8 MB **inside a results root**: `[paths] results_roots` in `studio.toml`
+(a list of folders, relative to the vault or absolute / `~/`; empty, the default, means results can only be pasted).
+Symbolic links are resolved first, so a link out of a root is the file it points at; the secrets folder, the app's
+data and state folders, `~/.ssh`, `~/.aws`, `~/.config` and `~/Library/Application Support` stay closed even inside a
+root. The page, the watcher and the preview all follow this; the command line, where the person at the shell names the
+file themselves, may import any such file once (`studio map result import`), but a file can only be *watched* from a
+root. The file picker lists CSV / JSON files under the roots. A numeric cell is read with the file's decimal mark: the
+cells vote (`1.234,5` and `0,5` are commas; `1,234.5` and `0.5` are points), and with no vote a `;`-separated file
+counts as written with decimal commas (`1,234` is then 1.234); the mapping can say it (`decimal`, a choice in the import
+form). NaN and Infinity in JSON are empty cells.
 
 **Mapping.** `app/rmap/results/mapping.py`. Which column is which is a small JSON object (`config`, `dataset`,
 `date`, `run`, `baseline` each `{col}` or a fixed `{const}`; either `metric` + `value` columns for a table with a row per
 measurement, or `metrics: [columns]` for a table with a column per metric; `baselines: [config names]`; `lower:
-[metrics]`). It is guessed from the header. Importing from a file keeps the file and its mapping on the node as a
+[metrics]`; `decimal: "," | "."`). It is guessed from the header. Importing from a file keeps the file and its mapping on the node as a
 `result_sources` record (it merges like any record, so both Macs know it), and the next import of that file, or of one with
 the same header, starts from it. A pasted table has no file: the page remembers its mapping per header in this browser.
 
 **Import.** `importer.run_import(slug, node, text= | path=, mapping=, watch=, dry_run=)` upserts the rows as **one
 atomic batch** through `ops.apply(who="import")` (up to 19000 rows), after checking it as a whole; `dry_run` says what
 would be added, updated or left alone and writes nothing. Importing the same table twice changes nothing and logs
-nothing. A baseline ticked in the page is not unticked by a later import, and rows with no date take the file's date.
+nothing. A baseline ticked in the page is not unticked by a later import. Reading, deciding and writing run under a lock on
+the project's results that holds across processes (`importer.writing`), so the app's watcher, `studio map result sync
+--loop` and the CLI never both decide that a row is new. `watch=None` (what the page sends unless the box was ticked or
+unticked) leaves a file's watch as it is, the other Mac's included; only an explicit True / False changes it. `bulk_set`
+(`POST .../results/set`) marks a config as a baseline or sets a metric's direction on every matching record, in
+chunks of 390 operations (each chunk atomic).
 
 **Watching.** A source with `watch: true` and `device: <this Mac>` is read again when the file's size or time moves
 (`importer.sync`, every 8 s in a background thread; state in `<data>/rmap/results-watch.json`, not in the vault). Only the Mac
 named in `device` reads it, so two Macs never import the same file twice, and a file that cannot be read says why on the
-source (once, until it changes). The thread starts the first time a results route is called (the map page does when it opens
+source (once, until it changes); an unexpected error in one file is logged and the next file is still read. The thread starts the first time a results route is called (the map page does when it opens
 a project) and with `studio map result sync --loop`; `studio map result sync` reads once.
 
 **The page.** A *Results* section in the detail panel of experiment and result nodes (metric chips, the top configs against
@@ -330,7 +355,10 @@ failing plugin is logged and skipped.
   node_types=(), summary=None, check=None, log="each", extra={}))`: a new kind gets its own file, the
   generic routes, cascade on node delete, events, and its `extra` in `/meta`. A validator takes a value
   and returns the clean one (or raises `ValueError`); `check(record)` sees the whole record after each
-  add or change; `log="batch"` logs one event per batch and action (`targets`, `count`) instead of one
+  add or change; `shard="node"` keeps the kind in one file per node (`<file or name>/<node id>.yaml`, a
+  `ShardedStore`) so a big import on one node does not rewrite the others; `identity(record) -> tuple` says what tells two
+  records of the kind apart on a node (a proposal that adds one that exists by the time it is confirmed is stale);
+  `log="batch"` logs one event per batch and action (`targets`, `count`) instead of one
   per record, for kinds filled by bulk imports.
 - `ext_field(key, validator)`: validate what the plugin keeps in `node.ext[key]`.
 - `on_event(fn)`: `fn(slug, events)` with the events this Mac had not seen yet, oldest first: after every

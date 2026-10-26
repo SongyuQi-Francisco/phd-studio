@@ -8,17 +8,20 @@ A mapping is a small JSON object, kept on the source record so the next import o
      "metrics": ["recall@10", "ndcg@10"],     # wide form instead: each listed column is a metric
      "date": {"col": "date"}, "run": {"col": "seed"}, "baseline": {"col": "is_baseline"},
      "baselines": ["BM25", "DPR"],            # configs that are baselines, by name
-     "lower": ["latency_ms"]}                 # metrics where smaller is better (else guessed from the name)
+     "lower": ["latency_ms"],                 # metrics where smaller is better (else guessed from the name)
+     "decimal": ","}                          # the file writes 0,412 (else guessed from the cells and the delimiter; default ".")
 
 `guess` proposes one from the header (and from the mapping remembered for the same header), `records` applies it.
 """
 from __future__ import annotations
 
+import math
 import re
 from typing import Any
 
 from ... import i18n
 from . import model
+from . import tabular
 from .tabular import Table
 
 _NAMES = {
@@ -54,6 +57,10 @@ def clean(m: dict[str, Any]) -> dict[str, Any]:
         r = _ref(m.get(role))
         if r:
             out[role] = {r[0]: r[1][:200]}
+    if m.get("decimal") not in (None, ""):
+        if m["decimal"] not in (".", ","):
+            raise ValueError(i18n.t("rmap_results.bad_decimal"))
+        out["decimal"] = m["decimal"]
     for key in ("metrics", "baselines", "lower"):
         v = m.get(key)
         if v in (None, []):
@@ -64,16 +71,17 @@ def clean(m: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _numeric_share(table: Table, col: str) -> float:
+def _numeric_share(table: Table, col: str, decimal: str = ".") -> float:
     cells = [r.get(col) for r in table.rows[:200] if r.get(col) not in (None, "")]
     if not cells:
         return 0.0
-    return sum(model.parse_number(c) is not None for c in cells) / len(cells)
+    return sum(model.parse_number(c, decimal) is not None for c in cells) / len(cells)
 
 
 def guess(table: Table) -> dict[str, Any]:
     """A first mapping from the column names; wide form when there is no metric / value pair."""
     cols = table.columns
+    decimal = tabular.decimal_mark(table)
     norm = {c: _norm(c) for c in cols}
     taken: set[str] = set()
     found: dict[str, str] = {}
@@ -88,7 +96,7 @@ def guess(table: Table) -> dict[str, Any]:
     long_form = "metric" in found and "value" in found
     if not long_form:
         # wide: every numeric column that is not a label is a metric
-        extra = [c for c in cols if c not in taken and _numeric_share(table, c) >= 0.6]
+        extra = [c for c in cols if c not in taken and _numeric_share(table, c, decimal) >= 0.6]
         if "value" in found:
             extra.insert(0, found.pop("value"))
         if extra:
@@ -96,11 +104,13 @@ def guess(table: Table) -> dict[str, Any]:
             taken.update(extra)
         found.pop("metric", None)
     if "config" not in found:
-        label = next((c for c in cols if c not in taken and _numeric_share(table, c) < 0.3), None)
+        label = next((c for c in cols if c not in taken and _numeric_share(table, c, decimal) < 0.3), None)
         if label:
             found["config"] = label
     for role, col in found.items():
         m[role] = {"col": col}
+    if decimal == ",":
+        m["decimal"] = ","
     return m
 
 
@@ -154,7 +164,7 @@ def _cell(row: dict[str, Any], spec: Any) -> Any:
 
 
 def _text(v: Any) -> str | None:
-    if v is None:
+    if v is None or (isinstance(v, float) and not math.isfinite(v)):
         return None
     if isinstance(v, float) and v == int(v):
         v = int(v)
@@ -163,10 +173,12 @@ def _text(v: Any) -> str | None:
 
 
 def records(table: Table, mp: dict[str, Any], *, default_date: str, source: str | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """(records, skipped): one record per measurement; a skipped entry says which row and why."""
+    """(records, skipped): one record per measurement; a skipped entry says which row and why. A row whose date
+    is not in the data gets `default_date` and `date_inferred` (it is not part of what tells measurements apart)."""
     check(mp, table)
     baselines = {b.lower() for b in mp.get("baselines", [])}
     lower = {m.lower() for m in mp.get("lower", [])}
+    decimal = mp.get("decimal") or ("," if tabular.decimal_mark(table) == "," else ".")
     out: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     for i, row in enumerate(table.rows, start=2 if table.format in ("csv", "tsv", "md") else 1):
@@ -174,14 +186,15 @@ def records(table: Table, mp: dict[str, Any], *, default_date: str, source: str 
         if not config:
             skipped.append({"row": i, "reason": "config"})
             continue
-        base = {"config": config, "dataset": _text(_cell(row, mp.get("dataset"))), "run": _text(_cell(row, mp.get("run")))}
+        base: dict[str, Any] = {"config": config, "dataset": _text(_cell(row, mp.get("dataset"))), "run": _text(_cell(row, mp.get("run")))}
         d = model.parse_date(_cell(row, mp.get("date"))) if _ref(mp.get("date")) else None
         base["date"] = d or default_date
+        if not d:
+            base["date_inferred"] = True
         if config.lower() in baselines or (_ref(mp.get("baseline")) and model.flag(_cell(row, mp.get("baseline")))):
             base["baseline"] = True
         if source:
             base["source"] = source
-        pairs: list[tuple[str, Any]] = []
         if mp.get("metrics"):
             pairs = [(c, row.get(c)) for c in mp["metrics"]]
         else:
@@ -189,7 +202,7 @@ def records(table: Table, mp: dict[str, Any], *, default_date: str, source: str 
         for metric, raw in pairs:
             if raw in (None, ""):
                 continue
-            v = model.parse_number(raw)
+            v = model.parse_number(raw, decimal)
             if not metric or v is None:
                 skipped.append({"row": i, "reason": "value", "metric": metric, "cell": str(raw)[:30]})
                 continue

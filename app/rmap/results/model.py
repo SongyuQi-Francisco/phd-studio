@@ -52,20 +52,27 @@ def text(name: str, limit: int) -> Callable[[Any], str | None]:
 
 
 _NUM = re.compile(r"^\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*(?:%|ms|s|x|×)?\s*(?:(?:±|\+/-|\+-).*|\(.*\))?\s*$")
+_THOUSANDS = re.compile(r"\s*[-+]?[1-9]\d{0,2}(,\d{3})+\s*[%a-z×]*\s*")
 
 
-def parse_number(v: Any) -> float | None:
-    """A number out of a cell: 0.412, "41.2%", "1,234.5", "0,412", "0.412 ± 0.003". None when it is not one."""
+def parse_number(v: Any, decimal: str | None = None) -> float | None:
+    """A number out of a cell: 0.412, "41.2%", "1,234.5", "0.412 ± 0.003". None when it is not one.
+    decimal: the decimal mark of the file ("." or ","); the other one is then a thousands separator. Without it
+    each cell is judged alone ("1,234.5" is 1234.5, "0,412" is 0.412, "1,234" is a thousand): a table should say."""
     if isinstance(v, bool) or v is None:
         return None
     if isinstance(v, (int, float)):
         return float(v) if math.isfinite(v) else None
-    s = str(v).strip().replace("−", "-").replace(" ", " ")
+    s = str(v).strip().replace("\u2212", "-").replace("\u00a0", " ")
     if not s:
         return None
-    if "," in s:
+    if decimal == ",":
+        s = s.replace(".", "").replace(",", ".")
+    elif decimal == ".":
+        s = s.replace(",", "")
+    elif "," in s:
         head = re.split(r"[±(]|\+/-|\+-", s, maxsplit=1)[0]
-        if "." in head or re.fullmatch(r"\s*[-+]?[1-9]\d{0,2}(,\d{3})+\s*[%a-z×]*\s*", head):
+        if "." in head or _THOUSANDS.fullmatch(head):
             s = s.replace(",", "")
         else:
             s = s.replace(",", ".", 1)
@@ -133,7 +140,16 @@ def better(v: Any) -> str | None:
 def line(rec: dict[str, Any]) -> str:
     """One line for the change log and proposals: Ours · MS MARCO · RECALL@10 = 0.412."""
     parts = [rec.get("config"), rec.get("dataset"), (rec.get("metric") or "").upper()]
-    return " · ".join(str(p) for p in parts if p) + f" = {rec.get('value'):g}"
+    value = rec.get("value")
+    return " · ".join(str(p) for p in parts if p) + (f" = {value:g}" if isinstance(value, (int, float)) else "")
+
+
+def identity(rec: dict[str, Any]) -> tuple[str, str, str, str, str, str]:
+    """What tells two measurements of one node apart: where they came from, the config, dataset, metric and run, and
+    the date, unless the date is only the day a table without dates was imported (then re-reading the table, on any
+    day, finds the same measurement again)."""
+    return (rec.get("source") or "", rec.get("config") or "", rec.get("dataset") or "", rec.get("metric") or "",
+            rec.get("run") or "", "" if rec.get("date_inferred") else rec.get("date") or "")
 
 
 def _check_result(rec: dict[str, Any]) -> None:
@@ -145,8 +161,9 @@ RESULTS = AttachmentKind(
     name="results", prefix="rs", node_types=NODE_TYPES, log="batch",
     fields={"config": text("config", TEXT["config"]), "dataset": text("dataset", TEXT["dataset"]),
             "metric": text("metric", TEXT["metric"]), "value": number, "date": day, "run": text("run", TEXT["run"]),
-            "baseline": flag, "better": better, "source": text("source", TEXT["source"]), "note": text("note", TEXT["note"])},
-    required=("config", "metric", "value"), summary=line, check=_check_result,
+            "baseline": flag, "better": better, "source": text("source", TEXT["source"]), "note": text("note", TEXT["note"]),
+            "date_inferred": flag},
+    required=("config", "metric", "value"), summary=line, check=_check_result, shard="node", identity=identity,
     extra={"better": list(BETTER), "formats": list(FORMATS), "roles": list(ROLES)})
 
 

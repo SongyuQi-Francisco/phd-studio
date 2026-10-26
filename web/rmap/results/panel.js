@@ -8,7 +8,7 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { html, Icon, prefs } from "/lib.js";
 import { t } from "/i18n.js";
 import { Compare, Grouped, Trend } from "/rmap/results/charts.js";
-import { compare, datasetsOf, dayOf, dirOf, fmt, metricsOf, newestFirst, pick, trend } from "/rmap/results/data.js";
+import { compare, datasetsOf, dayOf, fmt, metricsOf, newestFirst, pick, trend } from "/rmap/results/data.js";
 import { ImportDialog } from "/rmap/results/import.js";
 
 export const TYPES = ["experiment", "result"];
@@ -110,16 +110,10 @@ export function ResultsSheet({ ctx, nodeId, mode, onClose }) {
   const fail = (e) => ctx.toast(e.message);
   const remove = (r) => ctx.api.apply([{ op: "attach.delete", kind: "results", id: r.id }]).catch(fail);
   // a baseline is a property of the config: flip it on every record of that config on this metric's node
-  const toggleBase = (r) => {
-    const on = !r.baseline;
-    const same = all.filter((x) => x.node === r.node && x.config === r.config && !!x.baseline !== on);
-    ctx.api.apply(same.map((x) => ({ op: "attach.update", kind: "results", id: x.id, set: { baseline: on || null } }))).catch(fail);
-  };
-  const flipDir = () => {
-    const to = cmp.dir === "lower" ? "higher" : "lower";
-    const same = pick(records, m).filter((x) => dirOf(x) !== to);
-    ctx.api.apply(same.map((x) => ({ op: "attach.update", kind: "results", id: x.id, set: { better: to } }))).catch(fail);
-  };
+  // the server flags every matching record (however many: it goes in chunks), then the page reads the map again
+  const flag = (json) => ctx.api.call(`${ctx.api.base}/results/set`, { json }).then(() => ctx.api.refresh()).catch(fail);
+  const toggleBase = (r) => flag({ node: r.node, config: r.config, set: { baseline: r.baseline ? null : true } });
+  const flipDir = () => flag({ node: scope || undefined, metric: m, set: { better: cmp.dir === "lower" ? "higher" : "lower" } });
   const cfgs = cmp ? cmp.rows : [];
   const value = (config, ds) => compare(records, m, ds).rows.find((r) => r.config === config)?.value;
 

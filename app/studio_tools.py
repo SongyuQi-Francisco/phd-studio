@@ -16,7 +16,7 @@ from typing import Any
 
 from claude_agent_sdk import SdkMcpTool, create_sdk_mcp_server, tool
 
-from . import idea_ops, plan, reading, tracking, venue_check, venues
+from . import i18n, idea_ops, plan, reading, tracking, venue_check, venues
 from .rmap import lines as rmap_lines, peers as rmap_peers, project as rmap_project, proposals as rmap_proposals
 from .rmap.results import importer as rmap_results, model as rmap_results_model, refs as rmap_refs
 
@@ -423,7 +423,7 @@ def _tools(emit: Callable[[dict[str, Any]], Awaitable[None]]) -> list[SdkMcpTool
         except (KeyError, ValueError) as e:
             return _err(e.args[0] if e.args else str(e))
         title = rmap_project.summary(rmap_project.get(slug))["title"]
-        await changed("rmap", f"研究地图：{title} 的实验结果待你确认（{built['added'] + built['updated']} 条）", prop)
+        await changed("rmap", i18n.t("rmap_results.proposal_toast", title=title, n=built["added"] + built["updated"]), prop)
         return _ok({"proposal": prop["id"], "changes": [rmap_results_model.line(r) for r in built["records"]],
                     "note": "已提交，等用户在研究地图页确认后才会写入；你不能应用它。"})
 

@@ -23,6 +23,13 @@ from .conftest import CONFIG_FILE, PROJECT
 from .test_rmap import as_other_mac, conflict, raw
 
 
+@pytest.fixture(autouse=True)
+def results_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Files may only be read from `paths.results_roots`: here, the test's own temp folder."""
+    monkeypatch.setattr(config, "RESULTS_ROOTS", [str(tmp_path.resolve())])
+    return tmp_path.resolve()
+
+
 @pytest.fixture
 def slug() -> str:
     return ops.create_project("Project Atlas", line="Project A")["slug"]
@@ -171,7 +178,7 @@ def test_bulk_results_are_one_log_event_and_go_with_their_node(slug: str, exp):
 
 def test_results_merge_field_by_field_between_two_macs(slug: str, exp):
     ops.apply(slug, [{"op": "attach.add", "kind": "results", "node": exp["$x"], "set": {"config": "Ours", "metric": "acc", "value": 0.5}}])
-    f = config.RMAP_DIR / slug / "results.yaml"
+    f = config.RMAP_DIR / slug / "results" / f"{exp['$x']}.yaml"  # one file per node
     theirs = raw(f)
     as_other_mac(theirs["results"][0], value=0.9)
     conflict(f).write_text(yaml.safe_dump(theirs), encoding="utf-8")
@@ -215,7 +222,7 @@ def test_a_dry_run_writes_nothing_and_a_bad_table_leaves_the_map_as_it_was(slug:
     before = raw(config.RMAP_DIR / slug / "map.yaml")
     r = importer.run_import(slug, exp["$x"], text=WIDE, dry_run=True)
     assert r["dry_run"] and r["added"] == 6 and r["sample"][0].startswith("BM25 · MS MARCO")
-    assert not (config.RMAP_DIR / slug / "results.yaml").exists() and raw(config.RMAP_DIR / slug / "map.yaml") == before
+    assert not (config.RMAP_DIR / slug / "results").exists() and raw(config.RMAP_DIR / slug / "map.yaml") == before
     with pytest.raises(ValueError, match="没有读到"):
         importer.run_import(slug, exp["$x"], text="method,recall\nA,n/a\n", mapping={"config": {"col": "method"}, "metrics": ["recall"]})
     with pytest.raises(KeyError):
@@ -256,30 +263,67 @@ def test_files_dated_by_their_own_time_when_they_have_no_date_column(slug: str, 
     assert results(slug)[0]["date"] == model.parse_date(1790000000)
 
 
-def test_only_files_the_user_named_are_read_and_only_safe_ones(slug: str, exp, tmp_path: Path):
+def test_only_files_inside_a_results_root_are_read(slug: str, exp, tmp_path: Path, monkeypatch):
     for path, why in (("results.csv", "完整路径"), (str(tmp_path / "missing.csv"), "没有这个文件"), (str(tmp_path), "没有这个文件")):
         with pytest.raises(ValueError, match=why):
             tabular.resolve(path)
-    for name in ("notes.txt", "run.py", "key.pem"):
+    for name in ("notes.txt", "run.py", "key.pem", "auth.yaml"):  # an allowlist of extensions: these never
         f = tmp_path / name
         f.write_text("a,b\n1,2\n", encoding="utf-8")
         with pytest.raises(ValueError, match="不支持"):
             tabular.resolve(str(f))
-    for d in (config.SECRETS_DIR, config.DATA_DIR):  # secrets and the app's own data never
+    good = tmp_path / "ok.json"
+    good.write_text('[{"config": "A", "value": 1}]', encoding="utf-8")
+    assert tabular.resolve(str(good)) == good.resolve()
+    # outside every root: a .json that is someone's credentials is not readable just because of its extension
+    other = tmp_path.parent / f"{tmp_path.name}-outside"
+    other.mkdir()
+    (other / "auth.json").write_text('[{"token": "secret"}]', encoding="utf-8")
+    with pytest.raises(ValueError, match="results_roots"):
+        tabular.resolve(str(other / "auth.json"))
+    with pytest.raises(ValueError, match="results_roots"):
+        importer.preview(slug, path=str(other / "auth.json"))  # and the preview does not echo its first rows
+    # no roots at all: paste only
+    monkeypatch.setattr(config, "RESULTS_ROOTS", [])
+    with pytest.raises(ValueError, match="results_roots"):
+        tabular.resolve(str(good))
+    monkeypatch.setattr(config, "RESULTS_ROOTS", [str(tmp_path)])
+    # a link inside the root to a file outside it is the file outside
+    link = tmp_path / "link.json"
+    link.symlink_to(other / "auth.json")
+    with pytest.raises(ValueError, match="results_roots"):
+        tabular.resolve(str(link))
+    dirlink = tmp_path / "dirlink"
+    dirlink.symlink_to(other)
+    with pytest.raises(ValueError, match="results_roots"):
+        tabular.resolve(str(dirlink / "auth.json"))
+    # the app's own folders and secrets stay closed even inside a root
+    for d in (config.SECRETS_DIR, config.DATA_DIR):
         d.mkdir(parents=True, exist_ok=True)
         f = d / "x.csv"
         f.write_text("a,b\n1,2\n", encoding="utf-8")
+        monkeypatch.setattr(config, "RESULTS_ROOTS", [str(d)])
         with pytest.raises(ValueError, match="不能读"):
             tabular.resolve(str(f))
+    monkeypatch.setattr(config, "RESULTS_ROOTS", [str(tmp_path)])
     big = tmp_path / "big.csv"
     big.write_text("a,b\n" + "1,2\n" * (tabular.MAX_BYTES // 4 + 10), encoding="utf-8")
     with pytest.raises(ValueError, match="太大"):
         tabular.resolve(str(big))
-    link = tmp_path / "link.csv"
-    link.symlink_to(config.SECRETS_DIR / "x.csv")  # a link into a secret folder is the secret folder
-    with pytest.raises(ValueError, match="不能读"):
-        tabular.resolve(str(link))
-    assert not (config.RMAP_DIR / slug / "results.yaml").exists()
+    assert not (config.RMAP_DIR / slug / "results").exists()
+
+
+def test_the_command_line_may_name_any_csv_but_a_watch_needs_a_root(capsys, slug: str, exp, tmp_path: Path):
+    outside = tmp_path.parent / f"{tmp_path.name}-cli"
+    outside.mkdir()
+    f = outside / "results.csv"
+    f.write_text(LONG, encoding="utf-8")
+    code, out, _ = run(capsys, "map", "result", "import", "atlas", "Ablation A", str(f))  # the person at the shell named it
+    assert code == 0 and "3 added" in out
+    code, _, err = run(capsys, "map", "result", "import", "atlas", "Ablation A", str(f), "--watch")
+    assert code == 2 and "results_roots" in err and not importer.watched(slug)
+    code, _, err = run(capsys, "map", "result", "import", "atlas", "Ablation A", str(outside / "a.txt"))
+    assert code == 2  # the extension allowlist holds for the command line too
 
 
 def test_a_watched_file_is_read_again_when_it_changes_and_only_by_the_mac_that_watches_it(slug: str, exp, csv_file: Path):
@@ -518,8 +562,7 @@ def test_routes_preview_import_sync_and_status(client: TestClient, slug: str, ex
     assert len(listed) == 4  # the generic route works for the kind too
 
 
-def test_file_suggestions_come_from_the_code_folders_in_studio_toml(client: TestClient, tmp_path: Path, monkeypatch):
-    from app.rmap.plugins import results as plugin
+def test_file_suggestions_come_from_the_results_roots_in_studio_toml(client: TestClient, tmp_path: Path, monkeypatch):
     code = tmp_path / "code"
     (code / "run1").mkdir(parents=True)
     (code / "run1" / "metrics.json").write_text("[]", encoding="utf-8")
@@ -529,11 +572,294 @@ def test_file_suggestions_come_from_the_code_folders_in_studio_toml(client: Test
     (code / "node_modules").mkdir()
     (code / "node_modules" / "x.csv").write_text("a,b\n", encoding="utf-8")
     (code / "results.csv").write_text("a,b\n1,2\n", encoding="utf-8")
-    assert client.get("/api/rmap/results/files").json()["files"] == [] and "paths.extra_read_dirs" in client.get("/api/rmap/results/files").json()["message"]
-    monkeypatch.setattr(plugin, "EXTRA_READ_DIRS", [str(code)])
+    monkeypatch.setattr(config, "RESULTS_ROOTS", [])
+    none = client.get("/api/rmap/results/files").json()
+    assert none["files"] == [] and "paths.results_roots" in none["message"]
+    monkeypatch.setattr(config, "RESULTS_ROOTS", [str(code)])
     got = client.get("/api/rmap/results/files").json()
     assert {Path(f["path"]).name for f in got["files"]} == {"metrics.json", "results.csv"} and got["message"] is None
     assert [Path(f["path"]).name for f in client.get("/api/rmap/results/files", params={"q": "metrics"}).json()["files"]] == ["metrics.json"]
+
+
+# ---------- fixes from the review of PR #60 ----------
+
+
+def test_a_table_without_dates_is_the_same_measurements_on_every_day(slug: str, exp, monkeypatch):
+    importer.run_import(slug, exp["$x"], text=WIDE)
+    n = len(results(slug))
+    monkeypatch.setattr(importer, "today", lambda: "2026-12-01")  # another day, the same table pasted again
+    again = importer.run_import(slug, exp["$x"], text=WIDE)
+    assert (again["added"], again["updated"], again["unchanged"]) == (0, 0, n) and len(results(slug)) == n
+    changed = importer.run_import(slug, exp["$x"], text=WIDE.replace("0.380", "0.390"))  # a new number is the measurement now
+    assert (changed["added"], changed["updated"]) == (0, 1)
+    [bm25] = [r for r in results(slug) if r["config"] == "BM25" and r["metric"] == "recall@10"]
+    assert bm25["value"] == 0.39 and bm25["date"] == "2026-12-01" and bm25["date_inferred"] is True
+
+
+def test_a_watched_file_without_dates_only_adds_the_rows_that_are_new(slug: str, exp, tmp_path: Path):
+    f = tmp_path / "out.csv"
+    f.write_text("config,dataset,metric,value\nOurs,NQ,recall,0.5\nBM25,NQ,recall,0.4\n", encoding="utf-8")
+    os.utime(f, (1790000000, 1790000000))
+    importer.run_import(slug, exp["$x"], path=str(f), watch=True)
+    assert len(results(slug)) == 2
+    f.write_text(f.read_text(encoding="utf-8") + "Ours,MS,recall,0.6\n", encoding="utf-8")
+    os.utime(f, (1790000000 + 86400 * 3, 1790000000 + 86400 * 3))  # three days later
+    [done] = importer.sync(slug)
+    assert (done["added"], done["updated"], done["unchanged"]) == (1, 0, 2) and len(results(slug)) == 3  # not 2 + 3
+    dates = {r["dataset"]: r["date"] for r in results(slug) if r["config"] == "Ours"}
+    assert dates["NQ"] == model.parse_date(1790000000) and dates["MS"] == model.parse_date(1790000000 + 86400 * 3)
+
+
+def test_a_date_in_the_data_still_makes_a_new_point_for_each_date(slug: str, exp):
+    importer.run_import(slug, exp["$x"], text=LONG)
+    importer.run_import(slug, exp["$x"], text=LONG.replace("2026-10-22", "2026-10-25"))
+    assert {r["date"] for r in results(slug) if r["config"] == "Ours"} == {"2026-10-20", "2026-10-22", "2026-10-25"}
+    assert not any(r.get("date_inferred") for r in results(slug))
+
+
+def propose_result(config_: str, value: float, **extra) -> dict:
+    out, _ = call("map_record_result", project="atlas", node="Ablation A", results=[{"config": config_, "metric": "acc", "value": value, "date": "2026-10-20", **extra}])
+    return out
+
+
+def test_two_proposals_on_one_value_do_not_silently_overwrite_each_other(slug: str, exp):
+    importer.report(slug, "Ablation A", [{"config": "Ours", "metric": "acc", "value": 0.5, "date": "2026-10-20"}], source="assistant")
+    propose_result("Ours", 0.6)
+    propose_result("Ours", 0.7)
+    first, second = sorted(proposals.pending(slug), key=lambda p: p["created_at"] + p["id"])
+    assert first["base"] and second["base"]  # the record and the field it changes, as they were
+    older, newer = (first, second) if first["ops"][0]["set"]["value"] == 0.6 else (second, first)
+    proposals.apply(older["id"])
+    assert results(slug)[0]["value"] == older["ops"][0]["set"]["value"]
+    with pytest.raises(ValueError, match="之后改过"):
+        proposals.apply(newer["id"])
+    assert results(slug)[0]["value"] == older["ops"][0]["set"]["value"]  # the confirmed one stands
+    assert [p["id"] for p in proposals.pending(slug)] == [newer["id"]]  # the other stays, to be discarded and asked again
+
+
+def test_a_proposal_does_not_mind_changes_to_other_fields_of_the_record(slug: str, exp):
+    importer.report(slug, "Ablation A", [{"config": "Ours", "metric": "acc", "value": 0.5, "date": "2026-10-20"}], source="assistant")
+    propose_result("Ours", 0.6)
+    ops.apply(slug, [{"op": "attach.update", "kind": "results", "id": results(slug)[0]["id"], "set": {"baseline": True}}])
+    [p] = proposals.pending(slug)
+    proposals.apply(p["id"])
+    assert results(slug)[0]["value"] == 0.6 and results(slug)[0]["baseline"] is True
+
+
+def test_two_proposals_that_add_the_same_measurement_do_not_write_it_twice(slug: str, exp):
+    propose_result("Ours", 0.6)
+    propose_result("Ours", 0.6)
+    a, b = proposals.pending(slug)
+    assert a["absent"] and a["absent"][0]["kind"] == "results"
+    proposals.apply(a["id"])
+    with pytest.raises(ValueError, match="已经有同样的"):
+        proposals.apply(b["id"])
+    assert len(results(slug)) == 1
+    proposals.discard(b["id"])  # (what the user does with it)
+    propose_result("Ours", 0.9, run="2")  # a different measurement (another run) is no duplicate
+    [c] = proposals.pending(slug)
+    proposals.apply(c["id"])
+    assert len(results(slug)) == 2
+
+
+def test_a_proposal_to_delete_a_result_is_stale_once_the_record_changed(slug: str, exp):
+    importer.report(slug, "Ablation A", [{"config": "Ours", "metric": "acc", "value": 0.5}])
+    rid = results(slug)[0]["id"]
+    prop = proposals.propose(ops_=[{"op": "attach.delete", "kind": "results", "id": rid}], summary="drop it", slug=slug)
+    ops.apply(slug, [{"op": "attach.update", "kind": "results", "id": rid, "set": {"value": 0.8}}])
+    with pytest.raises(ValueError, match="之后改过"):
+        proposals.apply(prop["id"])
+    assert len(results(slug)) == 1
+
+
+def test_a_manual_import_keeps_the_watch_the_page_did_not_set(slug: str, exp, csv_file: Path):
+    importer.run_import(slug, exp["$x"], path=str(csv_file), watch=True)
+    pre = importer.preview(slug, path=str(csv_file), node=exp["$x"])
+    assert pre["existing"] == {"id": pre["existing"]["id"], "watch": True, "device": config.DEVICE}
+    importer.run_import(slug, exp["$x"], path=str(csv_file))  # what the page sends when the box was not touched: no `watch`
+    assert [w["node"] for w in importer.watched(slug)] == [exp["$x"]]
+    f = config.RMAP_DIR / slug / "result_sources.yaml"  # the other Mac watches it: this Mac's manual import leaves that alone
+    data = raw(f)
+    as_other_mac(data["result_sources"][0], device="othermac")
+    f.write_text(yaml.safe_dump(data), encoding="utf-8")
+    importer.run_import(slug, exp["$x"], path=str(csv_file))
+    [src] = project.get(slug).read()["attachments"]["result_sources"]
+    assert src["watch"] is True and src["device"] == "othermac"
+    importer.run_import(slug, exp["$x"], path=str(csv_file), watch=False)  # only an explicit choice turns it off
+    [src] = project.get(slug).read()["attachments"]["result_sources"]
+    assert not src.get("watch") and not src.get("device")
+    assert importer.preview(slug, text=LONG, node=exp["$x"])["existing"] is None
+
+
+def test_two_processes_importing_the_same_table_write_it_once(slug: str, exp):
+    env = {**os.environ, "STUDIO_CONFIG": str(CONFIG_FILE), "STUDIO_DEVICE": "test"}
+    procs = [subprocess.Popen([sys.executable, "-m", "app.cli", "map", "result", "import", "atlas", "Ablation A", "-"], cwd=PROJECT, env=env,
+                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in range(4)]
+    for p in procs:
+        p.stdin.write(WIDE)
+        p.stdin.close()
+    out = [(p.wait(timeout=120), p.stderr.read()) for p in procs]
+    assert all(code == 0 for code, _ in out), out
+    assert len(results(slug)) == 6  # not 12, 18 or 24: each saw what the one before had written
+
+
+def test_the_watch_state_survives_many_writers(slug: str):
+    import threading
+    errors: list[Exception] = []
+
+    def work(i: int) -> None:
+        try:
+            for j in range(10):
+                importer._remember_state(slug, f"rf{i:02d}{j}", {"mtime_ns": i, "size": j})
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+
+    threads = [threading.Thread(target=work, args=(i,)) for i in range(8)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert not errors and len([k for k in importer._state() if k.startswith(slug)]) == 80
+    assert not list(importer.STATE_FILE.parent.glob("results-watch.json.*.tmp"))
+
+
+def test_the_decimal_mark_is_decided_per_file_not_per_cell():
+    semi = tabular.parse("config;metric;value\nA;acc;1,234\nB;acc;0,5\n")
+    assert semi.delimiter == ";" and tabular.decimal_mark(semi) == ","
+    recs, _ = mapping.records(semi, mapping.guess(semi), default_date="2026-10-26")
+    assert [r["value"] for r in recs] == [1.234, 0.5]  # not 1234
+    euro = tabular.parse("config;metric;value\nA;acc;1.234,5\nB;acc;2.000,25\n")
+    assert [r["value"] for r in mapping.records(euro, mapping.guess(euro), default_date="2026-10-26")[0]] == [1234.5, 2000.25]
+    point = tabular.parse('config,metric,value\nA,acc,"1,234.5"\nB,acc,0.5\n')
+    assert tabular.decimal_mark(point) == "." and [r["value"] for r in mapping.records(point, mapping.guess(point), default_date="2026-10-26")[0]] == [1234.5, 0.5]
+    thousands = tabular.parse('config,metric,value\nA,acc,"1,234"\nB,acc,"2,500"\n')  # no evidence, a comma file: thousands
+    assert [r["value"] for r in mapping.records(thousands, mapping.guess(thousands), default_date="2026-10-26")[0]] == [1234.0, 2500.0]
+    # the user can say it
+    forced = {**mapping.guess(thousands), "decimal": ","}
+    assert [r["value"] for r in mapping.records(thousands, forced, default_date="2026-10-26")[0]] == [1.234, 2.5]
+    assert mapping.clean({"config": {"col": "c"}, "decimal": ","})["decimal"] == ","
+    with pytest.raises(ValueError, match="decimal"):
+        mapping.clean({"decimal": ";"})
+    assert model.parse_number("1.234,5", ",") == 1234.5 and model.parse_number("1,234.5", ".") == 1234.5 and model.parse_number("0,5 ± 0,1", ",") == 0.5
+
+
+def test_a_semicolon_csv_imports_with_its_own_decimal_comma(slug: str, exp):
+    r = importer.run_import(slug, exp["$x"], text="method;recall;ndcg\nA;0,41;0,33\nB;1.234,5;0,2\n")
+    assert r["added"] == 4 and r["mapping"]["decimal"] == ","
+    assert {x["value"] for x in results(slug)} == {0.41, 0.33, 1234.5, 0.2}
+
+
+def test_the_limit_counts_records_not_rows(slug: str, exp):
+    wide = "config,m1,m2\n" + "".join(f"c{i},{i},{i}\n" for i in range(ops.MAX_IMPORT_OPS // 2 + 1))  # half the cap in rows, all of it in records
+    assert len(wide) < tabular.MAX_BYTES
+    with pytest.raises(ValueError, match="最多导入"):
+        importer.run_import(slug, exp["$x"], text=wide)
+    with pytest.raises(ValueError, match="最多导入"):
+        importer.run_import(slug, exp["$x"], text=wide, dry_run=True)  # the preview says so too, before anything is written
+    assert not (config.RMAP_DIR / slug / "results").exists()
+    ok = "config,m1,m2\n" + "".join(f"c{i},{i},{i}\n" for i in range(50))
+    assert importer.run_import(slug, exp["$x"], text=ok)["added"] == 100
+
+
+def test_flagging_a_config_with_more_than_a_batch_of_records_still_works(client: TestClient, slug: str, exp):
+    rows = "config,dataset,metric,value\n" + "".join(f"BM25,d{i},acc,{i / 1000}\n" for i in range(1000)) + "Ours,d0,acc,0.9\n"
+    importer.run_import(slug, exp["$x"], text=rows)
+    base = f"/api/rmap/projects/{slug}/results/set"
+    r = client.post(base, json={"node": exp["$x"], "config": "BM25", "set": {"baseline": True}})
+    assert r.status_code == 200 and r.json() == {"updated": 1000}
+    assert {x["config"] for x in results(slug) if x.get("baseline")} == {"BM25"} and sum(1 for x in results(slug) if x.get("baseline")) == 1000
+    assert client.post(base, json={"node": exp["$x"], "config": "BM25", "set": {"baseline": True}}).json() == {"updated": 0}  # nothing left to do
+    assert client.post(base, json={"node": exp["$x"], "config": "BM25", "set": {"baseline": None}}).json() == {"updated": 1000}
+    assert not any(x.get("baseline") for x in results(slug))
+    assert client.post(base, json={"node": exp["$x"], "metric": "ACC", "set": {"better": "lower"}}).json() == {"updated": 1001}
+    assert {x["better"] for x in results(slug)} == {"lower"}
+    assert client.post(base, json={"set": {"value": 1}}).status_code == 400 and client.post(base, json={"set": {"better": "bigger"}}).status_code == 400
+    assert client.post(f"/api/rmap/projects/{slug}/results/set", json={"node": "nope", "set": {"baseline": True}}).status_code == 404
+
+
+def test_nan_and_infinity_are_empty_cells_not_crashes(client: TestClient, slug: str, exp):
+    text = '[{"config": NaN, "metric": "acc", "value": 0.5}, {"config": "A", "dataset": Infinity, "metric": "acc", "value": NaN},' \
+           ' {"config": "B", "dataset": -Infinity, "metric": "acc", "value": 0.7}, {"config": 1e999, "metric": "acc", "value": 0.2}]'
+    t = tabular.parse(text)
+    assert t.rows[0]["config"] is None and t.rows[2]["dataset"] is None
+    r = importer.run_import(slug, exp["$x"], text=text)
+    assert [(x["config"], x["value"]) for x in results(slug)] == [("B", 0.7)] and r["skipped"] >= 1
+    # over HTTP: an answer, never a 500
+    base = f"/api/rmap/projects/{slug}/results"
+    for body in ({"text": text}, {"text": '{"config": NaN, "value": NaN}'}):
+        assert client.post(f"{base}/preview", json=body).status_code in (200, 400)
+    assert client.post(f"{base}/import", json={"node": exp["$x"], "text": text, "dry_run": True}).status_code == 200
+
+
+def test_one_broken_watched_file_does_not_stop_the_next(slug: str, exp, tmp_path: Path, monkeypatch):
+    files = {}
+    for node in ("$x", "$y"):
+        f = tmp_path / f"{node[1:]}.csv"
+        f.write_text(LONG, encoding="utf-8")
+        importer.run_import(slug, exp[node], path=str(f), watch=True)
+        f.write_text(LONG + "Ours,NQ,Recall@10,0.9,2026-10-26\n", encoding="utf-8")
+        files[node] = f
+    real = importer.run_import
+
+    def flaky(slug_, node, **kw):
+        if node == exp["$x"]:
+            raise OverflowError("cannot convert float infinity to integer")
+        return real(slug_, node, **kw)
+
+    monkeypatch.setattr(importer, "run_import", flaky)
+    done = {d["path"]: d for d in importer.sync(slug)}
+    assert "infinity" in done[str(files["$x"])]["error"] and done[str(files["$y"])]["added"] == 1
+    assert len(results(slug, exp["$y"])) == 4
+
+
+def test_results_live_one_file_per_node_and_a_write_leaves_the_others_alone(slug: str, exp):
+    importer.run_import(slug, exp["$x"], text=WIDE)
+    importer.run_import(slug, exp["$y"], text=WIDE)
+    folder = config.RMAP_DIR / slug / "results"
+    assert sorted(p.name for p in folder.glob("*.yaml")) == sorted([f"{exp['$x']}.yaml", f"{exp['$y']}.yaml"])
+    other = folder / f"{exp['$y']}.yaml"
+    before = (other.read_bytes(), other.stat().st_mtime_ns)
+    importer.run_import(slug, exp["$x"], text=WIDE.replace("0.412", "0.5"))
+    ops.apply(slug, [{"op": "attach.update", "kind": "results", "id": results(slug, exp["$x"])[0]["id"], "set": {"baseline": True}}])
+    assert (other.read_bytes(), other.stat().st_mtime_ns) == before  # not even rewritten
+    assert {r["node"] for r in results(slug)} == {exp["$x"], exp["$y"]} and len(results(slug, exp["$y"])) == 6
+    one = project.get(slug).kind_store(model.RESULTS).load_node(exp["$y"])
+    assert len(one) == 6 and project.get(slug).kind_store(model.RESULTS).load_node("nope") == []
+    with pytest.raises(ValueError):
+        project.get(slug).kind_store(model.RESULTS).shard("../evil")
+    ops.apply(slug, [{"op": "node.delete", "id": exp["$x"]}])  # the node's results go with it, the other node's stay
+    assert results(slug, exp["$x"]) == [] and len(results(slug, exp["$y"])) == 6
+    assert all(r.get("deleted") for r in raw(folder / f"{exp['$x']}.yaml")["results"])
+
+
+def test_listings_do_not_read_the_results(slug: str, exp, monkeypatch, capsys):
+    importer.run_import(slug, exp["$x"], text=WIDE)
+    from app.rmap.records import ShardedStore
+
+    def boom(*a, **k):
+        raise AssertionError("results were read for a listing")
+
+    monkeypatch.setattr(ShardedStore, "load", boom)
+    monkeypatch.setattr(ShardedStore, "load_node", boom)
+    [row] = project.listing()
+    assert row["slug"] == slug and row["nodes"] == 4
+    assert project.get(slug).read(attachments=False)["attachments"] == {}
+    assert refs.find_project("atlas") == slug
+    code, out, _ = run(capsys, "map", "list")
+    assert code == 0 and slug in out
+
+
+def test_a_csv_line_starting_with_a_hash_is_data_not_a_comment(slug: str, exp):
+    t = tabular.parse("config,metric,value\n#3,acc,0.5\n#4,acc,0.6\n")
+    assert [r["config"] for r in t.rows] == ["#3", "#4"]
+    importer.run_import(slug, exp["$x"], text="config,metric,value\n#3,acc,0.5\n")
+    assert results(slug)[0]["config"] == "#3"
+
+
+def test_the_assistants_proposal_toast_follows_the_interface_language(slug: str, exp):
+    _, seen = call("map_record_result", project="atlas", node="Ablation A", results=[{"config": "Ours", "metric": "acc", "value": 1}])
+    assert seen[0]["summary"].startswith("研究地图：Project Atlas 的实验结果待你确认")
+    config.save_settings({"ui_language": "en"})
+    _, seen = call("map_record_result", project="atlas", node="Ablation A", results=[{"config": "Ours", "metric": "acc", "value": 2}])
+    assert seen[0]["summary"].startswith("Research map: results for Project Atlas to confirm")
 
 
 # ---------- the page's number crunching in a JavaScript engine ----------

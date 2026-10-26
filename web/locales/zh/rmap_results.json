@@ -28,6 +28,7 @@
   "form.value": "数值",
   "imp.baselines": "哪些是 baseline",
   "imp.choose": "选一列",
+  "imp.decimal": "小数点",
   "imp.done": {
     "one": "导入了 {n} 条结果",
     "other": "导入了 {n} 条结果"

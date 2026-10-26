@@ -244,7 +244,7 @@ def _import(a: argparse.Namespace, slug: str) -> int:
         label = "stdin"
     else:
         text, path, label = None, str(Path(a.file).expanduser().resolve()), None
-    table = tabular.read_file(path) if path else tabular.parse(text or "", a.format)
+    table = tabular.read_file(path, in_roots=False) if path else tabular.parse(text or "", a.format)
     shown = table.meta.get("path")
     known = project.get(slug).read()["attachments"]["result_sources"]
     chosen = maps.remembered(table, known, shown) or maps.guess(table)
@@ -254,7 +254,7 @@ def _import(a: argparse.Namespace, slug: str) -> int:
         chosen = {**chosen, **over}
     watch = True if a.watch else False if a.unwatch else None
     r = importer.run_import(slug, a.node, text=text, path=path, fmt=a.format, mapping=chosen, remember=not a.no_remember,
-                            watch=watch, label=label, default_date=a.date, who="cli", dry_run=a.dry_run)
+                            watch=watch, label=label, default_date=a.date, who="cli", dry_run=a.dry_run, trusted=True)
     if a.json:
         _json(r)
         return 0
