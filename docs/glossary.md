@@ -192,6 +192,9 @@
 | 边 | 细分 / 依赖 / 备选 / 冲突 | Refines / Depends on / Alternative to / Conflicts with | |
 | 顶部指标 | 深度 / 推进中分支 / 验证比例 / 空白分支 | Depth / Active branches / Validated / Empty branches | |
 | 操作 | 聚焦 / 钉住 / 折叠 | Focus / Pin / Collapse | |
+| 时间回放（#46） | 回放；时间轴；按周播放 | Replay; time axis; play week by week | 按周回看地图怎么长出来 |
+| 变化视图（#46） | 对比；变化标记；新增 / 状态变化 / 放弃与证伪 / 删除 / 改名 | Compare; change marks; added / status changes / abandoned and falsified / deleted / renamed | 选两个日期 |
+| 总图（#46） | 总图；关键验证 / 决策；换乘站 | All projects; key validation / decision; interchange | 所有课题在一条时间轴上，地铁线路图式；「总览」是另一个页面 |
 | 证据 / 同行 / 结果记录 | 证据 / 同行 / 结果记录 | Evidence / Peers / Results | 节点上挂的东西 |
 | 事件 | 改动记录 | Change log | 每次改动一条 |
 

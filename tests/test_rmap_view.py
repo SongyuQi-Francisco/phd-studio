@@ -416,7 +416,7 @@ def test_the_map_text_lives_in_its_locale_module_in_both_languages():
     import i18n_scan
     report = i18n_scan.scan([str(PROJECT / "web" / "rmap")])
     assert all(r["done"] and not r["lines"] and not r["errors"] for r in report.values()), report
-    assert len(report) == len(list((PROJECT / "web" / "rmap").glob("*.js")))
+    assert len(report) == len(list((PROJECT / "web" / "rmap").rglob("*.js")))  # extensions in ext/ included
 
 
 def test_strings_cover_the_whole_vocabulary():

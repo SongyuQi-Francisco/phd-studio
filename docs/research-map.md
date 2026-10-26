@@ -157,7 +157,8 @@ A `log` event carries a free sentence ("ran the ablation, tool use did not help 
 the one-sentence update is stored as its node changes + evidence + that log line, all in one group.
 Replay (#46) rebuilds the map at a time from `record` / `changes` in `(hlc, id)` order, with the delete
 and resurrect rule above; hand edits and data older than the log fall back to `created_at` /
-`updated_at`.
+`updated_at`. See [research-map-history.md](research-map-history.md) for the replay, the change view and the
+all-projects map.
 
 ## Writing: one path
 

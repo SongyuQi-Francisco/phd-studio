@@ -1,0 +1,11 @@
+{
+  "bad_time": "Unknown time: {text} (use a date like 2026-10-01, a time like 2026-10-01T09:00, or an event cursor)",
+  "kind.evidence": "Evidence",
+  "packet.added": "New {type} “{title}” ({status})",
+  "packet.attached": "{kind} +{n}: {items}",
+  "packet.more": "{n} more new nodes",
+  "packet.note": "{day} change log: {text}",
+  "packet.removed": "Deleted “{title}”",
+  "packet.retitled": "“{old}” renamed to “{title}”",
+  "packet.status": "“{title}”: {old} → {new}"
+}

@@ -778,6 +778,34 @@ def fictional_papers(rng: random.Random) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------- helpers
 
 
+# A past advisor packet for Atlas: the research map's change view offers "since the last advisor packet".
+ADVISOR_PACKET = """\
+---
+type: review-packet
+packet: advisor
+line: "Project Atlas"
+research_line: "[[Project Atlas]]"
+created: {date}
+tags:
+  - review
+  - advisor-packet
+---
+
+# Advisor Packet - Project Atlas ({date})
+
+> The reranker verifier beats the NLI baseline by 6 points; K1 did not trigger. Next: where the unsupported sentences come from.
+
+## Progress since last packet
+
+- Annotated 300 answers with two annotators (κ = 0.71).
+- Reranker vs NLI agreement: +6 points for the reranker; the NLI sub-line is falsified.
+
+## Asks for the advisor
+
+1. Is a 300-answer test set enough for the ACL submission?
+"""
+
+
 # ---------------------------------------------------------------- research maps (研究地图)
 
 # Each step: (days ago, log line or None, ops). Ids are $refs; one project per entry. Project Cobalt gets no
@@ -795,15 +823,18 @@ RMAP_ATLAS = [
         {"op": "attach.add", "kind": "evidence", "node": "$q", "set": {"type": "paper", "target": "RAG 2020", "stance": "context"}},
     ]),
     (-45, None, [
-        {"op": "node.add", "ref": "$s1", "parent": "$h1", "set": {"type": "subline", "status": "active", "title": "Late-interaction reranker as verifier"}},
+        {"op": "node.add", "ref": "$s1", "parent": "$h1", "set": {"type": "subline", "status": "active", "title": "Reranker as verifier"}},
         {"op": "node.add", "ref": "$s2", "parent": "$h1", "set": {"type": "subline", "status": "active", "title": "NLI model as verifier (baseline)"}},
+        {"op": "node.add", "ref": "$s3", "parent": "$h1", "set": {"type": "subline", "status": "active", "title": "BM25 overlap as verifier"}},
         {"op": "node.add", "ref": "$k1", "parent": "$h1", "set": {"type": "kill", "status": "todo", "title": "K1 reranker below NLI after 2 weeks"}},
         {"op": "node.add", "ref": "$k2", "parent": "$h2", "set": {"type": "kill", "status": "todo", "title": "K2 >40% misses from retrieval"}},
         {"op": "attach.add", "kind": "evidence", "node": "$h1", "set": {"type": "paper", "target": "Self-RAG 2023", "stance": "supports"}},
     ]),
     (-38, "RL 这条先不做：奖励太稀疏，和 verifier 冲突", [
         {"op": "node.update", "id": "$h4", "set": {"status": "dropped"}},
-        {"op": "node.add", "ref": "$x1", "parent": "$s1", "set": {"type": "experiment", "status": "active", "title": "Annotate 300 answers, 2 annotators"}},
+        {"op": "node.add", "ref": "$x1", "parent": "$s1", "set": {"type": "experiment", "status": "active", "title": "Annotate 300 answers, 2 annotators",
+         "entity": "dataset:natural-questions"}},
+        {"op": "node.update", "id": "$s3", "set": {"status": "blocked"}},
     ]),
     (-31, "标注完成：300 条答案，κ = 0.71", [
         {"op": "node.update", "id": "$x1", "set": {"status": "verified"}},
@@ -824,6 +855,10 @@ RMAP_ATLAS = [
         {"op": "node.add", "ref": "$d1", "parent": "$h1", "set": {"type": "decision", "status": "verified", "title": "Keep the verifier line"}},
         {"op": "node.update", "id": "$h1", "set": {"status": "verified"}},
     ]),
+    (-12, "BM25 重叠度当核验器不行，删掉这条子线；reranker 子线改名", [
+        {"op": "node.delete", "id": "$s3"},
+        {"op": "node.update", "id": "$s1", "set": {"title": "Late-interaction reranker as verifier"}},
+    ]),
     (-9, "错误归因：31% 来自检索，离 K2 的线很近", [
         {"op": "node.update", "id": "$h2", "set": {"status": "active"}},
         {"op": "node.add", "ref": "$x5", "parent": "$h2", "set": {"type": "experiment", "status": "verified", "title": "Error attribution on 300 answers"}},
@@ -837,6 +872,8 @@ RMAP_ATLAS = [
         {"op": "node.add", "ref": "$x3", "parent": "$s1", "set": {"type": "experiment", "status": "todo", "title": "Latency under 50 ms per answer"}},
         {"op": "node.add", "ref": "$o1", "parent": "$q", "set": {"type": "open", "status": "todo", "title": "Does a benchmark already cover this? (K3)"}},
         {"op": "edge.add", "from": "$o1", "to": "$h3", "kind": "conflicts", "label": "K3"},
+        {"op": "attach.add", "kind": "evidence", "node": "$o1", "set": {"type": "paper", "target": "Lost in the Middle 2023", "stance": "context",
+         "entity": "paper:2307.03172"}},
     ]),
 ]
 RMAP_BEACON = [
@@ -848,18 +885,38 @@ RMAP_BEACON = [
         {"op": "attach.add", "kind": "evidence", "node": "$h1", "set": {"type": "paper", "target": "FlashAttention 2022", "stance": "context"}},
         {"op": "attach.add", "kind": "evidence", "node": "$h2", "set": {"type": "paper", "target": "Longformer 2020", "stance": "supports"}},
     ]),
+    (-33, "先跑 sliding window baseline", [
+        {"op": "node.update", "id": "$h2", "set": {"status": "active"}},
+        {"op": "node.add", "ref": "$x0", "parent": "$h2", "set": {"type": "experiment", "status": "active", "title": "Window 4K, recall at 32K / 128K"}},
+    ]),
     (-26, None, [
         {"op": "node.add", "ref": "$s1", "parent": "$h1", "set": {"type": "subline", "status": "active", "title": "Kernel at 128K"}},
         {"op": "node.add", "ref": "$s2", "parent": "$h1", "set": {"type": "subline", "status": "active", "title": "Needle recall"}},
         {"op": "node.add", "ref": "$k1", "parent": "$h1", "set": {"type": "kill", "status": "active", "title": "K1 under 2x at 128K: stop"}},
         {"op": "node.add", "ref": "$x2", "parent": "$s2", "set": {"type": "experiment", "status": "active", "title": "Needle-in-a-haystack 32K / 128K"}},
     ]),
-    (-6, "Kernel 1.7x（Gate 是 2x），单针召回差 2 个点以内", [
+    (-19, "Sliding window 在 128K 掉 18 个点，这条路径证伪；加一个 NQ 长上下文问答", [
+        {"op": "node.update", "id": "$x0", "set": {"status": "verified"}},
+        {"op": "node.add", "ref": "$r0", "parent": "$x0", "set": {"type": "result", "status": "verified", "title": "−18 pts recall at 128K"}},
+        {"op": "node.update", "id": "$h2", "set": {"status": "refuted"}},
+        {"op": "node.add", "ref": "$x3", "parent": "$s2", "set": {"type": "experiment", "status": "active", "title": "Long-context QA on NQ (128K)",
+         "entity": "dataset:natural-questions"}},
+    ]),
+    (-12, "Kernel 第一版 1.3x，离 2x 的 Gate 还远", [
         {"op": "node.add", "ref": "$x1", "parent": "$s1", "set": {"type": "experiment", "status": "active", "title": "Speed vs FlashAttention-2"}},
-        {"op": "node.add", "ref": "$r1", "parent": "$x1", "set": {"type": "result", "status": "blocked", "title": "1.7x so far (Gate: 2x)"}},
+        {"op": "node.add", "ref": "$r1", "parent": "$x1", "set": {"type": "result", "status": "blocked", "title": "1.3x so far (Gate: 2x)"}},
+    ]),
+    (-6, "Kernel 1.7x（Gate 是 2x），单针召回差 2 个点以内", [
+        {"op": "node.update", "id": "$r1", "set": {"title": "1.7x so far (Gate: 2x)"}},
         {"op": "node.update", "id": "$x2", "set": {"status": "verified"}},
         {"op": "node.add", "ref": "$r2", "parent": "$x2", "set": {"type": "result", "status": "verified", "title": "Within 2 pts of dense"}},
-        {"op": "attach.add", "kind": "evidence", "node": "$x2", "set": {"type": "paper", "target": "Lost in the Middle 2023", "stance": "context"}},
+        {"op": "attach.add", "kind": "evidence", "node": "$x2", "set": {"type": "paper", "target": "Lost in the Middle 2023", "stance": "context",
+         "entity": "paper:2307.03172"}},
+    ]),
+    (-2, "NQ-128K 只比 dense 低 1.1 EM：保留 global tokens，接着调 tile 大小", [
+        {"op": "node.update", "id": "$x3", "set": {"status": "verified"}},
+        {"op": "node.add", "ref": "$r3", "parent": "$x3", "set": {"type": "result", "status": "verified", "title": "NQ-128K: −1.1 EM vs dense"}},
+        {"op": "node.add", "ref": "$d1", "parent": "$h1", "set": {"type": "decision", "status": "verified", "title": "Keep learned global tokens"}},
     ]),
 ]
 
@@ -878,6 +935,7 @@ def research_maps() -> None:
         rclock.wall_ms = lambda: int(datetime.fromisoformat(stamp(off, hour)).timestamp() * 1000)
     try:
         for title, steps in (("Project Atlas", RMAP_ATLAS), ("Project Beacon", RMAP_BEACON)):
+            (config.DATA_DIR / "rmap" / "clock").unlink(missing_ok=True)  # a clock never goes back: start each map's past afresh
             at(steps[0][0] - 1, 9)
             slug = rops.create_project(title, line=title, note=f"Ideas/{title}.md")["slug"]
             refs: dict[str, str] = {}
@@ -1022,6 +1080,7 @@ def build(out: Path, secrets: Path, venues_from: Path | None, fetch_pdfs: bool) 
     for name, text in IDEA_NOTES.items():
         write(vault / "Ideas" / f"{name}.md", text.format(created=day(-20)))
     write(vault / "Ideas" / "Idea Radar.md", IDEA_RADAR)
+    write(vault / "Review Packets" / f"Advisor Packet - Project Atlas {day(-16)}.md", ADVISOR_PACKET.format(date=day(-16)))
     folder, title, lessons = COURSE
     rows = "\n".join(f"| {n + 1} | {name[3:]} | {f'[[{paper}]]' if paper and paper[0].isalpha() else paper} | "
                      f"{'✅ [[' + name + ']]' if done else '待'} |" for n, (name, paper, done) in enumerate(lessons))

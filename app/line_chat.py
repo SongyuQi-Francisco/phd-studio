@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import tempfile
@@ -27,6 +28,7 @@ from .config import (AGENTS_MD, CHATS_DIR, IDEA_RADAR, IDEA_TEMPLATE, IDEAS_DIR,
 PREFIX = "line:"
 _KEY = re.compile(r"^line:(?:[a-z0-9]+(?:-[a-z0-9]+)*-)?[0-9a-f]{12}$")
 _DATE = re.compile(r"(20\d\d-\d\d-\d\d)")
+log = logging.getLogger(__name__)
 DEFAULT_TEMPLATE = Path(__file__).with_name("templates") / "review_packet.md"
 # Advisor packet templates looked for in the templates folder, in this order (case-insensitive).
 TEMPLATE_NAMES = ("review packet template", "advisor packet template", "advisor review packet template",
@@ -493,6 +495,12 @@ def packet_prompt(line: dict[str, Any], today: date | None = None) -> dict[str, 
                 "确实没有，就当作第一份" + (f"，进展从这条线创建（{created}）算起。" if created else "，进展从这条线开始算起。"))
     sources = (f"读研究线笔记 `{ctx['note']}`（按日期记的进展、Kill Criteria、First Experiment）" if ctx["note"]
                else "这条线没有研究线笔记，先用 Grep 找相关笔记")
+    rmap = map_changes(line)
+    if rmap and rmap["lines"]:
+        since = f"自上次汇报（{rmap['since']}）以来" if rmap["since"] else "从地图开始到现在"
+        sources += (f"。研究地图「{rmap['title']}」{since}的变化（应用按改动记录整理，共 {rmap['total']} 条）：\n"
+                    + "\n".join(f"   - {x}" for x in rmap["lines"])
+                    + "\n   写「自上次以来的进展」时拿它对照，结论和数字仍以笔记、证据为准")
     src = f"`{tpl['path']}`" if tpl["path"] else "工作台默认模板"
     prompt = f"""起草研究线「{ctx['line']}」的导师汇报包，写成 vault 里的一篇新笔记：`{_rel(target)}`。用 Write 新建（我会先看差异再决定是否写入），不要改别的文件。
 
@@ -512,4 +520,16 @@ def packet_prompt(line: dict[str, Any], today: date | None = None) -> dict[str, 
 {filled.strip()}
 </template>"""
     return {"prompt": prompt, "label": "起草导师汇报包", "path": _rel(target),
-            "template": {"source": tpl["source"], "path": tpl["path"]}, "previous": prev}
+            "template": {"source": tpl["source"], "path": tpl["path"]}, "previous": prev,
+            "map": rmap and {k: rmap[k] for k in ("slug", "since", "total")}}
+
+
+def map_changes(line: dict[str, Any]) -> dict[str, Any] | None:
+    """The research map changes since this line's last advisor packet (app/rmap/history.py), or None when the
+    line has no map; a map that cannot be read leaves the packet prompt as it was."""
+    from .rmap import history
+    try:
+        return history.packet_changes(line, lang="zh")
+    except Exception:
+        log.exception("research map changes for the advisor packet")
+        return None
