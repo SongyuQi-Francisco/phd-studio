@@ -23,10 +23,14 @@ from ...config import DATA_DIR, SECRETS_DIR, STATE_ROOT
 MAX_BYTES = 8_000_000
 MAX_ROWS = 19_000  # one import is one atomic batch of at most 20000 operations (ops.MAX_IMPORT_OPS)
 EXT_FORMAT = {".csv": "csv", ".tsv": "tsv", ".json": "json", ".jsonl": "jsonl", ".ndjson": "jsonl"}
-# Folders whose files are never read, even inside a results root.
-_HOME = Path.home()
-DENIED = [SECRETS_DIR, DATA_DIR, STATE_ROOT, _HOME / ".ssh", _HOME / ".aws", _HOME / ".gnupg", _HOME / ".config",
-          _HOME / "Library" / "Keychains", _HOME / "Library" / "Application Support"]
+
+
+def denied() -> list[Path]:
+    """Folders whose files are never read, even inside a results root: credentials, and this app's own data. (Not the
+    whole of ~/Library/Application Support: that is where the default demo workspace lives, and a root is the user's
+    own choice; the app's data folder is among these whatever it is called.)"""
+    home = Path.home()
+    return [SECRETS_DIR, DATA_DIR, STATE_ROOT, home / ".ssh", home / ".aws", home / ".gnupg", home / ".config", home / "Library" / "Keychains"]
 
 
 @dataclass
@@ -194,7 +198,7 @@ def decimal_mark(table: Table) -> str:
 def collapse(path: Path) -> str:
     """How a path is kept in a record: under the home folder as ~/..., so two Macs with different user names agree."""
     try:
-        return "~/" + path.relative_to(_HOME).as_posix()
+        return "~/" + path.relative_to(Path.home()).as_posix()
     except ValueError:
         return str(path)
 
@@ -228,7 +232,7 @@ def resolve(path: str, *, in_roots: bool = True) -> Path:
         raise ValueError(i18n.t("rmap_results.path_ext", ext=p.suffix or "?", allowed=", ".join(EXT_FORMAT)))
     if in_roots and not any(p.is_relative_to(r) for r in roots()):
         raise ValueError(i18n.t("rmap_results.path_outside", path=raw[:120]))
-    for d in DENIED:
+    for d in denied():
         try:
             if p.is_relative_to(d.resolve()):
                 raise ValueError(i18n.t("rmap_results.path_denied", path=raw[:120]))

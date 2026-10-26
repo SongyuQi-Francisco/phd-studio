@@ -252,7 +252,7 @@ JSON (an array of objects, an object of `name -> metrics`, or an object holding 
 `.csv .tsv .json .jsonl .ndjson` file of at most 8 MB **inside a results root**: `[paths] results_roots` in `studio.toml`
 (a list of folders, relative to the vault or absolute / `~/`; empty, the default, means results can only be pasted).
 Symbolic links are resolved first, so a link out of a root is the file it points at; the secrets folder, the app's
-data and state folders, `~/.ssh`, `~/.aws`, `~/.config` and `~/Library/Application Support` stay closed even inside a
+data and state folders, `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config` and `~/Library/Keychains` stay closed even inside a
 root. The page, the watcher and the preview all follow this; the command line, where the person at the shell names the
 file themselves, may import any such file once (`studio map result import`), but a file can only be *watched* from a
 root. The file picker lists CSV / JSON files under the roots. A numeric cell is read with the file's decimal mark: the
