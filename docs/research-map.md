@@ -106,7 +106,7 @@ Things hung on a node. Each kind has its own file and the same generic routes; e
 | kind | file | fields | phase |
 |---|---|---|---|
 | `evidence` 证据 | `evidence.yaml` | `type`: `paper` (paper note name) / `note` (vault path) / `file` (vault path) / `url`; `target`; `title`; `note`; `stance`: `supports` / `contradicts` / `context` | 1 |
-| peers 同行 | registered by #47 | e.g. paper / scholar / lab, relation: same approach / competing / builds on | 3 |
+| `peer` 同行 | `peers.yaml` | `type` paper / scholar / lab, `title`, `relation` same / competing / builds_on, … ([research-map-peers.md](research-map-peers.md)) | 3 |
 | results 结果记录 | registered by #48 | e.g. config, dataset, metric, value, date, source | 4 |
 
 A `url` target opens only with `http`, `https`, `obsidian` or `zotero`; a paper name, note or file is a
@@ -295,6 +295,7 @@ Every hook gets `ctx`:
 | `slug`, `map` | `{project, nodes, edges, attachments: {kind: [...]}, warnings, stamp, seq}` as `GET /projects/{slug}` returns it |
 | `meta`, `projects` | `/meta`; the project list with counts |
 | `selected`, `select(id)` | the selected node |
+| `open(slug, node?)` | switch to a project's map (e.g. from a view) and select one of its nodes once the map is read |
 | `layers` | `{layer id: on}` |
 | `layout` | in layer hooks: `{boxes: {node id: {x, y, w, h, col, pinned}}, edges, columns, width, height, hidden, hasKids, visible}` in SVG map coordinates (`web/rmap/layout.js`) |
 | `view` | `{focus, setFocus, collapsed, setCollapsed, fold(id)}`: focus and collapsed branches (collapse is kept per map on this Mac) |

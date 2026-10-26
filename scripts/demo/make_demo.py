@@ -5,10 +5,9 @@
     STUDIO_CONFIG=<out>/studio.toml STUDIO_DEVICE=demo uv run uvicorn app.main:app --port 8790
 
 Everything personal is invented: the profile, the three research lines ("Project Atlas / Beacon /
-Cobalt") and the research maps of the first two, the roadmap, ideas, milestones and targets, the
-scholars and labs on the tracking page (made-up names, initials avatars, no photos), their papers and
-the weekly runs. The papers on the
-reading list are well-known public ones (arXiv PDFs are downloaded once into <out>/downloads).
+Cobalt") and the research maps of the first two (with fictional peers), the roadmap, ideas, milestones and
+targets, the scholars and labs on the tracking page (made-up names, initials avatars, no photos), their papers
+and the weekly runs. The papers on the reading list are well-known public ones (arXiv PDFs are downloaded once into <out>/downloads).
 The venue catalog is the public CORE + ccfddl data the app downloads itself (or copied from
 --venues-from). Nothing is read from studio.toml, the user's vault, Zotero or state.
 
@@ -876,6 +875,41 @@ RMAP_ATLAS = [
          "entity": "paper:2307.03172"}},
     ]),
 ]
+# Peers on the maps (#47): fictional papers from the tracking page, labs and scholars. A paper is named by its
+# title here; research_maps() fills in its arXiv-like id (the entity shared across projects), link and date.
+def _peer(node: str, relation: str, title: str, kind: str = "paper", note: str | None = None) -> dict[str, Any]:
+    return {"op": "attach.add", "kind": "peer", "node": node,
+            "set": {"type": kind, "title": title, "relation": relation, **({"note": note} if note else {})}}
+
+
+RMAP_ATLAS += [
+    (-12, "同行：引用核验这条至少两家在做，reranker 当 verifier 已有人发了", [
+        _peer("$s1", "same", "Late-Interaction Rerankers Are Strong Attribution Judges", note="Same idea; they score whole answers, not sentences"),
+        _peer("$s1", "competing", "Lakeside Retrieval Lab", "lab"),
+        _peer("$s1", "competing", "Grounded Decoding with Span-Level Citation Constraints"),
+        _peer("$h1", "same", "Citations That Hold Up: Verifying Attribution in Retrieval-Augmented Generation"),
+        _peer("$h1", "competing", "Self-Checking Retrieval: Training Generators to Flag Unsupported Claims"),
+        _peer("$h1", "builds_on", "Elena Marchetti", "scholar"),
+        _peer("$h3", "same", "Faithfulness Metrics for Citation-Bearing Answers: A Meta-Evaluation"),
+        _peer("$h3", "builds_on", "Judging the Judges: Agreement of LLM Evaluators on Long Answers"),
+        _peer("$q", "competing", "Northbridge NLP Group", "lab"),
+    ]),
+    (-2, None, [
+        _peer("$x4", "builds_on", "Context Compression for Retrieval-Augmented Generation"),
+    ]),
+]
+RMAP_BEACON_PEERS = [
+    (-15, "同行：block-sparse 这条 Alpine 组跑得最快", [
+        _peer("$h1", "same", "Sparse Global Tokens Preserve Recall in Efficient Attention"),
+        _peer("$h1", "same", "Block-Sparse Attention Kernels for Million-Token Inference"),
+        _peer("$h1", "competing", "Alpine Systems for ML", "lab"),
+        _peer("$s1", "competing", "IO-Aware Sparse Attention on Consumer GPUs"),
+        _peer("$s1", "builds_on", "Chunked Prefill Scheduling for Efficient Long-Context Serving"),
+        _peer("$h2", "same", "Memory-Efficient Long-Context Fine-Tuning with Shifted Windows"),
+        _peer("$q", "competing", "Context Compression for Retrieval-Augmented Generation"),  # shared with Atlas
+        _peer("$q", "competing", "Aurora Language Models Team", "lab"),
+    ]),
+]
 RMAP_BEACON = [
     (-40, "Beacon 开题", [
         {"op": "node.add", "ref": "$q", "set": {"type": "question", "status": "active", "title": "Exact recall at 128K+ for a fraction of the cost?"}},
@@ -921,11 +955,32 @@ RMAP_BEACON = [
 ]
 
 
-def research_maps() -> None:
+def _fill_peer(op: dict[str, Any], papers: dict[str, dict[str, Any]]) -> None:
+    """A demo peer named by its title gets the fictional paper's id (its entity), link, date and authors."""
+    from app.rmap import peers as rpeers
+    peer = op["set"]
+    peer["source"] = "manual"
+    if peer["type"] == "paper" and peer["title"] in papers:
+        p = papers[peer["title"]]
+        peer.update(entity=f"paper:{p['arxiv']}", url=f"https://arxiv.org/abs/{p['arxiv']}", date=p["date"][:7],
+                    authors=", ".join(p["authors"][:3]), venue=p["venue"], source="tracker")
+    elif peer["type"] == "lab":
+        lab = next((x for x in LABS if x[1] == peer["title"]), None)
+        peer["entity"] = rpeers.entity_for("lab", lab=lab[0] if lab else peer["title"])
+    elif peer["type"] == "scholar":
+        rank = next((n for n, x in enumerate(SCHOLARS, 1) if x[0] == peer["title"]), None)
+        peer["entity"] = f"scholar:openalex:A59{rank:08d}" if rank else rpeers.entity_for("scholar", title=peer["title"])
+        peer["venue"] = next((x[1] for x in SCHOLARS if x[0] == peer["title"]), None)
+    else:
+        peer["entity"] = rpeers.entity_for(peer["type"], title=peer["title"])
+
+
+def research_maps(papers: list[dict[str, Any]] | None = None) -> None:
     """Fictional maps for Atlas and Beacon, written step by step with backdated times (so the change log and
-    the 8-week trend look lived in)."""
+    the 8-week trend look lived in), with fictional peers (papers from the tracking page, labs, scholars)."""
     from app import config
     from app.rmap import clock as rclock, ops as rops
+    by_title = {p["title"]: p for p in papers or []}
     shutil.rmtree(config.RMAP_DIR, ignore_errors=True)
     shutil.rmtree(config.DATA_DIR / "rmap", ignore_errors=True)  # this device's clock and ingest log go with them
     real_now, real_ms = rops.now, rclock.wall_ms
@@ -934,7 +989,7 @@ def research_maps() -> None:
         rops.now = lambda: stamp(off, hour)
         rclock.wall_ms = lambda: int(datetime.fromisoformat(stamp(off, hour)).timestamp() * 1000)
     try:
-        for title, steps in (("Project Atlas", RMAP_ATLAS), ("Project Beacon", RMAP_BEACON)):
+        for title, steps in (("Project Atlas", RMAP_ATLAS), ("Project Beacon", sorted(RMAP_BEACON + RMAP_BEACON_PEERS, key=lambda s: s[0]))):
             (config.DATA_DIR / "rmap" / "clock").unlink(missing_ok=True)  # a clock never goes back: start each map's past afresh
             at(steps[0][0] - 1, 9)
             slug = rops.create_project(title, line=title, note=f"Ideas/{title}.md")["slug"]
@@ -943,6 +998,8 @@ def research_maps() -> None:
                 at(off, 10)
                 batch = json.loads(json.dumps(batch))
                 for op in batch:
+                    if op.get("kind") == "peer":
+                        _fill_peer(op, by_title)
                     for k in ("id", "parent", "from", "to", "node"):
                         if isinstance(op.get(k), str) and op[k] in refs:
                             op[k] = refs[op[k]]
@@ -1274,7 +1331,7 @@ def build(out: Path, secrets: Path, venues_from: Path | None, fetch_pdfs: bool) 
     tracking.export_follows()
 
     # -- research maps
-    research_maps()
+    research_maps(papers)
 
     # -- settings: per-machine, as a fresh install has them
     config.save_settings({"translate_engine": "deepseek" if (secrets / "deepseek.env").exists() else "google"})
