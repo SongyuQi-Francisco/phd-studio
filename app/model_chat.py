@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from . import library, line_chat, providers, ro_tools
+from . import i18n, library, line_chat, providers, ro_tools
 from .config import CROPS_DIR, EXTRA_READ_DIRS, IDEAS_FILE, PLAN_FILE, READING_LIST, STATE_DIR, TEXT_DIR, VAULT_DIR
 
 if TYPE_CHECKING:
@@ -154,13 +154,14 @@ def instructions(chat: PaperChat, p: providers.Provider, model: str) -> str:
 
 
 def unavailable(p: providers.Provider, st: dict[str, Any]) -> str:
-    return f"{p.label} 不可用：{st['detail']}。{st['fix']}".rstrip("。") + "。没有换用其他模型。"
+    """Shown to the user: why the chosen model can't run (and that no other one stood in)."""
+    return i18n.t("model.unavailable", reason=providers.unavailable_text(p.label, st).rstrip("。. "))
 
 
 def no_vision(p: providers.Provider, model: str) -> str:
-    seeing = "、".join(m["label"] for m in p.models() if m.get("vision"))
-    alt = f"换成能看图的 {seeing}，或 Claude" if seeing else "换成 Claude 或其他能看图的模型"
-    return f"{providers.display(p.id, model)} 不能看图。在面板顶部{alt}，再发一次。"
+    seeing = i18n.t("model.list_sep").join(m["label"] for m in p.models() if m.get("vision"))
+    name = providers.display(p.id, model)
+    return i18n.t("model.no_vision", name=name, models=seeing) if seeing else i18n.t("model.no_vision_any", name=name)
 
 
 # ---------------- one turn ----------------
@@ -198,7 +199,7 @@ async def run_turn(chat: PaperChat, b: dict[str, Any], text: str, images: list[s
 
     async def work() -> None:
         if p is None:
-            await fail(f"这个对话绑定的模型来源「{b['provider']}」已不存在。在面板顶部重新选一个模型。")
+            await fail(i18n.t("model.provider_gone", provider=b["provider"]))
             return
         out["model"], problem = await asyncio.to_thread(_check, p, b, paths)
         if problem:
@@ -209,7 +210,7 @@ async def run_turn(chat: PaperChat, b: dict[str, Any], text: str, images: list[s
             resumed = p.kind == "cli" and b.get("thread")
             instr = "" if resumed else await asyncio.to_thread(instructions, chat, p, out["model"])
         except Exception as e:  # noqa: BLE001 - e.g. the paper's PDF can't be fetched
-            await fail(f"准备上下文失败：{e}")
+            await fail(i18n.t("model.context_failed", error=e))
             return
         studio = chat.stem == "studio" or line_chat.is_line_key(chat.stem)
         turn = providers.Turn(
@@ -228,10 +229,11 @@ async def run_turn(chat: PaperChat, b: dict[str, Any], text: str, images: list[s
         if not task.cancelled() or (current and current.cancelling()):
             raise  # the whole send is being cancelled (app shutting down), not just this turn stopped
         out["stopped"] = True
-        segments.append({"type": "error", "text": "已停止。"})
-        await chat.emit({"type": "error", "message": "已停止。"})
+        stopped = i18n.t("model.stopped")
+        segments.append({"type": "error", "text": stopped})
+        await chat.emit({"type": "error", "message": stopped})
     except Exception as e:  # noqa: BLE001 - report to the panel, never fall back to another model
-        await fail(f"{p.label if p else b['provider']} 出错：{e}")
+        await fail(i18n.t("model.turn_failed", label=p.label if p else b["provider"], error=e))
     finally:
         chat.other = None
     if chat.generation != generation:

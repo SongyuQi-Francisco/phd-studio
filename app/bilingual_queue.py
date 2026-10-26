@@ -24,7 +24,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import bilingual, library, reading
+from . import bilingual, i18n, library, reading
 from .config import BILINGUAL_DIR, DATA_DIR, READING_LIST, load_settings, secret
 from .providers import PROVIDERS
 
@@ -32,6 +32,31 @@ QUEUE_FILE = DATA_DIR / "bilingual-queue.json"
 MODES: dict[str, tuple[str, ...]] = {"off": (), "T1": ("T1",), "T1T2": ("T1", "T2")}
 KEEP_FINISHED = 20
 _lock = threading.RLock()
+
+# The reasons and errors the queue words itself are stored as codes ("@enter T1") and put into words
+# when served (snapshot), in the interface language of that moment: the file is read long after it was
+# written, possibly after the language changed. Text that comes from elsewhere (an exception, pdf2zh's
+# log, an older entry already in words) is stored and served as it is.
+CODES = ("enter", "backfill", "retry", "failed", "made", "left")
+
+
+def _code(code: str, arg: str = "") -> str:
+    return f"@{code} {arg}".strip()
+
+
+def _word(value: Any) -> Any:
+    """A stored reason or error in words; anything that is not one of the codes above as it is."""
+    if isinstance(value, str) and value.startswith("@"):
+        code, _, arg = value[1:].partition(" ")
+        if code in CODES:
+            # i18n-keys: bilingual.queue.{enter,backfill,retry,failed,made,left}
+            return i18n.t(f"bilingual.queue.{code}", tier=arg, tiers=arg)
+    return value
+
+
+def _view(job: dict[str, Any]) -> dict[str, Any]:
+    """A job as the Settings page gets it: reason and error in words."""
+    return {**job, **{k: _word(job[k]) for k in ("reason", "error") if k in job}}
 
 
 def _now() -> str:
@@ -140,7 +165,7 @@ def _reconcile(st: dict[str, Any]) -> bool:
             prev = seen.get(i["id"])
             was = prev and _qualifies({"status": prev[0], "tier": prev[1]}, tiers)
             if _qualifies(i, tiers) and not was:
-                _enqueue(st, i, f"进入 {i['tier']}")
+                _enqueue(st, i, _code("enter", i["tier"]))
     st["seen"] = {i["id"]: [i["status"], i.get("tier")] for i in items}
     st["stamp"] = stamp
     return True
@@ -162,10 +187,10 @@ def tick() -> None:
                     continue
                 j.update(state="done" if job["state"] == "done" else "error", finished=_now(), engine=job.get("engine"))
                 if job["state"] != "done":
-                    j["error"] = job.get("error") or "失败"
+                    j["error"] = job.get("error") or _code("failed")
                 changed = True
             elif j["state"] == "queued" and bilingual.output(j["key"], "dual"):
-                j.update(state="skipped", finished=_now(), error="已有双语版")
+                j.update(state="skipped", finished=_now(), error=_code("made"))
                 changed = True
         busy = bilingual.running() or any(j["state"] == "running" for j in st["jobs"])
         tiers = MODES[mode()]
@@ -175,7 +200,7 @@ def tick() -> None:
                 if j["state"] != "queued":
                     continue
                 if not _qualifies(items.get(j["key"]), tiers):
-                    j.update(state="skipped", finished=_now(), error="已不在 " + "/".join(tiers))
+                    j.update(state="skipped", finished=_now(), error=_code("left", "/".join(tiers)))
                     changed = True
                     continue
                 j.update(state="running", started=_now(), job=j["key"])
@@ -209,7 +234,7 @@ def snapshot() -> dict[str, Any]:
     running = next((j for j in st["jobs"] if j["state"] == "running"), None)
     if running:
         job = bilingual.status(running["key"])
-        running = {**running, "progress": job.get("progress", 0), "started_ts": job.get("started")}
+        running = {**_view(running), "progress": job.get("progress", 0), "started_ts": job.get("started")}
     finished = [j for j in st["jobs"] if j["state"] not in ("queued", "running")]
     backfill = [i for i in reading._load_raw() if _qualifies(i, tiers) and not _active(st, reading.key_of(i))
                 and not bilingual.output(reading.key_of(i), "dual")]
@@ -217,8 +242,8 @@ def snapshot() -> dict[str, Any]:
             "deepseek_key": bool(secret("DEEPSEEK_API_KEY", "deepseek")),
             "glm_key": bool(PROVIDERS["glm"].key()),
             "engine_setting": load_settings().get("translate_engine", "deepseek"),
-            "running": running, "queued": [j for j in st["jobs"] if j["state"] == "queued"],
-            "recent": finished[::-1][:8],
+            "running": running, "queued": [_view(j) for j in st["jobs"] if j["state"] == "queued"],
+            "recent": [_view(j) for j in finished[::-1][:8]],
             "busy": [k for k in bilingual.running() if not running or k != running.get("job", running["key"])],
             "backfill": len(backfill), "disk": disk()}
 
@@ -236,7 +261,7 @@ def backfill() -> int:
     tiers = MODES[mode()]
     with _lock:
         st = _load()
-        n = sum(_enqueue(st, i, f"补齐 {i['tier']}") for i in reading._load_raw() if _qualifies(i, tiers))
+        n = sum(_enqueue(st, i, _code("backfill", i["tier"])) for i in reading._load_raw() if _qualifies(i, tiers))
         _save(st)
     return n
 
@@ -257,7 +282,7 @@ def retry(key: str) -> bool:
         failed = next((j for j in reversed(st["jobs"]) if j["key"] == key and j["state"] == "error"), None)
         if not failed or _active(st, key):
             return False
-        failed.update(state="queued", added=_now(), reason="重试")
+        failed.update(state="queued", added=_now(), reason=_code("retry"))
         failed.pop("error", None)
         st["jobs"].remove(failed)
         st["jobs"].append(failed)
@@ -346,7 +371,7 @@ def cleanup(days: int) -> dict[str, Any]:
     """Delete the bilingual PDFs of papers no longer on the to-read list and made more than `days` ago.
     They are only a cache: the reader's 双语 button makes them again."""
     if days not in CLEAN_DAYS:
-        raise ValueError(f"days must be one of {CLEAN_DAYS}")
+        raise ValueError(i18n.t("bilingual.bad_days", days=" / ".join(map(str, CLEAN_DAYS))))
     with _lock:
         gone = _cleanable(days)
         for d, _, _ in gone:

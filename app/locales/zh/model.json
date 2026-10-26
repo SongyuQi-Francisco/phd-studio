@@ -1,0 +1,13 @@
+{
+  "unavailable": "{reason}。没有换用其他模型。",
+  "list_sep": "、",
+  "no_vision": "{name} 不能看图。在面板顶部换成能看图的 {models}，或 Claude，再发一次。",
+  "no_vision_any": "{name} 不能看图。在面板顶部换成 Claude 或其他能看图的模型，再发一次。",
+  "provider_gone": "这个对话绑定的模型来源「{provider}」已不存在。在面板顶部重新选一个模型。",
+  "context_failed": "准备上下文失败：{error}",
+  "stopped": "已停止。",
+  "turn_failed": "{label} 出错：{error}",
+  "no_chat": "没有这个对话",
+  "no_provider": "没有这个模型来源：{provider}",
+  "no_model": "{label} 没有模型 {model}"
+}

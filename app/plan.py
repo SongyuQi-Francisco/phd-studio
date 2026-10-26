@@ -16,7 +16,7 @@ import re
 from datetime import date, datetime, timezone
 from typing import Any
 
-from . import editions, venues
+from . import editions, i18n, venues
 from .config import IDEAS_FILE, PLAN_FILE, PROFILE
 from .store import Store, now as stamp_now
 
@@ -251,7 +251,7 @@ def norm_tags(tags: Any, strict: bool = True) -> list[str]:
             if not t or t.casefold() in seen:
                 continue
             if strict and len(t) > TAG_MAX:
-                raise ValueError(f"标签太长（最多 {TAG_MAX} 个字符）：{t[:12]}…")
+                raise ValueError(i18n.t("plan.tag_too_long", max=TAG_MAX, tag=t[:12]))
             seen.add(t.casefold())
             out.append(t)
     return out
@@ -313,6 +313,8 @@ def timeline(days_back: int = 14, days_ahead: int = 400) -> dict[str, Any]:
         aim[t["id"]] = (year, cov)
         shown.append(view)
     events: list[dict[str, Any]] = []
+    stage_name = {kind: i18n.t(f"plan.stage.{kind}") for kind in ("abstract", "deadline")}  # i18n-keys: plan.stage.{abstract,deadline}
+    main_track = i18n.t("plan.track_main")
     for k in watched_keys():
         e = cat.get(k)
         if not e:
@@ -332,15 +334,21 @@ def timeline(days_back: int = 14, days_ahead: int = 400) -> dict[str, Any]:
                         events.append({
                             "type": "target" if opened else "venue", "venue": k, "acronym": e["acronym"],
                             "edition": ed.get("year"),
+                            # "<acronym> <year> [track ]<stage>": the pages cut the first two words off to show the rest;
+                            # `stage` below is the machine value (reminders and de-duplication read that, not the title);
+                            # a deadline taken from the CFP page (source "official") names its track, "main" being the
+                            # one it names none for
                             "title": f"{e['acronym']} {ed['year']} "
-                                     + (f"{(t.get('comment') or '').replace('（官网）', '')} " if "官网" in (t.get("comment") or "") else "")
-                                     + f"{'摘要' if kind == 'abstract' else '全文'}截止",
+                                     + (f"{main_track if t.get('track') == 'main' else t.get('track')} "
+                                        if t.get("source") == "official" and t.get("track") else "")
+                                     + stage_name[kind],
                             "at": t[kind], "days": delta, "core": e["core"], "ccf": e["ccf"],
                             "target": compact[0] if compact else None, "targets": compact,
                             "closed": [{"id": x["id"], "title": x["title"], "line": x.get("line"), "status": x["status"]}
                                        for x in closed],
                             "muted": bool(closed) and not opened,
-                            "link": ed.get("link"), "comment": t.get("comment"), "stage": kind,
+                            "link": ed.get("link"), "comment": t.get("comment"), "track": t.get("track"),
+                            "source": t.get("source"), "stage": kind,
                         })
     for m in data["milestones"]:
         at = datetime.fromisoformat(m["date"] + "T23:59:00").astimezone(timezone.utc)

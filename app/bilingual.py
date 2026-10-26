@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import library, reading
+from . import i18n, library, reading
 from .config import BILINGUAL_DIR, load_settings, secret
 from .providers import PROVIDERS
 from .translate import engine_label
@@ -166,7 +166,7 @@ def start(stem: str, source: str = "reader") -> dict[str, Any]:
     try:
         pdf = library.ensure_pdf(stem)
     except Exception as e:
-        job.update(state="error", error=f"找不到 PDF：{e}")
+        job.update(state="error", error=i18n.t("bilingual.no_pdf", error=e))
         raise
     out = _dir(stem)
     out.mkdir(parents=True, exist_ok=True)
@@ -178,7 +178,7 @@ def start(stem: str, source: str = "reader") -> dict[str, Any]:
             with log.open("w", encoding="utf-8") as f:
                 with _lock:  # either stop_all sees this process, or it was stopped before it could start
                     if _stopping.is_set():
-                        job.update(state="error", error="工作台正在关闭")
+                        job.update(state="error", error=i18n.t("bilingual.shutting_down"))
                         return
                     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                             bufsize=1, env=_child_env(keys))
@@ -190,7 +190,7 @@ def start(stem: str, source: str = "reader") -> dict[str, Any]:
                         job["progress"] = max(job["progress"], min(99, int(m[-1])))
                 proc.wait()
         except OSError as e:
-            job.update(state="error", error=f"pdf2zh 启动失败：{e}")
+            job.update(state="error", error=i18n.t("bilingual.start_failed", error=e))
             return
         if proc.returncode == 0 and output(stem, "dual"):
             job.update(state="done", progress=100)

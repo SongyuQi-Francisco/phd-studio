@@ -31,6 +31,7 @@ from urllib.parse import quote, unquote
 
 import httpx
 
+from . import i18n, msgref
 from .config import DATA_DIR, secret
 
 UA = {"User-Agent": "PhD-Studio/0.1 (local research workbench)"}
@@ -44,7 +45,19 @@ DAY = 86400
 
 
 class SourceError(Exception):
-    """A source could not answer; the message is shown to the user."""
+    """A source could not answer. The message is shown to the user: it is a locale key plus parameters, worded
+    when it is read (`str()`), and `ref()` keeps it for a failure record that the page reads back later."""
+
+    def __init__(self, key: str, /, **params: Any):
+        super().__init__(key)
+        self.key, self.params = key, params
+
+    def __str__(self) -> str:
+        # i18n-keys: track.src.{connect,rate_limited,not_found,http,not_json,captcha_title,captcha_search,acl_not_paper}
+        return i18n.t(self.key, **self.params)
+
+    def ref(self) -> str:
+        return msgref.ref(self.key, **self.params)
 
 
 class NotFound(SourceError):
@@ -86,17 +99,17 @@ def _get(url: str, what: str, *, params: dict[str, Any] | None = None, pace: Pac
         else:
             r = httpx.get(url, params=params, headers={**UA, **(headers or {})}, timeout=timeout, follow_redirects=True)
     except httpx.HTTPError as e:
-        raise SourceError(f"{what} 连接失败（{e.__class__.__name__}）") from None
+        raise SourceError("track.src.connect", what=what, cls=e.__class__.__name__) from None
     if r.status_code == 429:
-        raise SourceError(f"{what} 请求太频繁或今日额度用完，稍后再试")
+        raise SourceError("track.src.rate_limited", what=what)
     return r
 
 
 def _check(r: httpx.Response, what: str) -> httpx.Response:
     if r.status_code == 404:
-        raise NotFound(f"{what} 里没有这条")
+        raise NotFound("track.src.not_found", what=what)
     if r.status_code >= 400:
-        raise SourceError(f"{what} 返回 HTTP {r.status_code}")
+        raise SourceError("track.src.http", what=what, status=r.status_code)
     return r
 
 
@@ -104,7 +117,7 @@ def _json(r: httpx.Response, what: str) -> Any:
     try:
         return r.json()
     except ValueError:
-        raise SourceError(f"{what} 返回的不是 JSON") from None
+        raise SourceError("track.src.not_json", what=what) from None
 
 
 # ---------- cache ----------
@@ -453,10 +466,10 @@ def _or_candidate(n: dict[str, Any]) -> dict[str, Any]:
 def openreview_meta(forum: str) -> dict[str, Any]:
     r = _get(f"{OPENREVIEW}/notes", "OpenReview", pace=OPENREVIEW_PACE, params={"id": forum}, timeout=20)
     if r.status_code == 403:  # a human check in front of the API: not something to work around
-        raise SourceError("OpenReview 要求人机验证，暂时查不了标题")
+        raise SourceError("track.src.captcha_title")
     notes = _json(_check(r, "OpenReview"), "OpenReview").get("notes") or []
     if not notes:
-        raise NotFound("OpenReview 里没有这条")
+        raise NotFound("track.src.not_found", what="OpenReview")
     return _or_candidate(notes[0])
 
 
@@ -467,7 +480,7 @@ def openreview_search(term: str, pages: int = 2, per_page: int = 100) -> list[di
         r = _get(f"{OPENREVIEW}/notes/search", "OpenReview", pace=OPENREVIEW_PACE, timeout=30,
                  params={"term": term, "source": "forum", "limit": per_page, "offset": page * per_page})
         if r.status_code == 403:
-            raise SourceError("OpenReview 要求人机验证，暂时查不了")
+            raise SourceError("track.src.captcha_search")
         got = _json(_check(r, "OpenReview"), "OpenReview").get("notes") or []
         notes += got
         if len(got) < per_page:
@@ -523,7 +536,7 @@ def acl_meta(acl_id: str) -> dict[str, Any]:
     r = _check(_get(f"{ANTHOLOGY}/{acl_id}.bib", "ACL Anthology", pace=ANTHOLOGY_PACE, timeout=20), "ACL Anthology")
     papers = [b for b in parse_bib(r.text) if b["_type"] != "proceedings"]
     if not papers:
-        raise NotFound("ACL Anthology 里这条是论文集目录，不是论文")
+        raise NotFound("track.src.acl_not_paper")
     b = papers[0]
     return candidate(title=unlatex(b.get("title", "")), authors=_bib_authors(b.get("author", "")),
                      year=int(b["year"]) if b.get("year", "").isdigit() else None, venue=unlatex(b.get("booktitle", "")),
@@ -556,7 +569,7 @@ def acl_volumes(today: date | None = None) -> list[tuple[str, str]]:
             if date(year, month, 28) < floor:
                 continue
             for s in suffixes:
-                tag = " Findings" if s.startswith("findings") else (" 短文" if s.endswith("short") else "")
+                tag = " Findings" if s.startswith("findings") else (" " + i18n.t("track.src.acl_short") if s.endswith("short") else "")
                 out.append((f"{year}.{s}", f"{label} {year}{tag}"))
     return out
 
@@ -655,7 +668,7 @@ def acl_fill(vols: list[str]) -> None:
         try:
             fetch_volume(v)
         except Exception as e:  # noqa: BLE001
-            msg = str(e) if isinstance(e, SourceError) else f"ACL Anthology 下载失败：{e.__class__.__name__}"
+            msg = e.ref() if isinstance(e, SourceError) else msgref.ref("track.src.acl_download_failed", cls=e.__class__.__name__)  # kept on disk: worded when shown
             for rest in vols[i:]:
                 if not _volume_ready(rest):
                     _record_failure(rest, msg)
@@ -857,7 +870,7 @@ def search_title(q: str, n: int = 6) -> dict[str, Any]:
         except SourceError as e:
             return {"id": sid, "label": label, "ok": False, "n": 0, "error": str(e)}, []
         except Exception as e:  # noqa: BLE001 - an HTTP error or a malformed response: report it, keep the rest
-            return {"id": sid, "label": label, "ok": False, "n": 0, "error": f"{label} 查询失败：{e.__class__.__name__}"}, []
+            return {"id": sid, "label": label, "ok": False, "n": 0, "error": i18n.t("track.src.query_failed", label=label, cls=e.__class__.__name__)}, []
 
     with ThreadPoolExecutor(len(SEARCHERS)) as pool:
         results = list(pool.map(one, SEARCHERS))

@@ -19,7 +19,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from . import library
+from . import i18n, library
 from .config import DATA_DIR
 
 THUMBS_DIR = DATA_DIR / "thumbs"
@@ -81,10 +81,10 @@ def available(req: KeysReq) -> dict[str, list[str]]:
 @router.get("/api/thumb/{key:path}")
 async def thumb(key: str) -> FileResponse:
     if not _known(key):
-        raise HTTPException(404, "没有这篇论文")
+        raise HTTPException(404, i18n.t("track.thumb.no_paper"))
     paths = _paths(key)
     if paths is None:
-        raise HTTPException(404, "还没有本地 PDF")
+        raise HTTPException(404, i18n.t("track.thumb.no_pdf"))
     if not _fresh(*paths):
         # One render per key at a time; concurrent requests for it share the result.
         fut = _inflight.get(key)
@@ -93,5 +93,5 @@ async def thumb(key: str) -> FileResponse:
             _inflight[key] = fut
             fut.add_done_callback(lambda _f: _inflight.pop(key, None))
         if await asyncio.shield(fut) is None:  # a client that goes away must not cancel the shared render
-            raise HTTPException(404, "PDF 打不开")
+            raise HTTPException(404, i18n.t("track.thumb.bad_pdf"))
     return FileResponse(paths[1], media_type="image/png", headers={"Cache-Control": "max-age=86400"})

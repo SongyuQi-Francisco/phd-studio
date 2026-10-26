@@ -168,7 +168,8 @@ def _diff_preview(tool: str, inp: dict[str, Any]) -> tuple[str, str]:
             new = new.replace(a, b) if e.get("replace_all") else new.replace(a, b, 1)
     rel = str(path.relative_to(VAULT_DIR)) if path.is_relative_to(VAULT_DIR) else str(path)
     diff = "\n".join(
-        difflib.unified_diff(old.splitlines(), new.splitlines(), "当前", "修改后", n=2, lineterm="")
+        difflib.unified_diff(old.splitlines(), new.splitlines(), t("chat.diff.before"), t("chat.diff.after"),
+                             n=2, lineterm="")
     )
     return rel, diff
 
@@ -176,21 +177,26 @@ def _diff_preview(tool: str, inp: dict[str, Any]) -> tuple[str, str]:
 def _friendly_error(err: Any, content: list[Any] | None = None) -> str:
     detail = " ".join(b.text for b in content or [] if isinstance(b, TextBlock)) or str(err)
     if "auth" in str(err).lower() or "auth" in detail.lower() or "login" in detail.lower():
-        return ("Claude 未登录或登录已过期。在终端运行 claude setup-token，把令牌存进 "
-                "~/.config/secrets/claude.env，然后重新发送。")
+        return t("chat.error.auth")
     if "rate" in str(err).lower():
-        return f"Claude 用量达到上限，稍后再试。（{detail}）"
-    return f"Claude 出错：{detail}"
+        return t("chat.error.rate", detail=detail)
+    return t("chat.error.other", detail=detail)
 
 
-STUDIO_TOOL_LABELS = {
-    "reading_push": "加入阅读清单", "reading_list": "查看阅读清单", "reading_update": "更新阅读清单",
-    "milestone_add": "添加里程碑", "milestone_update": "更新里程碑", "target_add": "设定投稿目标",
-    "target_update": "更新投稿目标", "venue_search": "查会议", "venue_watch": "关注会议",
-    "idea_add": "记想法", "idea_list": "查看想法", "timeline": "查看时间线", "idea_update": "更新想法",
-    "idea_merge": "合并想法",
-    "follow": "关注", "tracker_latest": "查看本周追踪", "venue_details_propose": "提交会议核对",
-}
+# The studio tools the chat shows by a friendly name (the others are shown by their own name).
+STUDIO_TOOLS_LABELLED = (
+    "reading_push", "reading_list", "reading_update", "milestone_add", "milestone_update", "target_add",
+    "target_update", "venue_search", "venue_watch", "idea_add", "idea_list", "timeline", "idea_update",
+    "idea_merge", "follow", "tracker_latest", "venue_details_propose",
+)
+
+
+def studio_tool_label(name: str) -> str:
+    """What the chat shows for a studio tool, in the interface language (looked up at call time)."""
+    if name in STUDIO_TOOLS_LABELLED:
+        # i18n-keys: chat.tool.{reading_push,reading_list,reading_update,milestone_add,milestone_update,target_add,target_update,venue_search,venue_watch,idea_add,idea_list,timeline,idea_update,idea_merge,follow,tracker_latest,venue_details_propose}
+        return t(f"chat.tool.{name}")
+    return name
 
 
 def _tool_summary(block: ToolUseBlock) -> str:
@@ -199,9 +205,9 @@ def _tool_summary(block: ToolUseBlock) -> str:
         short = block.name.removeprefix("mcp__studio__")
         detail = inp.get("title") or inp.get("text") or inp.get("query") or inp.get("venue") or inp.get("paper") \
             or inp.get("arxiv") or ""
-        return f"{STUDIO_TOOL_LABELS.get(short, short)} {str(detail)[:40]}".strip()
+        return f"{studio_tool_label(short)} {str(detail)[:40]}".strip()
     target = inp.get("file_path") or inp.get("pattern") or inp.get("url") or inp.get("query") or ""
-    target = str(target).replace(str(VAULT_DIR) + "/", "").replace(str(TEXT_DIR) + "/", "全文：")
+    target = str(target).replace(str(VAULT_DIR) + "/", "").replace(str(TEXT_DIR) + "/", t("chat.fulltext"))
     return f"{block.name} {target}".strip()
 
 
@@ -347,7 +353,7 @@ class PaperChat:
         """Bind this conversation to a provider and model. Another provider starts a new thread
         (the new model doesn't see the earlier turns); the transcript gets a labelled divider."""
         if self.lock.locked():
-            raise RuntimeError("正在回答，等这条回答完再换模型")
+            raise RuntimeError(t("chat.busy_switch"))
         old = model_chat.binding(self.stem)
         if (provider, model) == (old["provider"], old["model"]):
             return {"binding": model_chat.public(self.stem), "event": None}

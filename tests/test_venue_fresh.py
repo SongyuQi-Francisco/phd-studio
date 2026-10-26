@@ -112,7 +112,7 @@ def test_older_details_than_the_upcoming_ccfddl_edition_are_stale():
     f = vf.check(entry(detail(edition="RecSys 2026", edition_year=2026), [ed(2026, None, "2026-04-01T00:00:00+00:00"), ed(2027)]), NOW)
     assert f["stale"] and codes(f) == ["edition"]
     assert "2026" in f["reasons"][0]["text"] and "2027" in f["reasons"][0]["text"]
-    assert f["reasons"][0]["short"] == "有新一届"
+    assert f["reasons"][0]["short"] == "有下一届"
     assert (f["edition_year"], f["ccfddl_year"]) == (2026, 2027)
 
 
@@ -205,7 +205,7 @@ def test_a_ccfddl_link_the_details_do_not_have_is_flagged(link):
 def test_ccfddl_deadline_the_details_do_not_have_is_flagged():
     # details say 2027-01-05 AoE (= 2027-01-06T11:59:59Z); ccfddl moved it a week
     f = vf.check(entry(eds=[ed(2027, "https://2027.example.org/", "2027-01-13T11:59:59+00:00")]), NOW)
-    assert codes(f) == ["dates"] and "2027-01-13" in f["reasons"][0]["text"] and f["reasons"][0]["short"] == "截稿有变"
+    assert codes(f) == ["dates"] and "2027-01-13" in f["reasons"][0]["text"] and f["reasons"][0]["short"] == "Deadline 有变"
 
 
 @pytest.mark.parametrize("iso", ["2027-01-06T11:59:59+00:00", "2027-01-06T11:59:00+00:00", "2027-01-05T23:59:59+00:00", "2027-01-07T11:59:59+00:00"])
@@ -293,7 +293,7 @@ def test_a_placeholder_edition_that_later_gets_deadlines_is_flagged_again():
     f = vf.check(entry(d, published, override=override), NOW)
     assert codes(f) == ["edition"] and f["stale"]
     assert "2027" in f["reasons"][0]["text"] and "2027-04-14" in f["reasons"][0]["text"] and "recsys.example/27" in f["reasons"][0]["text"]
-    assert f["reasons"][0]["short"] == "有新一届"
+    assert f["reasons"][0]["short"] == "有下一届"
 
 
 def test_a_placeholder_edition_that_only_gets_a_link_is_flagged_too():

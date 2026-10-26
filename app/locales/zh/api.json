@@ -1,0 +1,17 @@
+{
+  "reason_self": "自己加的",
+  "not_png": "不是 PNG",
+  "venue_not_found": "没有这个会议",
+  "vault_note_not_found": "vault 里没有这篇笔记",
+  "note_not_found": "没有这篇笔记",
+  "paper_note_not_found": "没有这篇论文的笔记：{stem}",
+  "pdf_not_found": "找不到 PDF：{error}",
+  "bilingual_missing": "双语 PDF 还没生成",
+  "translate_failed": "翻译失败：{error}",
+  "refresh_failed": "更新失败：{error}",
+  "run_not_found": "没有这次运行",
+  "idea_not_found": "没有这条 Idea：{id}",
+  "excerpt.no_note": "这篇还没有笔记，先建笔记再摘录",
+  "excerpt.no_section": "笔记里没有「{section}」这一节",
+  "excerpt.no_selection": "没有选中文字"
+}

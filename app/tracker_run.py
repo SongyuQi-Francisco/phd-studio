@@ -27,7 +27,7 @@ import threading
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from . import tracking
+from . import i18n, msgref, tracking
 from .config import DATA_DIR, STUDIO_DIR, TRACKER_DIR
 
 LOCK_FILE = DATA_DIR / "tracker-run.lock"
@@ -43,13 +43,21 @@ class Busy(RuntimeError):
     pass
 
 
+class RunError(RuntimeError):
+    """A failed step. Its message is a stored reference (msgref), worded when `status()` is read, so the
+    banner of a failed run follows the interface language if that changes before the next run."""
+
+    def __init__(self, key: str, /, **params: object):
+        super().__init__(msgref.ref(key, **params))
+
+
 def python_for_tracker() -> str:
     venv = STUDIO_DIR / ".venv" / "bin" / "python"
     if venv.exists():
         return str(venv)
     found = shutil.which("python3")
     if not found:
-        raise FileNotFoundError("找不到运行 tracker 的 Python（项目 .venv 或 PATH 上的 python3）")
+        raise FileNotFoundError(i18n.t("track.run.no_python"))
     return found
 
 
@@ -89,6 +97,8 @@ def _other_tracker_procs() -> list[str]:
 def status() -> dict[str, Any]:
     s = dict(_state)
     s["log"] = s.get("log", [])[-14:]
+    if "error" in s:
+        s["error"] = msgref.show(s["error"])
     s["available"] = bool(TRACKER_DIR and (TRACKER_DIR / "tracker.py").exists())
     s["linkage"] = tracking.linkage()
     if not s.get("running") and _lock_held_elsewhere():  # a run from before an app restart is still going
@@ -117,17 +127,17 @@ def _window() -> tuple[str, str]:
 
 def start() -> dict[str, Any]:
     if not TRACKER_DIR or not (TRACKER_DIR / "tracker.py").exists():
-        raise FileNotFoundError("没有配置 research_tracker（studio.toml 的 tracker）")
+        raise FileNotFoundError(i18n.t("track.run.not_configured"))
     python_for_tracker()
     with _lock:
         if _state.get("running"):
-            raise Busy("巡检已在进行中，等这次跑完再说")
+            raise Busy(i18n.t("track.run.busy_running"))
         fd = _try_lock()
         if fd is None:
-            raise Busy("另一个巡检还在运行（可能是重启前开始的那次），等它跑完再说")
+            raise Busy(i18n.t("track.run.busy_lock"))
         if _other_tracker_procs():
             os.close(fd)
-            raise Busy("检测到正在运行的 tracker（可能是每周定时任务），等它结束再说")
+            raise Busy(i18n.t("track.run.busy_proc"))
         run, since = _window()
         _state.clear()
         _state.update(running=True, run=run, since=since, stage="prepare", queries=0, queries_done=0,
@@ -162,7 +172,7 @@ def _log(line: str) -> None:
 
 def _stream(cmd: list[str], on_line: Any = None, timeout: int = 1800) -> tuple[int, str]:
     if _child["stop"]:
-        raise RuntimeError("已停止")
+        raise RunError("track.run.stopped")
     fd = _child["fd"]
     p = subprocess.Popen(cmd, cwd=TRACKER_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                          env=_child_env(), pass_fds=(fd,) if fd is not None else (), start_new_session=True)
@@ -213,7 +223,7 @@ def _run(run: str, since: str) -> None:
         tracking.export_follows()
         code, out = _stream(_cmd("tracker.py", "queries"), timeout=60)
         if code:
-            raise RuntimeError(f"queries 失败（{code}）")
+            raise RunError("track.run.step_failed", step="queries", code=code)
         _state["queries"] = len([x for x in out.splitlines() if x.strip()])
 
         _stage("fetch")
@@ -223,23 +233,25 @@ def _run(run: str, since: str) -> None:
                 _state["queries_done"] += 1
         code, out = _stream(_cmd("tracker.py", "fetch", "--since", since, "--run", run), tick)
         if code:
-            raise RuntimeError(out.strip().splitlines()[-1] if out.strip() else f"fetch 失败（{code}）")
+            if out.strip():
+                raise RuntimeError(out.strip().splitlines()[-1])
+            raise RunError("track.run.step_failed", step="fetch", code=code)
         if not (TRACKER_DIR / "raw" / f"{run}.json").exists():
-            raise RuntimeError("fetch 没有产出 raw 文件")
+            raise RunError("track.run.no_raw")
 
         _stage("ingest")
         code, out = _stream(_cmd("tracker.py", "ingest", "--records", f"raw/{run}.json", "--since", since, "--run", run))
         if code:
-            raise RuntimeError(f"ingest 失败（{code}）")
+            raise RunError("track.run.step_failed", step="ingest", code=code)
         try:
             _state["stats"] = json.loads(out[out.index("{"):])
         except ValueError:
-            raise RuntimeError("ingest 没有输出统计") from None
+            raise RunError("track.run.no_stats") from None
 
         _stage("render")
         code, out = _stream(_cmd("tracker.py", "render", "--run", run))
         if code or "rendered run" not in out:
-            raise RuntimeError(f"render 失败（{code}）")
+            raise RunError("track.run.step_failed", step="render", code=code)
 
         _stage("audit")
         if (TRACKER_DIR / "vault_audit.py").exists():
@@ -247,7 +259,7 @@ def _run(run: str, since: str) -> None:
             _state["audit"] = (out.strip().splitlines() or [""])[0][:300]
         _state.update(ok=True, stage="done")
     except Exception as e:  # report every failure on the page instead of killing the thread
-        _state.update(ok=False, error=str(e)[:400], stage="failed")
+        _state.update(ok=False, error=str(e) if isinstance(e, RunError) else str(e)[:400], stage="failed")
     finally:
         _state.update(running=False, finished=datetime.now().isoformat(timespec="seconds"))
         fd = _child.get("fd")

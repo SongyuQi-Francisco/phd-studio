@@ -1,10 +1,14 @@
 // Small SVG charts for the 追踪 page: sparkline, heatmap, stacked/single columns, horizontal bars, avatars.
 // Marks follow the TimelineChart palette (--series-1/2/3); sequential = one blue ramp (--heat-1..6);
 // text always wears text tokens. Every chart has a hover readout; values stay reachable in lists/tooltips.
+// i18n: done
 import { useEffect, useRef, useState } from "preact/hooks";
 import { html } from "/lib.js";
+import { t, formatNumber } from "/i18n.js";
 
-export const fmtN = (n) => n == null ? "—" : n >= 1e5 ? (n / 1e3).toFixed(0) + "K" : n >= 1e4 ? (n / 1e3).toFixed(1) + "K" : n.toLocaleString("en-US");
+export const fmtN = (n) => n == null ? "—" : n >= 1e5 ? (n / 1e3).toFixed(0) + "K" : n >= 1e4 ? (n / 1e3).toFixed(1) + "K" : formatNumber(n);
+// "12 papers": what the charts print next to a count. Callers pass their own for other units.
+const papers = (n) => t("common.unit.papers", { n });
 
 function useWidth(min = 200) {
   const ref = useRef();
@@ -23,7 +27,7 @@ function Tip({ tip, w }) {
 }
 
 // One series over time; the last point carries an end-dot. Hover snaps to the nearest point.
-export function Sparkline({ values, labels = [], w = 112, h = 30, unit = "" }) {
+export function Sparkline({ values, labels = [], w = 112, h = 30, fmt = fmtN }) {
   const [hover, setHover] = useState(null);
   if (!values?.length) return html`<svg class="tk-spark" width=${w} height=${h} />`;
   const max = Math.max(1, ...values), pad = 5;
@@ -44,14 +48,14 @@ export function Sparkline({ values, labels = [], w = 112, h = 30, unit = "" }) {
       ${hover != null && html`<line x1=${x(i)} x2=${x(i)} y1="2" y2=${h - 2} class="tk-cross" />`}
       <circle cx=${x(i)} cy=${y(values[i])} r="4" class="tk-spark-dot" />
     </svg>
-    <span class="tk-spark-read">${labels[i] != null ? html`<em>${labels[i]}</em> ` : ""}<b>${fmtN(values[i])}</b>${unit}</span>
+    <span class="tk-spark-read">${labels[i] != null ? html`<em>${labels[i]}</em> ` : ""}<b>${fmt(values[i])}</b></span>
   </span>`;
 }
 
 const heatStep = (v, max) => (v <= 0 ? 0 : Math.max(1, Math.min(6, Math.ceil((v / Math.max(1, max)) * 6))));
 
 // rows: [{key, label, sub?, values[], dim?}], cols: column labels. Cell = sequential blue by count.
-export function Heatmap({ rows, cols, colTitles, onCell, onRow, active, unit = "篇", labelW = 150 }) {
+export function Heatmap({ rows, cols, colTitles, onCell, onRow, active, fmt = papers, labelW = 150 }) {
   const [ref, w] = useWidth(320);
   const [tip, setTip] = useState(null);
   const max = Math.max(1, ...rows.flatMap((r) => r.values));
@@ -68,18 +72,18 @@ export function Heatmap({ rows, cols, colTitles, onCell, onRow, active, unit = "
           <text x=${labelW - 8} y=${y + ch / 2 + 4} text-anchor="end" class="tk-row-label" onClick=${() => onRow?.(r)}>${r.label.length > 20 ? r.label.slice(0, 19) + "…" : r.label}</text>
           ${r.values.map((v, j) => html`<rect x=${labelW + j * cell} y=${y} width=${cell - gap} height=${ch} rx="3"
             class=${"tk-cell h" + heatStep(v, max)}
-            onMouseEnter=${() => setTip({ x: labelW + j * cell, y: y + ch, body: html`<b>${v} ${unit}</b><span>${r.label} · ${(colTitles || cols)[j]}</span>` })}
+            onMouseEnter=${() => setTip({ x: labelW + j * cell, y: y + ch, body: html`<b>${fmt(v)}</b><span>${r.label} · ${(colTitles || cols)[j]}</span>` })}
             onClick=${() => onCell?.(r, j, v)} />`)}
         </g>`;
       })}
     </svg>`}
-    <div class="tk-heat-legend"><span>0</span>${[1, 2, 3, 4, 5, 6].map((k) => html`<i class=${"tk-cell-key h" + k} />`)}<span>${max} ${unit}</span></div>
+    <div class="tk-heat-legend"><span>0</span>${[1, 2, 3, 4, 5, 6].map((k) => html`<i class=${"tk-cell-key h" + k} />`)}<span>${fmt(max)}</span></div>
     <${Tip} tip=${tip} w=${w} />
   </div>`;
 }
 
 // Columns over categories. series: [{key, label, cls}] stacked bottom-up with a 2px surface gap.
-export function Columns({ data, series, height = 150, onPick, picked, showLegend = true, unit = "篇" }) {
+export function Columns({ data, series, height = 150, onPick, picked, showLegend = true, fmt = papers }) {
   const [ref, w] = useWidth(240);
   const [tip, setTip] = useState(null);
   const tot = (d) => series.reduce((s, k) => s + (d.parts[k.key] || 0), 0);
@@ -93,7 +97,7 @@ export function Columns({ data, series, height = 150, onPick, picked, showLegend
   return html`<div class="tk-cols" ref=${ref}>
     ${showLegend && series.length > 1 && html`<div class="tk-legend">${series.map((s) => html`<span><i class=${"tk-key " + s.cls} />${s.label}</span>`)}</div>`}
     ${w > 0 && html`<svg width=${w} height=${height} onMouseLeave=${() => setTip(null)}>
-      ${ticks.map((t) => html`<line x1=${L} x2=${w} y1=${y(t)} y2=${y(t)} class="tk-grid" /><text x=${L - 6} y=${y(t) + 4} text-anchor="end" class="tk-tick">${t}</text>`)}
+      ${ticks.map((tick) => html`<line x1=${L} x2=${w} y1=${y(tick)} y2=${y(tick)} class="tk-grid" /><text x=${L - 6} y=${y(tick) + 4} text-anchor="end" class="tk-tick">${tick}</text>`)}
       ${data.map((d, i) => {
         const cx = L + i * band + band / 2;
         let base = 0;
@@ -111,7 +115,7 @@ export function Columns({ data, series, height = 150, onPick, picked, showLegend
           return html`<path d=${path} class=${"tk-bar " + s.cls} />`;
         });
         return html`<g class=${"tk-col" + (picked != null && picked !== i ? " dim" : "")}
-          onMouseEnter=${() => setTip({ x: cx, y: y(total) - 4, body: html`<b>${total} ${unit}</b><span>${d.title || d.label}</span>
+          onMouseEnter=${() => setTip({ x: cx, y: y(total) - 4, body: html`<b>${fmt(total)}</b><span>${d.title || d.label}</span>
             ${series.length > 1 && series.map((s) => html`<span class="tk-tip-row"><i class=${"tk-line-key " + s.cls} />${s.label} <b>${d.parts[s.key] || 0}</b></span>`)}` })}
           onClick=${() => onPick?.(i, d)}>
           <rect x=${cx - band / 2} y=${T} width=${band} height=${height - T - B} fill="transparent" />
@@ -127,10 +131,10 @@ export function Columns({ data, series, height = 150, onPick, picked, showLegend
 
 // Ranked items as horizontal bars, value at the tip. items: [[label, n]].
 export function HBars({ items, onPick, picked, max: maxIn, cls = "s1" }) {
-  if (!items?.length) return html`<div class="muted small">暂无</div>`;
+  if (!items?.length) return html`<div class="muted small">${t("track.none_yet")}</div>`;
   const max = maxIn || Math.max(1, ...items.map((x) => x[1]));
   return html`<div class="tk-hbars">${items.map(([label, n]) => html`
-    <button class=${"tk-hbar" + (picked === label ? " on" : "") + (onPick ? "" : " static")} title=${`${label}：${n}`} onClick=${() => onPick?.(label)}>
+    <button class=${"tk-hbar" + (picked === label ? " on" : "") + (onPick ? "" : " static")} title=${t("track.hbar_title", { label, n })} onClick=${() => onPick?.(label)}>
       <span class="tk-hbar-l">${label}</span>
       <span class="tk-hbar-track"><i class=${cls} style=${{ width: Math.max(3, (n / max) * 100) + "%" }} /></span>
       <span class="tk-hbar-n">${n}</span>
@@ -138,8 +142,8 @@ export function HBars({ items, onPick, picked, max: maxIn, cls = "s1" }) {
 }
 
 const initials = (name) => {
-  const parts = (name || "?").replace(/[()（）]/g, " ").split(/[\s-]+/).filter(Boolean);
-  if (/[一-鿿]/.test(name)) return name.slice(0, 1);
+  const parts = (name || "?").replace(/[()（）]/g, " ").split(/[\s-]+/).filter(Boolean);  // i18n-ignore: full-width brackets in names
+  if (/[一-鿿]/.test(name)) return name.slice(0, 1); // i18n-ignore: a Chinese name shows its first character
   return ((parts[0]?.[0] || "") + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase();
 };
 
@@ -158,8 +162,8 @@ export function Avatar({ name, srcs = [], size = 44, square }) {
 
 // Three-tier strip (A/B/C) as an ordinal ramp, with counts in the tooltip.
 export function TierStrip({ tiers, w = 90 }) {
-  const a = tiers.A || 0, b = tiers.B || 0, c = tiers.C || 0, t = a + b + c;
-  if (!t) return html`<span class="tk-tierstrip empty" style=${{ width: w + "px" }} />`;
+  const a = tiers.A || 0, b = tiers.B || 0, c = tiers.C || 0;
+  if (!(a + b + c)) return html`<span class="tk-tierstrip empty" style=${{ width: w + "px" }} />`;
   return html`<span class="tk-tierstrip" style=${{ width: w + "px" }} title=${`Tier A ${a} · B ${b} · C ${c}`}>
     ${[["A", a], ["B", b], ["C", c]].map(([k, n]) => n > 0 && html`<i class=${"t" + k} style=${{ flexGrow: n }} />`)}
   </span>`;

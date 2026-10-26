@@ -24,7 +24,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from . import library, notes, plan, reading, sources
+from . import i18n, library, msgref, notes, plan, reading, sources
 from .config import DATA_DIR, LAB_TRACKER_DIR, TRACKER_DIR
 
 FEED_CACHE = DATA_DIR / "follow_feed"
@@ -241,7 +241,8 @@ def _read_cache(f: Path) -> list[dict[str, Any]]:
 
 
 def _failure(label: str, e: Exception) -> str:
-    return str(e) if isinstance(e, sources.SourceError) else f"{label} 查询失败：{e.__class__.__name__}"
+    """Why a source failed, as a reference: it is kept in the failure record and worded when the page asks."""
+    return e.ref() if isinstance(e, sources.SourceError) else msgref.ref("track.src.query_failed", label=label, cls=e.__class__.__name__)
 
 
 def _backoff_left(fail: Path) -> tuple[float, str]:
@@ -279,14 +280,15 @@ def _source_papers(sid: str, f: dict[str, Any], refresh: bool, today: date) -> t
             pending = progress["total"] - progress["done"] - progress["failed"]
             if progress["failed"]:
                 status.update(ok=False, loading=pending > 0, progress=progress,
-                              error=f"{progress['error']}（已载入 {progress['done']}/{progress['total']} 卷，稍后自动重试）")
+                              error=i18n.t("track.feed.acl_partial", error=msgref.show(progress["error"]),
+                                           done=progress["done"], total=progress["total"]))
             elif pending:
                 status.update(loading=True, progress=progress)
         elif not refresh and cache.exists() and time.time() - cache.stat().st_mtime < CACHE_TTL:
             papers = _read_cache(cache)
         elif not refresh and (left := _backoff_left(fail))[0] > 0:
             papers = _read_cache(cache)
-            status.update(ok=False, stale=bool(papers), error=f"{left[1]}（{int(left[0] // 60) + 1} 分钟后自动重试）")
+            status.update(ok=False, stale=bool(papers), error=i18n.t("track.feed.retry_in", error=msgref.show(left[1]), n=int(left[0] // 60) + 1))
         else:
             try:
                 papers = _fetch(_query(f), 25) if sid == "arxiv" else sources.feed_openreview(f, OPENREVIEW_DAYS, today)
@@ -296,7 +298,7 @@ def _source_papers(sid: str, f: dict[str, Any], refresh: bool, today: date) -> t
             cache.write_text(json.dumps(papers, ensure_ascii=False), encoding="utf-8")
             fail.unlink(missing_ok=True)
     except Exception as e:  # noqa: BLE001
-        status.update(ok=False, error=_failure(label, e))
+        status.update(ok=False, error=msgref.show(_failure(label, e)))
         papers = _read_cache(cache) if sid != "acl" else []
         status["stale"] = bool(papers)
     for p in papers:
@@ -354,7 +356,7 @@ def feed(days: int = 30, per_follow: int = 8, refresh: bool = False, today: date
             p["listed"] = p["listed"] or (listed_title.get(reading.norm_title(p["title"])) if len(reading.norm_title(p["title"])) >= 12 else None)
         statuses = [st for _, st in results]
         out.append({**f, "papers": recent, "sources": statuses,  # every message already names its source
-                    "error": "；".join(st["error"] for st in statuses if st["error"]) or None})
+                    "error": i18n.t("track.list_sep").join(st["error"] for st in statuses if st["error"]) or None})
     return out
 
 
@@ -371,11 +373,11 @@ def _push(cand: dict[str, Any], reason: str, tier: str | None, lines: list[str] 
     title = (cand.get("title") or "").strip()[:300] or None
     if cand.get("arxiv"):  # the DOI / OpenReview / ACL id rides along: a note, or an earlier item, may know the paper by it
         item, what = reading.push(arxiv=cand["arxiv"], ext=sources.ext_of(cand), title=title, reason=reason, source="self",
-                                  pushed_by="追踪 · 捕捉", tier=tier, lines=lines)
+                                  pushed_by=i18n.tv("track.capture.by"), tier=tier, lines=lines)
     else:
         url = cand.get("url") if str(cand.get("url") or "").startswith("https://") else None
         item, what = reading.push(ext=key, title=title, url=url, reason=reason, source="self",
-                                  pushed_by="追踪 · 捕捉", tier=tier, lines=lines)
+                                  pushed_by=i18n.tv("track.capture.by"), tier=tier, lines=lines)
     return {"ok": True, "item": item, "result": what, "resolved": {"key": key, "title": title, "venue": cand.get("venue"),
                                                                     "year": cand.get("year")}}
 
@@ -385,12 +387,12 @@ def _capture_identified(kind: str, ident: str, reason: str, tier: str | None, li
     try:
         cand = sources.resolve(kind, ident)
     except sources.NotFound:
-        return {"ok": False, "error": f"{KIND_LABELS[kind]} 里找不到 {ident}，链接或编号是不是写错了？"}
+        return {"ok": False, "error": i18n.t("track.capture.not_found", source=KIND_LABELS[kind], ident=ident)}
     except sources.SourceError as e:  # the identifier alone is enough to list it; the title can wait
         url = {"openreview": f"https://openreview.net/forum?id={ident}", "acl": f"https://aclanthology.org/{ident}/",
                "doi": f"https://doi.org/{ident}"}[kind]
         cand = sources.candidate(**{kind: ident}, url=url)
-        warning = f"{e}：先按编号记进收件箱，标题没取到"
+        warning = i18n.t("track.capture.title_missing", error=e)
     out = _push(cand, reason, tier, lines)
     return {**out, "warning": warning} if warning else out
 
@@ -400,11 +402,11 @@ def capture(text: str, reason: str, tier: str | None = None, lines: list[str] | 
     inbox. A title is searched and the matches come back as `candidates` to pick from (see
     capture_pick). Anything else is returned as `unresolved` so the UI can hand it to the assistant."""
     text = (text or "").strip()
-    reason = reason or "手动捕捉"
+    reason = reason or i18n.tv("track.capture.manual_reason")  # stored in the reading list: the vault language
     if hit := sources.classify(text):
         kind, ident = hit
         if kind == "arxiv":
-            item, what = reading.push(arxiv=ident, reason=reason, source="self", pushed_by="追踪 · 捕捉", tier=tier, lines=lines)
+            item, what = reading.push(arxiv=ident, reason=reason, source="self", pushed_by=i18n.tv("track.capture.by"), tier=tier, lines=lines)
             return {"ok": True, "item": item, "result": what}
         return _capture_identified(kind, ident, reason, tier, lines)
     if len(text) < 6 or sources.looks_like_url(text):
@@ -413,10 +415,11 @@ def capture(text: str, reason: str, tier: str | None = None, lines: list[str] | 
     if found["candidates"]:
         return {"ok": False, "candidates": found["candidates"], "sources": found["sources"]}
     if not any(s["ok"] for s in found["sources"]):
-        return {"ok": False, "error": "检索来源都没连上：" + "；".join(s["error"] for s in found["sources"]), "sources": found["sources"]}
+        return {"ok": False, "error": i18n.t("track.capture.sources_down", errors=i18n.t("track.list_sep").join(s["error"] for s in found["sources"])),
+                "sources": found["sources"]}
     return {"ok": False, "unresolved": True, "sources": found["sources"]}
 
 
 def capture_pick(cand: dict[str, Any], reason: str, tier: str | None = None, lines: list[str] | None = None) -> dict[str, Any]:
     """Put one match of a title search (or a feed card without an arXiv id) into the reading inbox."""
-    return _push(cand, reason or "手动捕捉", tier, lines)
+    return _push(cand, reason or i18n.tv("track.capture.manual_reason"), tier, lines)

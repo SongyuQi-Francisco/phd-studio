@@ -15,6 +15,7 @@ from typing import Any, Callable
 import httpx
 import uvicorn
 
+from . import i18n
 from .config import STUDIO_DIR
 
 PORT = int(os.environ.get("STUDIO_PORT") or 8770)  # another port only for a second, development window
@@ -46,7 +47,10 @@ def _brand_process() -> None:
 
 
 def _native_menus() -> None:
-    """pywebview's default menu lacks Undo/Redo and a Window menu; add them (⌘Z, ⇧⌘Z, ⌘W, ⌘M)."""
+    """pywebview's default menu lacks Undo/Redo and a Window menu; add them (⌘Z, ⇧⌘Z, ⌘W, ⌘M).
+
+    The titles follow the interface language the app was launched with: the native menu is built once,
+    at startup, so changing the language in Settings shows here after the next launch."""
     try:
         from AppKit import NSApplication, NSEventModifierFlagCommand, NSEventModifierFlagShift, NSMenu, NSMenuItem
         from PyObjCTools import AppHelper
@@ -61,15 +65,17 @@ def _native_menus() -> None:
                      if main.itemAtIndex_(i).submenu() is not None
                      and main.itemAtIndex_(i).submenu().indexOfItemWithTarget_andAction_(None, "copy:") >= 0), None)
         if edit is not None and edit.indexOfItemWithTarget_andAction_(None, "undo:") < 0:
-            redo = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("重做", "redo:", "z")
+            redo = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(i18n.t("desktop.menu.redo"), "redo:", "z")
             redo.setKeyEquivalentModifierMask_(NSEventModifierFlagCommand | NSEventModifierFlagShift)
             edit.insertItem_atIndex_(redo, 0)
-            edit.insertItem_atIndex_(NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("撤销", "undo:", "z"), 0)
+            undo = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(i18n.t("desktop.menu.undo"), "undo:", "z")
+            edit.insertItem_atIndex_(undo, 0)
             edit.insertItem_atIndex_(NSMenuItem.separatorItem(), 2)
-        win = NSMenu.alloc().initWithTitle_("窗口")
-        win.addItemWithTitle_action_keyEquivalent_("最小化", "performMiniaturize:", "m")
-        win.addItemWithTitle_action_keyEquivalent_("关闭窗口", "performClose:", "w")
-        holder = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("窗口", None, "")
+        window_title = i18n.t("desktop.menu.window")
+        win = NSMenu.alloc().initWithTitle_(window_title)
+        win.addItemWithTitle_action_keyEquivalent_(i18n.t("desktop.menu.minimize"), "performMiniaturize:", "m")
+        win.addItemWithTitle_action_keyEquivalent_(i18n.t("desktop.menu.close"), "performClose:", "w")
+        holder = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(window_title, None, "")
         holder.setSubmenu_(win)
         main.addItem_(holder)
         NSApplication.sharedApplication().setWindowsMenu_(win)

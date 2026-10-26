@@ -1,0 +1,14 @@
+{
+  "no_pdf": "找不到 PDF：{error}",
+  "shutting_down": "工作台正在关闭",
+  "start_failed": "pdf2zh 启动失败：{error}",
+  "not_queued": "队列里没有这篇",
+  "cant_retry": "这篇没有失败记录，或已在队列里",
+  "bad_days": "天数只能是 {days} 之一",
+  "queue.enter": "进入 {tier}",
+  "queue.backfill": "补齐 {tier}",
+  "queue.retry": "重试",
+  "queue.failed": "失败",
+  "queue.made": "已有双语 PDF",
+  "queue.left": "已不在 {tiers}"
+}

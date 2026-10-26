@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel
 
-from . import bilingual_queue
+from . import bilingual_queue, i18n
 
 
 @asynccontextmanager
@@ -54,12 +54,12 @@ def queue_cleanup(req: CleanupReq) -> dict[str, Any]:
 @router.delete("/{key}")
 def queue_remove(key: str) -> dict[str, Any]:
     if not bilingual_queue.remove(key):
-        raise HTTPException(404, "队列里没有这篇")
+        raise HTTPException(404, i18n.t("bilingual.not_queued"))
     return bilingual_queue.snapshot()
 
 
 @router.post("/{key}/retry")
 def queue_retry(key: str) -> dict[str, Any]:
     if not bilingual_queue.retry(key):
-        raise HTTPException(409, "这篇没有失败记录，或已在队列里")
+        raise HTTPException(409, i18n.t("bilingual.cant_retry"))
     return bilingual_queue.snapshot()

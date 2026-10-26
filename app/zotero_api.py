@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel
 
-from . import library, zotero_push
+from . import i18n, library, zotero_push
 from .config import load_settings
 
 
@@ -28,7 +28,7 @@ def _paper_or_404(key: str) -> str:
     try:
         library.validate(key)
     except FileNotFoundError:
-        raise HTTPException(404, f"没有这篇论文的笔记：{key}")
+        raise HTTPException(404, i18n.t("zotero.no_paper", key=key))
     return key
 
 
@@ -70,7 +70,7 @@ def write_link(stem: str, req: LinkReq) -> dict[str, Any]:
     try:
         return zotero_push.write_link(stem, req.key, req.base)
     except FileNotFoundError:
-        raise HTTPException(404, "没有这篇笔记")
+        raise HTTPException(404, i18n.t("zotero.no_note"))
     except LookupError as e:
         raise HTTPException(409, str(e))
     except ValueError as e:
@@ -85,8 +85,8 @@ class OpenReq(BaseModel):
 def open_in_zotero(req: OpenReq) -> dict[str, bool]:
     """Select the item in the Zotero app. Done here because the desktop window can't follow zotero:// links."""
     if not re.fullmatch(r"[A-Z0-9]{8}", req.key):
-        raise HTTPException(400, "Zotero 条目编号不对")
+        raise HTTPException(400, i18n.t("zotero.bad_key"))
     if sys.platform != "darwin":
-        raise HTTPException(501, "只在 macOS 上支持")
+        raise HTTPException(501, i18n.t("zotero.mac_only"))
     subprocess.run(["open", zotero_push.select_link(req.key)], check=False, timeout=10)
     return {"ok": True}

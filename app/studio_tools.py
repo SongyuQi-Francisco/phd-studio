@@ -55,6 +55,25 @@ MAP_OPS = ("ops 是一批操作（按顺序；新节点用 ref=\"$名字\"，后
            "证据 target：paper=论文笔记名，note/file=vault 相对路径，url=链接。")
 
 
+IDEA_STATUS = ("new", "kept", "promoted", "dropped", "merged")
+
+
+def _idea_status(status: Any) -> str:
+    """An idea's status as the change card words it; anything unknown is shown as it is."""
+    if status in IDEA_STATUS:
+        return i18n.t(f"tools.idea_status.{status}")  # i18n-keys: tools.idea_status.{new,kept,promoted,dropped,merged}
+    return str(status)
+
+
+def _push_result(what: str) -> str:
+    """What reading.push answered (English, the same text the command line prints), in the interface language
+    for the change card; text it does not know is shown as it is."""
+    for prefix, key in (("added", "added"), ("already listed", "listed"), ("already read", "read"), ("dismissed earlier", "dismissed")):
+        if what.startswith(prefix):
+            return i18n.t(f"tools.reading_result.{key}")  # i18n-keys: tools.reading_result.{added,listed,read,dismissed}
+    return what
+
+
 def _map_slug(key: str) -> str | None:
     """A map by slug, title or research line name."""
     slugs = rmap_project.slugs()
@@ -122,11 +141,11 @@ def _tools(emit: Callable[[dict[str, Any]], Awaitable[None]]) -> list[SdkMcpTool
         try:
             item, what = reading.push(paper=a.get("paper"), arxiv=a.get("arxiv"), ext=a.get("ext"), url=a.get("url"),
                                       title=a.get("title"),
-                                      reason=a["reason"], source="claude", pushed_by="工作台助手",
+                                      reason=a["reason"], source="claude", pushed_by=i18n.tv("tools.pushed_by"),
                                       tier=a.get("tier"), lines=a.get("lines"), due=a.get("due"))
         except reading.ReadingError as e:
             return _err(str(e))
-        await changed("reading", f"阅读清单：{reading.key_of(item)}（{what}）", item)
+        await changed("reading", i18n.t("tools.changed.reading_push", key=reading.key_of(item), what=_push_result(what)), item)
         return _ok({"result": what, "item": item})
 
     @tool("reading_list", "查看阅读清单，可按 status 过滤（inbox/queued/reading/done/snoozed/dismissed）。",
@@ -145,7 +164,7 @@ def _tools(emit: Callable[[dict[str, Any]], Awaitable[None]]) -> list[SdkMcpTool
             item = reading.update(a["id"], {k: v for k, v in a.items() if k != "id"})
         except reading.ReadingError as e:
             return _err(str(e))
-        await changed("reading", f"阅读清单：已更新 {reading.key_of(item)}", item)
+        await changed("reading", i18n.t("tools.changed.reading_update", key=reading.key_of(item)), item)
         return _ok(item)
 
     @tool("milestone_add", "添加个人里程碑 / Gate / Kill criteria 检查点。date 用 YYYY-MM-DD；kind: milestone|gate|kill|deadline。",
@@ -156,7 +175,7 @@ def _tools(emit: Callable[[dict[str, Any]], Awaitable[None]]) -> list[SdkMcpTool
                                      notes=a.get("notes"))
         except ValueError as e:
             return _err(str(e))
-        await changed("plan", f"里程碑：{rec['title']}（{rec['date']}）", rec)
+        await changed("plan", i18n.t("tools.changed.milestone_add", title=rec["title"], date=rec["date"]), rec)
         return _ok(rec)
 
     @tool("milestone_update", "修改里程碑：title、date、status(todo/doing/done/warn)、kind、line、notes；delete=true 删除。",
@@ -166,12 +185,12 @@ def _tools(emit: Callable[[dict[str, Any]], Awaitable[None]]) -> list[SdkMcpTool
         try:
             if a.get("delete"):
                 plan.delete("milestones", a["id"])
-                await changed("plan", "里程碑：已删除", {"id": a["id"]})
+                await changed("plan", i18n.t("tools.changed.milestone_deleted"), {"id": a["id"]})
                 return _ok({"deleted": a["id"]})
             rec = plan.update("milestones", a["id"], {k: v for k, v in a.items() if k not in ("id", "delete")})
         except (KeyError, ValueError) as e:
             return _err(str(e))
-        await changed("plan", f"里程碑：已更新 {rec['title']}", rec)
+        await changed("plan", i18n.t("tools.changed.milestone_update", title=rec["title"]), rec)
         return _ok(rec)
 
     @tool("target_add", "为一篇在研论文设定目标会议和届次（可带备选）。venue 用会议简称，如 SIGIR、ACL；edition 是会议年份（整数，如 2027），"
@@ -185,7 +204,8 @@ def _tools(emit: Callable[[dict[str, Any]], Awaitable[None]]) -> list[SdkMcpTool
                                   notes=a.get("notes"), edition=a.get("edition"), deadline=a.get("deadline"))
         except ValueError as e:
             return _err(str(e))
-        await changed("plan", f"目标：{rec['title']} → {rec['venue'].upper()}" + (f" {rec['edition']}" if rec.get("edition") else ""), rec)
+        venue = rec["venue"].upper() + (f" {rec['edition']}" if rec.get("edition") else "")
+        await changed("plan", i18n.t("tools.changed.target_add", title=rec["title"], venue=venue), rec)
         return _ok(rec)
 
     @tool("target_update", "修改投稿目标：venue、edition（年份，0 表示改回自动）、deadline（某一轮截稿的日期，空字符串表示整届）、alternatives、"
@@ -197,12 +217,12 @@ def _tools(emit: Callable[[dict[str, Any]], Awaitable[None]]) -> list[SdkMcpTool
         try:
             if a.get("delete"):
                 plan.delete("targets", a["id"])
-                await changed("plan", "目标：已删除", {"id": a["id"]})
+                await changed("plan", i18n.t("tools.changed.target_deleted"), {"id": a["id"]})
                 return _ok({"deleted": a["id"]})
             rec = plan.update("targets", a["id"], {k: v for k, v in a.items() if k not in ("id", "delete")})
         except (KeyError, ValueError) as e:
             return _err(str(e))
-        await changed("plan", f"目标：已更新 {rec['title']}", rec)
+        await changed("plan", i18n.t("tools.changed.target_update", title=rec["title"]), rec)
         return _ok(rec)
 
     @tool("venue_search", "在 CORE(ICORE2026)+CCF 会议库里查会议：等级、下一个截稿（UTC）、链接、录用率；有官方核实的赛道/页数信息也一并返回。",
@@ -219,7 +239,8 @@ def _tools(emit: Callable[[dict[str, Any]], Awaitable[None]]) -> list[SdkMcpTool
             res = plan.watch(a["venue"], a.get("watch", True))
         except ValueError as e:
             return _err(str(e))
-        await changed("plan", f"{'关注' if res['watched'] else '取消关注'}：{res['venue'].upper()}", res)
+        await changed("plan", i18n.t("tools.changed.venue_watch" if res["watched"] else "tools.changed.venue_unwatch",
+                                      venue=res["venue"].upper()), res)
         return _ok(res)
 
     @tool("venue_details_propose",
@@ -236,8 +257,9 @@ def _tools(emit: Callable[[dict[str, Any]], Awaitable[None]]) -> list[SdkMcpTool
                                        a.get("remove") or [])
         except ValueError as e:
             return _err(str(e))
-        what = f"{prop['changes']} 处改动" if prop["changes"] else "没有变化，只更新核对日期"
-        await changed("venues", f"会议核对：{prop['acronym']} 的更新提案待你确认（{what}）", prop)
+        what = (i18n.t("tools.changed.venue_check_changes", n=prop["changes"]) if prop["changes"]
+                else i18n.t("tools.changed.venue_check_none"))
+        await changed("venues", i18n.t("tools.changed.venue_check", acronym=prop["acronym"], what=what), prop)
         return _ok({"proposal": prop["id"], "changes": prop["diff"],
                     "note": "已提交，等用户在会议详情页确认后才会写入；你不能应用它。"})
 
@@ -248,7 +270,7 @@ def _tools(emit: Callable[[dict[str, Any]], Awaitable[None]]) -> list[SdkMcpTool
             rec = plan.add_idea(a["text"], line=a.get("line"), tags=a.get("tags"), paper=a.get("paper"), source="assistant")
         except ValueError as e:
             return _err(str(e))
-        await changed("ideas", f"想法：{rec['text'][:40]}", rec)
+        await changed("ideas", i18n.t("tools.changed.idea_add", text=rec["text"][:40]), rec)
         return _ok(rec)
 
     @tool("idea_update", "修改想法：status(new/kept/promoted/dropped)、line、text、note（整理成的 idea 笔记的 vault 路径）；"
@@ -267,7 +289,7 @@ def _tools(emit: Callable[[dict[str, Any]], Awaitable[None]]) -> list[SdkMcpTool
             return _err(f"no idea {a['id']}")
         except ValueError as e:
             return _err(str(e))
-        await changed("ideas", f"想法：已更新（{rec.get('status')}）", rec)
+        await changed("ideas", i18n.t("tools.changed.idea_update", status=_idea_status(rec.get("status"))), rec)
         return _ok(rec)
 
     @tool("idea_merge", "把两条以上的想法合并成一条（原想法标为 merged，保留来源，可恢复）。ids 至少两个；"
@@ -280,7 +302,7 @@ def _tools(emit: Callable[[dict[str, Any]], Awaitable[None]]) -> list[SdkMcpTool
             return _err(f"no idea {e.args[0]}")
         except ValueError as e:
             return _err(str(e))
-        await changed("ideas", f"想法：已合并 {len(rec['merged_from'])} 条", rec)
+        await changed("ideas", i18n.t("tools.changed.idea_merge", n=len(rec["merged_from"])), rec)
         return _ok(rec)
 
     @tool("follow", "关注一个关键词或学者（追踪页会实时查 arXiv 新论文）；remove=true 取消关注。kind: keyword|person。",
@@ -292,12 +314,13 @@ def _tools(emit: Callable[[dict[str, Any]], Awaitable[None]]) -> list[SdkMcpTool
                 if not hit:
                     return _err("没有这个关注")
                 tracking.remove_follow(hit["id"])
-                await changed("track", f"取消关注：{a['value']}", hit)
+                await changed("track", i18n.t("tools.changed.follow_remove", value=a["value"]), hit)
                 return _ok({"removed": hit["id"]})
             rec = tracking.add_follow(a["kind"], a["value"], a.get("note"))
         except ValueError as e:
             return _err(str(e))
-        await changed("track", f"关注{'学者' if a['kind'] == 'person' else '关键词'}：{a['value']}", rec)
+        await changed("track", i18n.t("tools.changed.follow_person" if a["kind"] == "person" else "tools.changed.follow_keyword",
+                                       value=a["value"]), rec)
         return _ok(rec)
 
     @tool("tracker_latest", "最近一次每周实验室追踪的结果：Tier 统计、Claude 周报分析、论文列表。", _obj({}, []))
@@ -363,7 +386,7 @@ def _tools(emit: Callable[[dict[str, Any]], Awaitable[None]]) -> list[SdkMcpTool
             return _err(e.args[0] if e.args else str(e))
         n = sum(1 for e in prop["events"] if e["kind"] != "log")
         title = (prop.get("create") or {}).get("title") or rmap_project.summary(rmap_project.get(prop["slug"]))["title"]
-        await changed("rmap", f"研究地图：{title} 的{'第一版草稿' if prop['create'] else '更新提议'}待你确认（{n} 处改动）", prop)
+        await changed("rmap", i18n.t("tools.changed.map_seed" if prop["create"] else "tools.changed.map_update", title=title, n=n), prop)
         return _ok({"proposal": prop["id"], "changes": rmap_proposals.describe(prop),
                     "note": "已提交，等用户在研究地图页确认后才会写入；你不能应用它。"})
 
@@ -401,7 +424,7 @@ def _tools(emit: Callable[[dict[str, Any]], Awaitable[None]]) -> list[SdkMcpTool
         if out.get("is_error") or "_prop" not in out:
             return out
         prop, n, title = out.pop("_prop")
-        await changed("rmap", f"研究地图：{title} 有 {n} 个同行待你确认", prop)
+        await changed("rmap", i18n.t("tools.changed.map_peers", title=title, n=n), prop)
         return out
 
     @tool("map_record_result",

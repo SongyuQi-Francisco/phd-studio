@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from . import idea_ops
+from . import i18n, idea_ops
 
 router = APIRouter(prefix="/api/ideas")
 
@@ -14,7 +14,7 @@ def _run(fn, *args, **kwargs) -> Any:
     try:
         return fn(*args, **kwargs)
     except KeyError as e:
-        raise HTTPException(404, f"没有这条想法：{e.args[0]}")
+        raise HTTPException(404, i18n.t("api.idea_not_found", id=e.args[0]))
     except ValueError as e:
         raise HTTPException(400, str(e))
 

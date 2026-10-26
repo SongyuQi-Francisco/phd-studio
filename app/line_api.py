@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from . import line_chat
+from . import i18n, line_chat
 
 router = APIRouter(prefix="/api/lines")
 
@@ -14,7 +14,7 @@ def _line(key: str) -> dict[str, Any]:
     try:
         return line_chat.resolve(key)
     except FileNotFoundError:
-        raise HTTPException(404, "没有这条研究线")
+        raise HTTPException(404, i18n.t("line.not_found"))
 
 
 @router.get("/{key}")

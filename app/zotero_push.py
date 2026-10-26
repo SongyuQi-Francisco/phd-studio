@@ -39,7 +39,7 @@ from typing import Any
 import httpx
 import yaml
 
-from . import bilingual, library, reading, sources
+from . import bilingual, i18n, library, reading, sources
 from .config import DATA_DIR, PAPERS_DIR, READING_LIST, SECRETS_DIR, VAULT_DIR, load_settings, secret
 from .excerpt import _locked as _note_locked, _read as _read_note, _write as _write_note
 
@@ -162,7 +162,7 @@ def _index(_stamp: float) -> dict[str, Any]:
     try:
         out = library.read_zotero(_build_index)  # a bad copy heals with one fresh copy; a bad original fails closed
     except (sqlite3.Error, OSError) as e:
-        raise SnapshotError(f"读不了本机 Zotero 数据库快照（{e.__class__.__name__}: {e}），为免重复，先不添加") from None
+        raise SnapshotError(i18n.t("zotero.snapshot", error=f"{e.__class__.__name__}: {e}")) from None
     return _empty_index() if out is None else out  # no local Zotero database at all (only the Web API is used then)
 
 
@@ -272,7 +272,7 @@ def _arxiv_fetch(aid: str) -> dict[str, Any]:
     r.raise_for_status()
     entry = re.search(r"<entry>(.*?)</entry>", r.text, re.S)
     if not entry or "<title>Error</title>" in entry.group(1):
-        raise LookupError("arXiv 没有这个编号")
+        raise LookupError(i18n.t("zotero.no_arxiv"))
     e = entry.group(1)
 
     def tag(name: str) -> str:
@@ -285,7 +285,7 @@ def _arxiv_fetch(aid: str) -> dict[str, Any]:
 def _crossref_fetch(doi: str) -> dict[str, Any]:
     r = httpx.get(f"{CROSSREF}/works/{doi}", timeout=10, headers={"User-Agent": _UA})
     if r.status_code == 404:
-        raise LookupError("Crossref 没有这个 DOI")
+        raise LookupError(i18n.t("zotero.no_crossref"))
     r.raise_for_status()
     m = r.json()["message"]
     parts = ((m.get("issued") or {}).get("date-parts") or [[]])[0]
@@ -358,7 +358,7 @@ def enrich(meta: dict[str, Any]) -> list[str]:
         if ident := meta.get(scheme):
             c, err = _cached(scheme, ident, lambda: fetch(ident))
             if err:
-                warnings.append(f"没取到{'ACL Anthology' if scheme == 'acl' else ' OpenReview '}元数据（{err}）")
+                warnings.append(i18n.t("zotero.warn.acl" if scheme == "acl" else "zotero.warn.openreview", error=err))
             if meta["title"] == meta["key"] and c.get("title"):
                 meta["title"] = c["title"]
             meta["authors"] = meta["authors"] or c.get("authors", [])
@@ -370,12 +370,12 @@ def enrich(meta: dict[str, Any]) -> list[str]:
     if doi := _published_doi(meta):
         meta["crossref"], err = _cached("doi", doi, lambda: _crossref_fetch(doi))
         if err:
-            warnings.append(f"没取到 DOI 元数据（{err}），按笔记里的会议名填写")
+            warnings.append(i18n.t("zotero.warn.doi", error=err))
     untitled = meta["title"] == meta["key"]
     if meta["arxiv"] and (untitled or not meta["authors"]) and not meta["crossref"].get("creators"):
         extra, err = _cached("arxiv", meta["arxiv"], lambda: _arxiv_fetch(meta["arxiv"]))
         if err:
-            warnings.append(f"没取到 arXiv 元数据（{err}），条目可能只有标题")
+            warnings.append(i18n.t("zotero.warn.arxiv", error=err))
         meta["title"] = extra.get("title") or meta["title"] if untitled else meta["title"]
         meta["authors"] = meta["authors"] or extra.get("authors", [])
         meta["abstract"] = extra.get("abstract", "")
@@ -477,7 +477,7 @@ def _connector(path: str, **kw: Any) -> httpx.Response:
         return httpx.post(CONNECTOR + path, headers=headers, timeout=kw.pop("timeout", 20), trust_env=False, **kw)
     except httpx.HTTPError as e:
         _ping_cache["at"] = 0.0
-        raise ZoteroError(f"连不上 Zotero 桌面端（{e.__class__.__name__}）") from None
+        raise ZoteroError(i18n.t("zotero.no_desktop", error=e.__class__.__name__)) from None
 
 
 _web_user: dict[str, str] = {}
@@ -506,13 +506,13 @@ def _web(method: str, path: str, key: str, **kw: Any) -> httpx.Response:
     try:
         r = fn(WEB_API + path, headers=headers, timeout=30, **kw)
     except httpx.HTTPError as e:
-        raise ZoteroError(f"连不上 Zotero 网络服务（{e.__class__.__name__}）") from None
+        raise ZoteroError(i18n.t("zotero.no_web", error=e.__class__.__name__)) from None
     if r.status_code == 403:
-        raise ZoteroError("Zotero 密钥没有这个权限：在 zotero.org/settings/keys 给它勾上 Allow library access 和 Allow write access")
+        raise ZoteroError(i18n.t("zotero.key_forbidden"))
     if r.status_code in (429, 503):
-        raise ZoteroError("Zotero 服务器忙，稍后再试")
+        raise ZoteroError(i18n.t("zotero.busy"))
     if r.status_code >= 400:
-        raise ZoteroError(f"Zotero 网络服务返回 HTTP {r.status_code}")
+        raise ZoteroError(i18n.t("zotero.web_status", status=r.status_code))
     return r
 
 
@@ -545,7 +545,7 @@ def _target_collection() -> tuple[dict[str, Any] | None, str | None]:
     if not want:
         return None, None
     hit = next((c for c in snapshot()["collections"] if c["key"] == want), None)
-    return hit, None if hit else "设置里选的 Zotero 分类已经不在了，这次放在了库的根目录"
+    return hit, None if hit else i18n.t("zotero.collection_gone")
 
 
 def _await_key(ids: set[str], wait: float = 8.0) -> str | None:
@@ -566,7 +566,7 @@ def _push_connector(meta: dict[str, Any], item: dict[str, Any]) -> tuple[str | N
     session = uuid.uuid4().hex
     r = _connector("/connector/saveItems", json={"sessionID": session, "uri": item.get("url", ""), "items": [{**item, "id": "studio"}]})
     if r.status_code != 201:
-        raise ZoteroError(f"Zotero 桌面端没有保存（HTTP {r.status_code}）")
+        raise ZoteroError(i18n.t("zotero.not_saved", status=r.status_code))
     coll, warn = _target_collection()
     warnings += [warn] if warn else []
     lid = snapshot()["library"]
@@ -574,7 +574,7 @@ def _push_connector(meta: dict[str, Any], item: dict[str, Any]) -> tuple[str | N
     if target:
         r = _connector("/connector/updateSession", json={"sessionID": session, "target": target, "tags": []})
         if r.status_code != 200:
-            warnings.append("没能放进所选分类，条目在 Zotero 当前选中的位置")
+            warnings.append(i18n.t("zotero.warn.not_in_collection"))
     # Like the browser connector: attach the PDF itself only when Zotero is set to save associated files,
     # and only a PDF that is already on this Mac (nothing is downloaded just for this).
     pdf = library.local_pdf(meta["key"])
@@ -584,7 +584,7 @@ def _push_connector(meta: dict[str, Any], item: dict[str, Any]) -> tuple[str | N
             "X-Metadata": json.dumps({"sessionID": session, "parentItemID": "studio", "title": "Full Text PDF",
                                       "url": meta["pdf_url"] or meta["url"]})})
         if r.status_code not in (200, 201):
-            warnings.append("PDF 没能附上")
+            warnings.append(i18n.t("zotero.warn.no_pdf"))
     try:
         return _await_key(meta["ids"]), warnings
     except SnapshotError:  # saved all the same: recorded as pending, so it isn't added twice
@@ -594,7 +594,7 @@ def _push_connector(meta: dict[str, Any], item: dict[str, Any]) -> tuple[str | N
 def _push_web(meta: dict[str, Any], item: dict[str, Any]) -> tuple[str, list[str]]:
     creds = web_creds()
     if not creds:
-        raise ZoteroError("没有可用的 Zotero 网络密钥")
+        raise ZoteroError(i18n.t("zotero.no_web_key"))
     key, uid = creds
     coll, warn = _target_collection()
     body = {**item, "collections": [coll["key"]] if coll else []}
@@ -603,7 +603,7 @@ def _push_web(meta: dict[str, Any], item: dict[str, Any]) -> tuple[str, list[str
     zkey = ((data.get("successful") or {}).get("0") or {}).get("key") or (data.get("success") or {}).get("0")
     if not zkey:
         failed = ((data.get("failed") or {}).get("0") or {}).get("message", "")
-        raise ZoteroError(f"Zotero 没有接受这条{('：' + failed) if failed else ''}")
+        raise ZoteroError(i18n.t("zotero.rejected_why", why=failed) if failed else i18n.t("zotero.rejected"))
     warnings = [warn] if warn else []
     if meta["pdf_url"]:  # a link to the PDF, not a copy: uses no Zotero storage
         try:
@@ -611,7 +611,7 @@ def _push_web(meta: dict[str, Any], item: dict[str, Any]) -> tuple[str, list[str
                 "itemType": "attachment", "linkMode": "linked_url", "parentItem": zkey, "title": "PDF",
                 "url": meta["pdf_url"], "contentType": "application/pdf"}])
         except ZoteroError:
-            warnings.append("PDF 链接没能附上")
+            warnings.append(i18n.t("zotero.warn.no_pdf_link"))
     return zkey, warnings
 
 
@@ -659,7 +659,7 @@ def push(key: str) -> dict[str, Any]:
         if meta["zotero_key"]:
             return {"state": "linked", "key": meta["zotero_key"], "link": select_link(meta["zotero_key"]), "note": meta["note"]}
         if not meta["ids"]:
-            raise ZoteroError("这篇没有 DOI、arXiv 号或链接，没法在 Zotero 里查重，先在笔记里补上来源")
+            raise ZoteroError(i18n.t("zotero.no_ids"))
         local = find_local(meta["ids"])  # raises SnapshotError: no dedupe, no adding
         found = local or _remote_find(meta["ids"], meta)
         if found:
@@ -668,12 +668,12 @@ def push(key: str) -> dict[str, Any]:
             return _with_links({"state": "exists", "key": found, "note": meta["note"]}, meta)
         if wait := pending(meta["ids"]):
             return {"state": "pending", "key": None, "via": wait.get("via"), "note": meta["note"],
-                    "warnings": ["不久前已经存进 Zotero，还在等它写进数据库，所以没有再加一次"]}
+                    "warnings": [i18n.t("zotero.warn.pending")]}
         up = desktop()["up"]
         if up and snapshot()["library"] is None:
-            raise ZoteroError("Zotero 桌面端在运行，但在 studio.toml 的 zotero 路径下找不到它的数据库，没法查重，先不添加")
+            raise ZoteroError(i18n.t("zotero.no_database"))
         if not up and not web_creds():
-            raise ZoteroError("Zotero 桌面端没在运行，也没有配置网络密钥")
+            raise ZoteroError(i18n.t("zotero.not_running"))
         warnings = enrich(meta)
         item = build_item(meta)
         via = "desktop" if up else "web"
@@ -681,7 +681,7 @@ def push(key: str) -> dict[str, Any]:
         warnings += more
         _record(key, zkey, meta["ids"], via)  # zkey None: pending, so a second click doesn't add it again
         if not zkey:
-            warnings.append("已存进 Zotero，还没读到条目编号；稍后会自动认出，不会重复添加")
+            warnings.append(i18n.t("zotero.warn.saved_pending"))
         return _with_links({"state": "added", "key": zkey, "via": via, "warnings": warnings, "note": meta["note"]}, meta)
 
 
@@ -724,16 +724,16 @@ def write_link(stem: str, zkey: str, base: str) -> dict[str, Any]:
     """Write the confirmed line. `base` is the digest the preview was made from: if the note changed
     since, nothing is written and the caller has to show the change again."""
     if not re.fullmatch(r"[A-Z0-9]{8}", zkey or ""):
-        raise ValueError("Zotero 条目编号不对")
+        raise ValueError(i18n.t("zotero.bad_key"))
     path = library.note_path(stem)
     line = f"zotero: {select_link(zkey)}"
     with _note_locked():
         src = _read_note(path)
         if _digest(src) != base:
-            raise LookupError("笔记刚刚被改过，请重新确认要写入的那一行")
+            raise LookupError(i18n.t("zotero.note_changed"))
         new, old = _linked_text(src, line)
         if old and old.split(":", 1)[1].strip() and old != line:  # an empty "zotero:" placeholder gets filled
-            raise LookupError("笔记里已经有另一个 Zotero 链接，没有改动")
+            raise LookupError(i18n.t("zotero.other_link"))
         if new != src:
             _write_note(path, new)
     return {"stem": stem, "line": line, "written": new != src}

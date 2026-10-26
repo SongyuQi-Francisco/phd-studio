@@ -15,7 +15,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import tempfile
 import threading
 import time
@@ -25,7 +24,7 @@ from typing import Any
 
 import httpx
 
-from . import notes, scholar_capture, scholar_rank as R, scholars
+from . import i18n, msgref, notes, scholar_capture, scholar_rank as R, scholars
 from .config import DATA_DIR, DEVICE, LAB_TRACKER_DIR
 from .store import Store
 
@@ -92,11 +91,16 @@ def excluded() -> list[dict[str, Any]]:
 def exclude(person: dict[str, Any], reason: str) -> dict[str, Any]:
     rec = {k: person.get(k) for k in ("name", "scholar_id", "openalex") if person.get(k)}
     if not rec.get("name"):
-        raise ValueError("需要姓名")
+        raise ValueError(i18n.t("scholars.refresh.need_name"))
     for e in excluded():
         if R.same_person(e, rec):
-            return e
-    return store.add("excluded", {**rec, "reason": reason or "手动排除"}, "x")
+            return _shown_excluded(e)
+    # kept in the shared vault file as {code, params, text} (msgref.persist): worded when the page reads it
+    return _shown_excluded(store.add("excluded", {**rec, "reason": reason or msgref.persist(msgref.ref("scholars.refresh.manual_exclude"))}, "x"))
+
+
+def _shown_excluded(rec: dict[str, Any]) -> dict[str, Any]:
+    return {**rec, "reason": msgref.show(rec.get("reason"))}
 
 
 def unexclude(xid: str) -> None:
@@ -111,7 +115,7 @@ def lab_hints() -> list[dict[str, Any]]:
 def set_lab_hint(person: dict[str, Any], lab_id: str | None, lab_name: str | None) -> dict[str, Any]:
     rec = {k: person.get(k) for k in ("name", "scholar_id", "openalex") if person.get(k)}
     if not rec.get("name"):
-        raise ValueError("需要姓名")
+        raise ValueError(i18n.t("scholars.refresh.need_name"))
     old = next((h for h in lab_hints() if R.same_person(h, rec)), None)
     if not lab_id and not lab_name:  # "no lab": forget the hint
         if old:
@@ -131,11 +135,14 @@ def _now() -> str:
 
 # ---------- snapshots ----------
 
-def save_snapshot(entries: list[dict[str, Any]], source: str, day: str | None = None) -> dict[str, Any]:
-    snap = {"date": day or date.today().isoformat(), "source": source, "saved": _now(), "entries": entries}
-    name = f"{snap['date']}-{re.sub(r'[^a-z]+', '-', source.lower()).strip('-')[:20] or 'snapshot'}.json"
+def save_snapshot(entries: list[dict[str, Any]], source: str, day: str | None = None, *, slug: str = "snapshot",
+                  via: str | None = None) -> dict[str, Any]:
+    """`source` is a msgref reference (worded when shown); `via` = "app" marks a read of the Scholar window."""
+    snap = {"date": day or date.today().isoformat(), "source": source, "saved": _now(), "entries": entries,
+            **({"via": via} if via else {})}
+    name = f"{snap['date']}-{slug}.json"
     _atomic_json(SNAPS / name, snap)
-    return {"file": name, "date": snap["date"], "source": source, "count": len(entries)}
+    return {"file": name, "date": snap["date"], "source": msgref.show(source), "count": len(entries)}
 
 
 def import_snapshot(text: str) -> dict[str, Any]:
@@ -148,8 +155,8 @@ def import_snapshot(text: str) -> dict[str, Any]:
         parsed = R.parse_snapshot_md(text)
         entries, day = parsed["entries"], parsed["date"]
     if not entries:
-        raise ValueError("没有读到任何学者行（格式：'12. 姓名 · Scholar id · 65k · 机构 · 备注'）")
-    return save_snapshot(entries, "Google Scholar（导入）", day)
+        raise ValueError(i18n.t("scholars.refresh.no_rows"))
+    return save_snapshot(entries, msgref.ref("scholars.refresh.src_import"), day, slug="google-scholar-import")
 
 
 def latest_snapshot() -> dict[str, Any] | None:
@@ -214,7 +221,7 @@ def resolve(c: dict[str, Any], r: dict[str, Any] | None = None) -> dict[str, Any
     best, conf = R.pick_author(d.get("results", []), c["name"], c.get("affiliation"),
                                (r or rules()).get("openalex_topics") or [])
     if best is None or conf != "high":
-        why = "OpenAlex 里找不到这个人" if best is None else "同名多人、机构对不上，身份不确定（需要时在管理名单里手动加入）"
+        why = msgref.ref("scholars.refresh.no_author") if best is None else msgref.ref("scholars.refresh.ambiguous")
         out = {"unresolved": why, "ts": time.time()}
     else:
         out = {"openalex": best["id"].rsplit("/", 1)[-1], "oa_name": best["display_name"],
@@ -308,15 +315,31 @@ def status() -> dict[str, Any]:
         nxt = (date.fromisoformat(base) + timedelta(days=r["cadence_days"])).isoformat() if last else date.today().isoformat()
     pending = next((x for x in runs if x.get("status") == "proposed"), None)
     if pending:  # the Store drops empty lists on write
-        pending = {**pending, **{k: pending.get(k) or [] for k in ("ranking", "alternates", "skipped", "enter", "leave", "moves")}}
+        pending = _shown_run({**pending, **{k: pending.get(k) or [] for k in ("ranking", "alternates", "skipped", "enter", "leave", "moves")}})
     att = _attempts()
-    return {"job": dict(_job), "rules": r, "excluded": excluded(), "pending": pending, "lab_hints": lab_hints(),
-            "device": DEVICE, "attempts": {"failures": att.get("failures") or 0, "error": att.get("error"),
+    return {"job": _shown_job(), "rules": r, "excluded": [_shown_excluded(x) for x in excluded()], "pending": pending,
+            "lab_hints": lab_hints(),
+            "device": DEVICE, "attempts": {"failures": att.get("failures") or 0, "error": msgref.show(att.get("error")),
                                            "next_try": datetime.fromtimestamp(att["next_try"]).isoformat(timespec="minutes")
                                            if att.get("failures") else None},
-            "history": [{k: x.get(k) for k in ("id", "created", "source", "status", "applied_at")} for x in runs[:12]],
-            "snapshot": {k: snap.get(k) for k in ("date", "source", "file")} | {"count": len(snap.get("entries", []))} if snap else None,
+            "history": [{k: msgref.show(x.get(k)) if k == "source" else x.get(k)
+                         for k in ("id", "created", "source", "status", "applied_at")} for x in runs[:12]],
+            "snapshot": {k: msgref.show(snap.get(k)) if k == "source" else snap.get(k)
+                         for k in ("date", "source", "file")} | {"count": len(snap.get("entries", []))} if snap else None,
             "capture": scholar_capture.available(), "next_auto": nxt}
+
+
+def _shown_job() -> dict[str, Any]:
+    """The job as the page reads it: its step, source and error are kept as msgref references."""
+    return {**_job, **{k: msgref.show(_job[k]) for k in ("current", "source", "error") if k in _job}}
+
+
+def _shown_run(run: dict[str, Any]) -> dict[str, Any]:
+    """A stored suggestion with its source and every reason worded in this Mac's interface language."""
+    out = {**run, "source": msgref.show(run.get("source"))}
+    for k in ("ranking", "alternates", "skipped", "enter", "leave"):
+        out[k] = [{**c, "reason": msgref.show(c["reason"])} if c.get("reason") else c for c in run.get(k) or []]
+    return out
 
 
 def maybe_schedule() -> None:
@@ -347,7 +370,7 @@ def maybe_schedule() -> None:
 def start(manual: bool = True) -> dict[str, Any]:
     with _lock:
         if _job.get("running"):
-            raise RuntimeError("名单正在重算")
+            raise RuntimeError(i18n.t("scholars.refresh.running"))
         _job.clear()
         _job.update(running=True, manual=manual, stage="prepare", done=0, total=0, current=None, needs_user=None,
                     error=None, source=None, started=_now())
@@ -362,10 +385,10 @@ def _progress(**kw: Any) -> None:
 def _scholar_entries(manual: bool, r: dict[str, Any], current: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str, str]:
     """(entries, source label, citation source) from the best available Scholar data."""
     snap = latest_snapshot()
-    if snap and "App" in snap.get("source", "") and snap.get("saved"):
+    if snap and (snap.get("via") == "app" or "App" in snap.get("source", "")) and snap.get("saved"):  # "App": snapshots from before `via`
         age_h = (datetime.now() - datetime.fromisoformat(snap["saved"])).total_seconds() / 3600
         if age_h <= (12 if manual else 72):  # a retry never reads Scholar again for a recent capture
-            return snap["entries"], f"{snap['source']}（{snap['date']} 读取）", f"Google Scholar label ranking, {snap['date']}"
+            return snap["entries"], msgref.ref("scholars.refresh.src_read", source=snap["source"], date=snap["date"]), f"Google Scholar label ranking, {snap['date']}"
     if scholar_capture.available():
         _progress(stage="scholar")
         try:
@@ -373,14 +396,14 @@ def _scholar_entries(manual: bool, r: dict[str, Any], current: list[dict[str, An
             entries = scholar_capture.capture(r["labels"], r["pages_per_label"], extra, show_on_block=manual,
                                               progress=lambda **kw: _progress(**kw), cache=DIR / "capture-today.json")
             if entries:
-                save_snapshot(entries, "Google Scholar（App 窗口）")
-                return entries, "Google Scholar（App 内窗口读取）", f"Google Scholar label ranking, {date.today()}"
+                save_snapshot(entries, msgref.ref("scholars.refresh.src_app_window"), slug="google-scholar-app", via="app")
+                return entries, msgref.ref("scholars.refresh.src_app_read"), f"Google Scholar label ranking, {date.today()}"
         except scholar_capture.NeedsUser as e:
             _progress(needs_user=e.state)  # automatic runs never pop the window: fall through
         except scholar_capture.CaptureError as e:
-            _progress(error=f"Scholar 读取失败：{e}")
+            _progress(error=msgref.ref("scholars.refresh.scholar_failed", error=str(e)))
     if snap and (date.today() - date.fromisoformat(snap["date"])).days <= 2 * r["cadence_days"]:
-        return snap["entries"], f"{snap['source']}（快照 {snap['date']}）", f"Google Scholar label ranking, {snap['date']}"
+        return snap["entries"], msgref.ref("scholars.refresh.src_snapshot", source=snap["source"], date=snap["date"]), f"Google Scholar label ranking, {snap['date']}"
     return [], "", ""
 
 
@@ -410,6 +433,19 @@ def _current() -> list[dict[str, Any]]:
             for s in scholars.scholars()]
 
 
+def _save_run(run_id: str, run: dict[str, Any]) -> str:
+    """Write a new suggestion into the vault file (the one before it, if still open, is superseded); its id."""
+    with store.editing() as data:
+        for old in data["runs"]:  # one open suggestion at a time
+            if old.get("status") == "proposed" and not old.get("deleted"):
+                old.update(status="superseded", updated_at=_now())
+        while any(x["id"] == run_id and x.get("status") != "proposed" for x in data["runs"]):
+            run_id += "-b"  # never overwrite a run that was applied or dismissed (e.g. synced in)
+        data["runs"] = [x for x in data["runs"] if x["id"] != run_id]
+        data["runs"].append({"id": run_id, **msgref.persist(run), "updated_at": _now()})  # the references in it, as fields
+    return run_id
+
+
 def _run(manual: bool) -> None:
     run_id = (f"run-{date.today():%Y-%m}" if not manual else f"run-{datetime.now():%Y-%m-%d-%H%M}") + f"-{DEVICE}"
     try:
@@ -428,7 +464,7 @@ def _run(manual: bool) -> None:
             candidates = R.merge_entries(entries, known)
         else:
             _progress(stage="openalex")
-            source, cite_src = "OpenAlex（Scholar 不可用，按 OpenAlex 被引排序）", f"OpenAlex, {date.today()}"
+            source, cite_src = msgref.ref("scholars.refresh.src_openalex"), f"OpenAlex, {date.today()}"
             candidates = _openalex_candidates(current, r)
         candidates = _with_labs(candidates, current)
         _progress(stage="check", source=source, total=len(candidates))
@@ -451,21 +487,14 @@ def _run(manual: bool) -> None:
                "ranking": [slim(c) for c in result["list"]], "alternates": [slim(c) for c in result["alternates"]],
                "skipped": [slim(c) for c in result["skipped"][:40]],
                "enter": [slim(c) for c in d["enter"]], "leave": [slim(c) for c in d["leave"]], "moves": d["moves"]}
-        with store.editing() as data:
-            for old in data["runs"]:  # one open suggestion at a time
-                if old.get("status") == "proposed" and not old.get("deleted"):
-                    old.update(status="superseded", updated_at=_now())
-            while any(x["id"] == run_id and x.get("status") != "proposed" for x in data["runs"]):
-                run_id += "-b"  # never overwrite a run that was applied or dismissed (e.g. synced in)
-            data["runs"] = [x for x in data["runs"] if x["id"] != run_id]
-            data["runs"].append({"id": run_id, **run, "updated_at": _now()})
+        run_id = _save_run(run_id, run)
         _progress(stage="done", run_id=run_id)
         _record_attempt(True)
     except R.CheckUnavailable as e:
-        _progress(stage="failed", error=f"OpenAlex 暂时不可用：{e}（已查过的结果已缓存，稍后再试会接着算）")
+        _progress(stage="failed", error=msgref.ref("scholars.refresh.oa_unavailable", error=str(e)))
         _record_attempt(False, str(e))
     except Exception as e:  # keep the page usable whatever happens
-        _progress(stage="failed", error=scholars.redact(f"{e.__class__.__name__}: {e}"))
+        _progress(stage="failed", error=msgref.ref("scholars.refresh.failed", cls=e.__class__.__name__, error=scholars.redact(str(e))))
         _record_attempt(False, _job["error"])
     finally:
         _progress(running=False, finished=_now(), finished_at=time.time())
@@ -477,7 +506,7 @@ def apply(run_id: str) -> dict[str, Any]:
     ranks; people added since are left alone. Records keep their previous rank for ▲/▼."""
     run = next((x for x in store.load()["runs"] if x["id"] == run_id), None)
     if not run or run.get("status") != "proposed":
-        raise ValueError("这条建议已经处理过了")
+        raise ValueError(i18n.t("scholars.refresh.already_handled"))
     today = date.today().isoformat()
     current = scholars.scholars()
     plan = R.plan_apply(current, run, excluded())
@@ -503,11 +532,12 @@ def apply(run_id: str) -> dict[str, Any]:
         new = {"name": c["name"], "openalex": c.get("openalex"), "scholar_id": sid, "affiliation": c.get("affiliation"),
                "lab_id": lab_id, "lab": lab or c.get("lab_name"),
                "photo": f"https://scholar.googleusercontent.com/citations?view_op=view_photo&user={sid}&citpid=2" if sid else None,
-               "added": run["id"], "sources": {"rank": run["source"], "added": f"{run['id']} 建议，{today} 确认"}, **patch}
+               "added": run["id"], "sources": {"rank": msgref.show(run["source"], i18n.vault_lang()),  # provenance kept in the vault list: its language
+                                                  "added": i18n.tv("scholars.refresh.added_by", id=run["id"], day=today)}, **patch}
         keep.add(scholars.store.add("scholars", {k: v for k, v in new.items() if v is not None}, "s")["id"])
     store.update("runs", run_id, {"status": "applied", "applied_at": _now(), "apply_notes": plan["notes"] or None})
     scholars.refresh_in_background(ids=keep)
-    return {**status(), "notes": plan["notes"]}
+    return {**status(), "notes": [msgref.show(n) for n in plan["notes"]]}
 
 
 def _lab_index() -> dict[str, tuple[str, str]]:

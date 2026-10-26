@@ -1,0 +1,7 @@
+{
+  "track_main": "Main track",
+  "stage.abstract": "Abstract deadline",
+  "stage.deadline": "Full paper deadline",
+  "tag_too_long": "Tag too long (at most {max} characters): {tag}…",
+  "idea_merge_promoted": "{id} is already a note and can't be merged"
+}

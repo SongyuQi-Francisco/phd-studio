@@ -1,4 +1,4 @@
-"""Routes for Settings → 截稿提醒: reminder settings, the test notification and the LaunchAgent."""
+"""Routes for Settings → Deadline reminders: reminder settings, the test notification and the LaunchAgent."""
 from __future__ import annotations
 
 from typing import Any

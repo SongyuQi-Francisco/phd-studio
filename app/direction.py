@@ -7,7 +7,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from . import line_chat, notes, plan, reading
+from . import i18n, line_chat, notes, plan, reading
 from .config import IDEA_RADAR, IDEAS_DIR, PROFILE, ROADMAP
 
 _KILL_HIT = re.compile(r"\b(K\d+)\b[^\n]{0,80}?(partially triggered|部分触发|triggered|已触发|触发)", re.I)
@@ -65,7 +65,9 @@ def lines() -> list[dict[str, Any]]:
         latest_status = ""
         dated = [k for k in secs if re.match(r"20\d\d-\d\d-\d\d", k)]
         if dated:
-            latest_status = f"{sorted(dated)[-1]}：" + notes.strip_links(notes.first_paragraph(secs[sorted(dated)[-1]]))[:240]
+            latest = sorted(dated)[-1]
+            latest_status = i18n.t("line.status_note", date=latest,
+                                   text=notes.strip_links(notes.first_paragraph(secs[latest]))[:240])
         out.append({
             "path": n["path"], "name": n["name"], "kind": kind, "line": line,
             "status": fm.get("status"), "priority": fm.get("priority"), "horizon": fm.get("horizon"),

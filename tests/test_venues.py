@@ -132,7 +132,7 @@ def test_official_edition_builds_a_timeline_from_confirmed_details():
     ed = venues._official_edition(detail())
     assert ed["year"] == 2027 and ed["link"] == "https://cfp.example" and ed["place"] == "Vienna"
     assert ed["timeline"] == [{"abstract": "2027-02-15T11:59:59+00:00", "deadline": "2027-02-22T11:59:59+00:00",
-                               "comment": "Main conference（官网）"}]
+                               "track": "Main conference", "source": "official", "comment": "Main conference"}]
 
 
 @pytest.mark.parametrize("d", [None, {}, detail(status="previous-edition"), detail(status="planned"), detail(deadlines=[]),
@@ -149,7 +149,8 @@ def test_official_edition_skips_non_paper_tracks():
             {"track": "Research track", "paper": "2027-01-05 AoE"},
             {"track": None, "paper": "2027-01-06 AoE"}]
     ed = venues._official_edition(detail(deadlines=rows))
-    assert [t["comment"] for t in ed["timeline"]] == ["Research track（官网）", "主会（官网）"]
+    assert [(t["track"], t["comment"], t["source"]) for t in ed["timeline"]] == [("Research track", "Research track", "official"),
+                                                                                  ("main", None, "official")]  # no words in the catalog
 
 
 def test_official_edition_falls_back_to_homepage_and_no_year():
@@ -197,7 +198,7 @@ def test_catalog_merges_ccfddl_titles_onto_core_acronyms(venue_data):
     kdd = cat["kdd"]
     assert (kdd["acronym"], kdd["core"], kdd["ccf"]) == ("KDD", "A*", "A")
     assert kdd["title"] == "ACM SIGKDD Conference on Knowledge Discovery and Data Mining"
-    assert kdd["field"] == "数据库/数据挖掘/信息检索"
+    assert kdd["field"] == "DB" and venues.summary(kdd)["field"] == "数据库/数据挖掘/信息检索"  # the catalog keeps the code
     assert kdd["dblp"] == "kdd"
     assert [e["year"] for e in kdd["editions"]] == sorted(e["year"] for e in kdd["editions"])
     assert len(kdd["editions"]) == 2
@@ -251,7 +252,7 @@ def test_catalog_uses_official_dates_when_ccfddl_has_nothing_upcoming(venue_data
     cat = venues.catalog()
     acl = cat["acl"]
     assert acl["detail"]["edition"] == "ACL 2027"
-    assert acl["editions"][-1]["timezone"] == "官网"
+    assert acl["editions"][-1]["source"] == "official" and acl["editions"][-1]["timezone"] is None
     assert acl["editions"][-1]["timeline"][0]["deadline"] == "2099-01-22T11:59:59+00:00"
     assert len(cat["kdd"]["editions"]) == 2          # ccfddl already has an upcoming deadline: no official edition added
     assert len(cat["cikm"]["editions"]) == 1         # previous-edition details are not used for deadlines

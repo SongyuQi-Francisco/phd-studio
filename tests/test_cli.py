@@ -294,7 +294,7 @@ def test_deadlines_lists_venue_target_and_plan_events(capsys, venue_data):
     code, out, _ = run(capsys, "deadlines", "--days", "60")
     assert code == 0
     lines = out.splitlines()
-    assert any("TARGET" in ln and "KDD" in ln and "摘要截止" in ln for ln in lines)
+    assert any("TARGET" in ln and "KDD" in ln and "Abstract deadline" in ln for ln in lines)
     assert any("plan" in ln and ln.endswith("Draft") for ln in lines)
     assert not any("CIKM" in ln for ln in lines)          # 90 days away
     assert not any("Overdue" in ln for ln in lines)       # the list only shows what is still ahead

@@ -25,6 +25,8 @@ import uuid
 from types import SimpleNamespace
 from typing import Any, Callable
 
+from . import i18n
+
 BUNDLE_PREFIX = "local.phd-studio"
 THREAD = "phd-studio-reminders"
 _un: SimpleNamespace | None = None
@@ -72,7 +74,7 @@ def send(title: str, body: str = "", subtitle: str = "", open_: dict[str, Any] |
             return _send_osascript(title, body, subtitle)
     except Exception as e:  # noqa: BLE001 - a failed notification must not break the caller
         return {"ok": False, "via": via, "error": f"{type(e).__name__}: {e}"}
-    return {"ok": False, "via": "none", "error": "这台机器不能发系统通知（只支持 macOS）"}
+    return {"ok": False, "via": "none", "error": i18n.t("reminders.notify.unsupported")}
 
 
 # ---------- osascript ----------
@@ -156,7 +158,7 @@ def _send_un(title: str, body: str, subtitle: str, open_: dict[str, Any] | None,
     status = authorization()
     if status == "not_determined" and not ask:
         return {"ok": False, "via": "app", "denied": True, "auth": status,
-                "error": "还没允许 PhD Studio 发通知：在设置 → 截稿提醒里点「发一条测试通知」，再在系统提示里允许"}
+                "error": i18n.t("reminders.notify.not_asked")}
     if status == "not_determined":  # first time: macOS asks the user
         un = _load()
         done = threading.Event()
@@ -168,17 +170,17 @@ def _send_un(title: str, body: str, subtitle: str, open_: dict[str, Any] | None,
 
         un.center.requestAuthorizationWithOptions_completionHandler_(_ALERT_SOUND, asked)
         if not _wait(done, max(wait, 60.0)):
-            return {"ok": False, "via": "app", "error": "还在等你在系统弹窗里允许 PhD Studio 发通知"}
+            return {"ok": False, "via": "app", "error": i18n.t("reminders.notify.waiting")}
         if not answer["granted"]:
-            why = answer["error"].localizedDescription() if answer["error"] is not None else "没有给出原因"
+            why = answer["error"].localizedDescription() if answer["error"] is not None else i18n.t("reminders.notify.no_reason")
             # "Notifications are not allowed for this application" with the status still undetermined:
             # macOS could not validate the app, e.g. a copy run from a temporary folder.
             return {"ok": False, "via": "app", "denied": True, "auth": authorization(),
-                    "error": f"macOS 没有允许 PhD Studio 发通知（{why}）"}
+                    "error": i18n.t("reminders.notify.refused", why=why)}
         status = "authorized"
     if status == "denied":
         return {"ok": False, "via": "app", "denied": True, "auth": status,
-                "error": "PhD Studio 的通知被关掉了：系统设置 → 通知 → PhD Studio，打开「允许通知」"}
+                "error": i18n.t("reminders.notify.denied")}
 
     un = _load()
     content = un.Content.alloc().init()
@@ -200,7 +202,7 @@ def _send_un(title: str, body: str, subtitle: str, open_: dict[str, Any] | None,
 
     un.center.addNotificationRequest_withCompletionHandler_(request, added)
     if not _wait(done, wait):
-        return {"ok": False, "via": "app", "error": "通知中心没有回应"}
+        return {"ok": False, "via": "app", "error": i18n.t("reminders.notify.no_response")}
     if result.get("error") is not None:
         return {"ok": False, "via": "app", "error": str(result["error"].localizedDescription())}
     return {"ok": True, "via": "app"}
