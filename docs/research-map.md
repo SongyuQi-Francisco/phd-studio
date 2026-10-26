@@ -272,7 +272,7 @@ every `.css` file is linked, before the page reads its first map; register throu
 | `rmap.layer` | `{id, label, order, default, accent, node(n, box, ctx), nodeClass(n, ctx), svg(ctx), under, legend(ctx)}` | map layers toggled in the toolbar: per-node SVG decorations, an extra class on a node (e.g. the aqua dashed 空白 outline), overlays in map coordinates (`under: true` draws them below the edges) |
 | `rmap.section` | `{id, label, order, when(n, ctx), render(n, ctx)}` | detail panel sections of the selected node (peers, results) |
 | `rmap.tool` | `{id, label, icon, order, run(ctx)}` or `{…, render(ctx)}` | toolbar buttons and small controls (time scrubber) |
-| `rmap.view` | `{id, label, order, render(ctx)}` | whole-page views in the header's segmented control, before the projects (总图) |
+| `rmap.view` | `{id, label, order, render(ctx)}`; `{…, icon, scope: "project"}` | whole-page views in the header's segmented control, before the projects (总图). `scope: "project"`: a view of the selected project (回放), a toolbar toggle that takes the place of the KPI row, the map and the detail panel while open, and closes on a second click or another project; its `ctx` has the map as usual plus `closeView()`. `rmap.views(scope)` lists either kind |
 | `rmap.kpi` | `{id, order, render(ctx)}` | KPI tiles above the map |
 | `rmap.strings` | `{zh: {...}, en: {...}}` | still accepted for an extension's labels; prefer its own locale module |
 

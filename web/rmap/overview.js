@@ -41,7 +41,8 @@ function Pop({ pick, onOpen, onClose }) {
     return html`<div class="mp-ov-pop" ref=${ref} style=${style}>
       <div class="mp-ov-pop-h"><i class=${"ln-" + (line.color % 6)} /><b>${line.title}</b><span class="mp-num">${s.day}</span></div>
       <ul>${s.items.map((x, k) => html`<li key=${k}><span class=${"mp-ov-what " + x.what}>${t("rmap_history.ov.what." + x.what)}</span>
-        <span class="mp-ov-ti">${x.title}</span><span class="mp-ov-ty">${t("rmap.type." + x.type)}</span></li>`)}</ul>
+        ${onOpen && x.node ? html`<button class="mp-ov-ti mp-ov-node" title=${t("rmap_history.ov.open_node")} onClick=${() => onOpen(line.slug, x.node)}>${x.title}</button>`
+          : html`<span class="mp-ov-ti">${x.title}</span>`}<span class="mp-ov-ty">${t("rmap.type." + x.type)}</span></li>`)}</ul>
       ${onOpen && html`<button class="btn ghost sm" onClick=${() => onOpen(line.slug)}>${t("rmap_history.ov.open")}</button>`}
     </div>`;
   }
@@ -50,7 +51,8 @@ function Pop({ pick, onOpen, onClose }) {
     <div class="mp-ov-pop-h"><span class="mp-ov-icon" /><b class="mp-num">${ic.entity}</b></div>
     <p class="mp-quiet">${t("rmap_history.ov.shared", { n: ic.projects.length })}</p>
     <ul>${ic.projects.map((p) => { const ln = lines.find((l) => l.slug === p.slug); return html`<li key=${p.slug}>
-      <i class=${"mp-ov-sw ln-" + ((ln?.color ?? 0) % 6)} /><span class="mp-ov-ti">${ln?.title || p.slug}</span>
+      <i class=${"mp-ov-sw ln-" + ((ln?.color ?? 0) % 6)} />${onOpen ? html`<button class="mp-ov-ti mp-ov-node" title=${t("rmap_history.ov.open_node")}
+        onClick=${() => onOpen(p.slug, p.node)}>${ln?.title || p.slug}</button>` : html`<span class="mp-ov-ti">${ln?.title || p.slug}</span>`}
       <span class="mp-ov-ty">${p.title ? clip(p.title, 36) : ""}${p.at ? " · " + t("rmap_history.ov.since", { date: p.at.slice(0, 10) }) : ""}</span></li>`; })}</ul>
   </div>`;
 }
@@ -94,7 +96,7 @@ export function Overview({ ctx }) {
   const every = Math.max(1, Math.ceil(64 / (lay.weeks[1] ? lay.weeks[1].x - lay.weeks[0].x : 64)));
   const nVal = lay.lines.reduce((s, l) => s + l.stations.reduce((a, st) => a + st.items.filter((x) => x.what === "verified").length, 0), 0);
   const nDec = lay.lines.reduce((s, l) => s + l.stations.reduce((a, st) => a + st.items.filter((x) => x.what !== "verified").length, 0), 0);
-  const open = ctx.open ? (slug) => { setPick(null); ctx.open(slug); } : null;
+  const open = ctx.open ? (slug, node) => { setPick(null); ctx.open(slug, node); } : null; // ctx.open(slug, nodeId?) of the page
   const onPick = (e, p) => {
     e.stopPropagation();
     const r = wrap.current.getBoundingClientRect(), el = e.currentTarget.getBoundingClientRect();

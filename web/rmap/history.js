@@ -78,11 +78,13 @@ function FrozenMap({ ctx, map, marks, selected, select }) {
       <div class="mp-legend">${STATUS_LEGEND.map((s) => html`<span class=${"st-" + s} key=${s}><i />${t("rmap.status." + s)}</span>`)}
         ${(ctx.layers.history ?? true) && rmap.get("layer", "history")?.legend?.(fctx)}</div>
     </div>
-    <${Card} node=${sel} ctx=${fctx} mark=${sel && marks[sel.id]} onClose=${() => select(null)} />
+    <${Card} node=${sel} ctx=${fctx} mark=${sel && marks[sel.id]} onClose=${() => select(null)}
+      onOpen=${ctx.closeView && sel && ctx.map.nodes.some((n) => n.id === sel.id) ? () => { ctx.closeView(); ctx.select(sel.id); } : null} />
   </div>`;
 }
 
-function Card({ node, ctx, mark, onClose }) {
+// The selected node as it was; onOpen (when it is still on the map): close the history and select it there.
+function Card({ node, ctx, mark, onClose, onOpen }) {
   if (!node) return html`<div class="mp-detail empty"><span class="muted">${t("rmap_history.card.empty")}</span></div>`;
   const st = node.status || "todo";
   const ev = (ctx.map.attachments?.evidence || []).filter((a) => a.node === node.id);
@@ -98,6 +100,7 @@ function Card({ node, ctx, mark, onClose }) {
     ${ev.length > 0 && html`<div class="mp-sec"><h4>${t("rmap_history.card.evidence")} <small>${ev.length}</small></h4>
       <div class="mp-chips">${ev.map((a) => html`<span class="mp-chip" key=${a.id}><span class="mp-chip-main">${a.title || a.target}</span></span>`)}</div></div>`}
     <p class="mp-quiet mp-hx-ro-note">${t("rmap_history.card.readonly")}</p>
+    ${onOpen && html`<button class="btn ghost sm" onClick=${onOpen}>${t("rmap_history.card.open")}</button>`}
   </div>`;
 }
 

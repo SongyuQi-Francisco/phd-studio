@@ -8,6 +8,7 @@
 //   rmap.section({ id: "results", label: "...", order: 40, when: (n, ctx) => n.type === "experiment", render: (n, ctx) => html });
 //   rmap.tool({ id: "replay", label: "...", icon: "clock", order: 20, run: (ctx) => ..., render: (ctx) => html });
 //   rmap.view({ id: "overview", label: "rmap.view.overview", order: 0, render: (ctx) => html });
+//   rmap.view({ id: "history", label: "...", icon: "clock", scope: "project", render: (ctx) => html });  // per project
 //   rmap.kpi({ id: "depth", order: 10, render: (ctx) => html });
 //   rmap.on("change", ({ slug, events }) => ...);   // also "load", "select", "view"
 //   labels are i18n keys from the extension's own web/locales/<lang>/<module>.json (rmap.strings({zh, en}) still works)
@@ -43,12 +44,15 @@ export const rmap = {
   // Toolbar items: a button (run) or a small component (render).
   tool: (spec) => put("tool", spec),
   // Whole-page views in the header's segmented control, next to the projects (e.g. the all-projects map).
+  // scope: "project": a view of the selected project instead, toggled from the toolbar; while open it takes
+  // the place of the KPI row, the map and the detail panel (ctx.slug and ctx.map as usual).
   view: (spec) => put("view", spec),
   // KPI tiles above the map.
   kpi: (spec) => put("kpi", spec),
   strings: (dict) => { addStrings(dict); changed(); },
 
   list: (slot) => items[slot].slice(),
+  views: (scope = "page") => items.view.filter((v) => (v.scope || "page") === scope), // "page" | "project"
   get: (slot, id) => items[slot].find((x) => x.id === id) || null,
 
   on(name, fn) {

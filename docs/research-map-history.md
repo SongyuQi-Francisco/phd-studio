@@ -45,7 +45,7 @@ Timelines are cached per map by its change stamp.
   per day. An entity that several projects carry (`entity` on a node or an attachment, #53) is an
   interchange joining their lines at the time it became shared, i.e. when the last of them took it up.
   Click a station or an interchange for the details. It polls `/api/rmap/stamp` to follow edits.
-- **回放 / Replay** (`rmap.view` `history`): the time scrubber, mono week ticks with the week's activity
+- **回放 / Replay** (project view `history`): the time scrubber, mono week ticks with the week's activity
   above them, a play button (one week per 0.9 s), and the map of that week drawn by the core map view,
   read-only (no menu, rename or add keys; a write is refused with a toast). The changes of that week are
   marked and listed under the map (with that week's change log).
@@ -54,9 +54,11 @@ Timelines are cached per map by its change stamp.
   ghosts, with their links), status changes are outlined in blue with a `from → to` pill, renames get a
   pill; the list below groups them and shows the change log of the period.
 - The marks are a layer, `history`, registered only while the replay or the change view is open.
-- The history view asks for `scope: "project"`: a page that hands such views the selected map
-  (`ctx.slug`, `ctx.map`) shows it for that project; the current page lists it next to 总图 and the view
-  picks its project itself (the one seen last, kept per Mac).
+- 回放 is a project view (`rmap.view` with `scope: "project"`, added to the page for it): the 回放 button
+  in the toolbar opens it for the selected project in place of the KPI row, the map and the detail panel;
+  a second click or another project closes it. The read-only card of a node that is still on the map can
+  close the history and select it there (`ctx.closeView()`). Where the page offers `ctx.open(slug, nodeId)`
+  (#47), the 总图's stations and interchanges open the map at their node.
 
 ## Advisor packets
 

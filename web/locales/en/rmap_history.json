@@ -2,6 +2,7 @@
   "back": "Back to now",
   "card.empty": "Click a node to see it as it was",
   "card.evidence": "Evidence",
+  "card.open": "Open on the current map",
   "card.readonly": "This is the map as it was, read-only; go back to now to edit.",
   "card.retitled": "Renamed in this period; it was “{title}”",
   "card.status": "In this period: {from} → {to}",
@@ -34,7 +35,6 @@
     "one": "Show {n} more",
     "other": "Show {n} more"
   },
-  "no_projects": "No project maps yet",
   "none": "The map did not change in this period",
   "now": "Now",
   "ov.archived": "Archived",
@@ -45,6 +45,7 @@
   "ov.lg.interchange": "Interchange: shared by projects",
   "ov.lg.verified": "Key validation",
   "ov.open": "Open this map",
+  "ov.open_node": "Open the map at this node",
   "ov.shared": {
     "one": "Used by {n} project",
     "other": "Shared by {n} projects"
@@ -58,7 +59,6 @@
   "ov.what.refuted": "Falsified",
   "ov.what.verified": "Validated",
   "pause": "Pause",
-  "pick": "Project",
   "play": "Play week by week",
   "preset.all": "Everything",
   "preset.month": "Last 4 weeks",

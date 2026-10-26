@@ -290,3 +290,20 @@ def test_timeline_helpers_in_a_javascript_engine(engine, tmp_path):
     args = [exe, "-m", "test.mjs"] if engine == "jsc" else [exe, "test.mjs"]
     r = subprocess.run(args, cwd=tmp_path, capture_output=True, text=True, timeout=60)
     assert r.returncode == 0 and r.stdout.strip().endswith("ok"), r.stdout + r.stderr
+
+
+@pytest.mark.parametrize("engine", ["node", "jsc"])
+def test_project_views_in_the_registry_in_a_javascript_engine(engine, tmp_path):
+    exe = shutil.which("node") if engine == "node" else (str(JSC) if JSC.exists() else None)
+    if not exe:
+        pytest.skip(f"{engine} is not installed")
+    web = PROJECT / "web"
+    (tmp_path / "registry.mjs").write_text((web / "rmap" / "registry.js").read_text(encoding="utf-8")
+                                           .replace('from "/rmap/strings.js"', 'from "./strings.mjs"'), encoding="utf-8")
+    (tmp_path / "strings.mjs").write_text((web / "rmap" / "strings.js").read_text(encoding="utf-8")
+                                          .replace('from "/i18n.js"', 'from "./i18n.mjs"'), encoding="utf-8")
+    shutil.copy(web / "i18n.js", tmp_path / "i18n.mjs")
+    shutil.copy(PROJECT / "tests" / "js" / "rmap_registry.test.mjs", tmp_path / "test.mjs")
+    args = [exe, "-m", "test.mjs"] if engine == "jsc" else [exe, "test.mjs"]
+    r = subprocess.run(args, cwd=tmp_path, capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0 and r.stdout.strip().endswith("ok"), r.stdout + r.stderr

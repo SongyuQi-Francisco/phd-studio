@@ -20,8 +20,6 @@
 /* ---- history panel ---- */
 .mp-hx-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
 .mp-hx-head .mp-quiet { font-size: 12px; }
-.mp-hx-pick { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
-.mp-hx-pick .seg { max-width: 100%; overflow-x: auto; }
 .mp-hx-stats { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; min-height: 30px; margin: 4px 0 10px; font-size: 12px; color: var(--text-2); }
 .mp-hx-notes { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
 .mp-hx-notes span { padding: 2px 9px; border-radius: 99px; background: var(--hover); color: var(--text); max-width: 420px;
@@ -189,4 +187,6 @@
 .mp-ov-what.kill, .mp-ov-what.kill_partial { color: var(--mp-blocked); background: color-mix(in srgb, var(--mp-blocked) 14%, transparent); }
 .mp-ov-what.decision { color: var(--text); }
 .mp-ov-ti { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mp-ov-node { text-align: left; }
+.mp-ov-node:hover { color: var(--accent); }
 .mp-ov-ty { flex: none; font-size: 11px; color: var(--text-3); max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

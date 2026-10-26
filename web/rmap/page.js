@@ -124,6 +124,7 @@ export function RmapPage({ version, toast, lines = [], open, onAsk, onOpenNote, 
   const queue = useRef(Promise.resolve()); // refreshes, one after another
   const gen = useRef(0); // the latest map request; older answers are dropped
   const [waiting, setWaiting] = useState({}); // slug -> proposals waiting for a confirm, for the project switcher
+  const [pview, setPview] = useState(null); // the open project-scoped view (rmap.view with scope "project"), by id
 
   useEffect(() => {
     ensureCss("/rmap/rmap.css");
@@ -134,14 +135,15 @@ export function RmapPage({ version, toast, lines = [], open, onAsk, onOpenNote, 
   const loadProjects = useCallback(() => api("/api/rmap/projects").then((r) => { setProjects(r.projects); return r.projects; }), []);
   useEffect(() => { loadProjects().catch((e) => setError(e.message)); }, [version]);
 
-  const views = rmap.list("view");
-  const view = active?.startsWith("view:") ? rmap.get("view", active.slice(5)) : null;
+  const views = rmap.views();
+  const view = active?.startsWith("view:") ? views.find((v) => v.id === active.slice(5)) || null : null;
   const slug = !view && projects ? (projects.some((p) => p.slug === active) ? active : projects[0]?.slug || null) : null;
   useEffect(() => { if (active) prefs.set("rmap:active", active); }, [active]);
   useEffect(() => prefs.set("rmap:layers", layers), [layers]);
   // collapse is remembered per map on this Mac; focus is for the moment
   useEffect(() => { setCollapsed(new Set(slug ? prefs.get("rmap:collapsed:" + slug, []) : [])); setFocus(null); }, [slug]);
   useEffect(() => { if (slug) prefs.set("rmap:collapsed:" + slug, [...collapsed]); }, [collapsed]);
+  useEffect(() => setPview(null), [slug]); // a project view closes when the project changes
 
   const loadMap = useCallback(async (s, current = () => true) => {
     try {
@@ -219,6 +221,9 @@ export function RmapPage({ version, toast, lines = [], open, onAsk, onOpenNote, 
     <${SeedLines} toast=${toast} onAsk=${onAsk} onSeeded=${() => setPropV((n) => n + 1)} />
   </div></div>`;
 
+  const pviews = slug && !view ? rmap.views("project") : [];
+  const pv = pviews.find((v) => v.id === pview) || null;
+  const togglePview = (v) => { setPview(pview === v.id ? null : v.id); if (pview !== v.id) rmap.emit("view", { id: v.id, slug }); };
   const layerList = rmap.list("layer");
   const tools = rmap.list("tool");
   const kpis = rmap.list("kpi");
@@ -235,6 +240,8 @@ export function RmapPage({ version, toast, lines = [], open, onAsk, onOpenNote, 
             title=${waiting[p.slug] ? t("rmap.prop.waiting", { n: waiting[p.slug] }) : p.warnings?.some((w) => w.kind === "same_title") ? t("rmap.same.title") : null}>${p.title}${waiting[p.slug] > 0 && html`<i class="mp-wait">${waiting[p.slug]}</i>`}</button>`)}
         </div>
         <button class="btn ghost sm" title=${t("rmap.project.new")} onClick=${() => setAdding(!adding)}><${Icon} name="plus" sm /></button>
+        ${pviews.map((v) => html`<button key=${"pv:" + v.id} class=${"btn ghost sm" + (pview === v.id ? " on" : "")} aria-pressed=${pview === v.id ? "true" : "false"}
+          onClick=${() => togglePview(v)}>${v.icon && html`<${Icon} name=${v.icon} sm />`}${label(v.label)}</button>`)}
         ${ctx && layerList.map((l) => html`<button class=${"mp-layer" + (layers[l.id] ?? l.default ? " on" : "")} style=${l.accent ? { "--acc": l.accent } : null}
             onClick=${() => setLayers({ ...layers, [l.id]: !(layers[l.id] ?? l.default) })}>${label(l.label)}</button>`)}
         ${ctx && tools.map((tl) => tl.render ? html`<span key=${tl.id}>${tl.render(ctx)}</span>`
@@ -244,7 +251,7 @@ export function RmapPage({ version, toast, lines = [], open, onAsk, onOpenNote, 
     ${adding && html`<${NewProject} lines=${lines} onCreated=${created} onCancel=${() => setAdding(false)} toast=${toast} />`}
     ${adding && html`<${SeedLines} compact toast=${toast} onAsk=${onAsk} onSeeded=${() => { setAdding(false); setPropV((n) => n + 1); }} />`}
     <${Proposals} slug=${slug} map=${map} version=${version + ":" + propV} toast=${toast} onApplied=${applied} />
-    ${view ? view.render(ctx) : error ? html`<p class="muted">${t("rmap.error", { msg: error })}</p>` : !map ? html`<p class="muted">${t("rmap.loading")}</p>` : html`
+    ${view ? view.render(ctx) : error ? html`<p class="muted">${t("rmap.error", { msg: error })}</p>` : !map ? html`<p class="muted">${t("rmap.loading")}</p>` : pv ? pv.render({ ...ctx, closeView: () => setPview(null) }) : html`
       ${map.warnings.filter((w) => w.kind === "cycle").map((w) => html`<div class="mp-warn" key="cycle">${t("rmap.cycle.warn", { n: w.edges.length })}</div>`)}
       ${kpis.length > 0 && html`<div class="kpis mp-kpis">${kpis.map((k) => html`<div class="kpi" key=${k.id}>${k.render(ctx)}</div>`)}</div>`}
       <div class=${"mp-body-grid side-" + side}>
