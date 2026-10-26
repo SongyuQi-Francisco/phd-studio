@@ -87,8 +87,8 @@ def test_diff_shows_changed_scalars_and_list_rows_as_removed_and_added_lines():
     diff = {d["field"]: d for d in vc.diff_detail(before, after)}
     assert list(diff) == ["edition", "deadlines", "tracks", "format.notable_rules"]       # in display order
     assert diff["edition"]["lines"] == [{"op": "-", "text": "ACL 2027"}, {"op": "+", "text": "ACL 2028"}]
-    assert diff["deadlines"]["lines"] == [{"op": "-", "text": "Main：全文 2099-01-05 AoE"},
-                                          {"op": "+", "text": "Main：摘要 2028-01-01 AoE · 全文 2028-01-08 AoE"}]
+    assert diff["deadlines"]["lines"] == [{"op": "-", "text": "Main：Full paper deadline 2099-01-05 AoE"},
+                                          {"op": "+", "text": "Main：Abstract deadline 2028-01-01 AoE · Full paper deadline 2028-01-08 AoE"}]
     assert diff["tracks"]["lines"] == [{"op": "+", "text": "Short：4 pages（no appendix）"}]     # unchanged rows are not repeated
     assert diff["format.notable_rules"]["lines"] == [{"op": "+", "text": "Reviewers must register"}]
     assert diff["edition"]["label"] == "届次"

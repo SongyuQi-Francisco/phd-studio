@@ -9,6 +9,8 @@ unit-tested; app/scholar_refresh.py feeds them Scholar rankings and OpenAlex dat
   from mega-collaborations), is still publishing, and is not on the exclude list.
 - The list is the best-cited candidates that pass (by default one per lab), plus pinned
   scholars on top; pinned scholars never take a ranked slot and are never removed.
+
+Reasons and notes are msgref references (`ref()`): they are kept in the suggestion and worded when shown.
 """
 from __future__ import annotations
 
@@ -16,6 +18,8 @@ import re
 import unicodedata
 from datetime import date
 from typing import Any, Callable, Iterable
+
+from .msgref import ref
 
 NOT_PAPER = re.compile(r"workshop|tutorial|proceedings|preface|\bsummary of\b|panel|keynote|doctoral consortium", re.I)
 
@@ -81,7 +85,7 @@ def parse_snapshot_md(text: str) -> dict[str, Any]:
 
 def flags_from_note(note: str) -> dict[str, Any]:
     low = note.lower()
-    return {"noise": "noise" in low, "deceased": "deceased" in low or "已故" in note}
+    return {"noise": "noise" in low, "deceased": "deceased" in low or "已故" in note}  # "已故": Chinese note text
 
 
 def merge_entries(*lists: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -146,19 +150,19 @@ def noise_verdict(top_works: list[dict[str, Any]], compiled: dict[str, Any], *, 
         return None
     mega = sum(w.get("cites") or 0 for w in top_works if (w.get("team") or 0) >= mega_team)
     if mega / total >= mega_share:
-        return f"被引主要来自超大合作组论文（{round(100 * mega / total)}%）"
+        return ref("scholars.rank.mega_team", pct=round(100 * mega / total))
     field = sum(w.get("cites") or 0 for w in top_works
                 if any(p.search((w.get("title") or "") + " " + (w.get("abstract") or "")) for p in compiled["gate"]))
     if field / total < min_field_share:
-        return f"被引几乎都来自领域外论文（领域内仅 {round(100 * field / total)}%）"
+        return ref("scholars.rank.off_field", pct=round(100 * field / total))
     return None
 
 
 def inactive_verdict(last_work: str | None, today: date, years: int = 3) -> str | None:
     if not last_work:
-        return "查不到发表记录"
+        return ref("scholars.rank.no_works")
     if (today - date.fromisoformat(last_work[:10])).days > years * 365:
-        return f"{years} 年内没有新发表（最近 {last_work[:7]}）"
+        return ref("scholars.rank.inactive", n=years, last=last_work[:7])
     return None
 
 
@@ -174,7 +178,7 @@ def rank(candidates: list[dict[str, Any]], check: Callable[[dict[str, Any]], dic
       (pins never take a ranked slot and are never dropped).
     - Excluded people are never used. People are matched by Scholar id, else OpenAlex id, else name.
     - one_per_lab: a candidate whose `lab` already has someone on the list, among the alternates
-      or pinned, is skipped ("同实验室已有 X"); a lab's first member who fails the filter does not
+      or pinned, is skipped (reason "same lab as X"); a lab's first member who fails the filter does not
       block the next one. Candidates without a known lab are never grouped.
     """
     pinned, excluded = list(pinned), list(excluded)
@@ -198,25 +202,25 @@ def rank(candidates: list[dict[str, Any]], check: Callable[[dict[str, Any]], dic
                 break
             continue
         if any(same_person(c, x) for x in excluded):
-            skipped.append(dict(c, reason="在排除名单里"))
+            skipped.append(dict(c, reason=ref("scholars.rank.excluded")))
             continue
         if c.get("deceased"):
-            skipped.append(dict(c, reason="已故"))
+            skipped.append(dict(c, reason=ref("scholars.rank.deceased")))
             continue
         if c.get("noise"):
-            skipped.append(dict(c, reason="快照标注：被引来自领域外的大合作"))
+            skipped.append(dict(c, reason=ref("scholars.rank.noise_note")))
             continue
         if one_per_lab and c.get("lab") in lab_of:
-            skipped.append(dict(c, reason=f"同实验室已有 {lab_of[c['lab']]}", same_lab=lab_of[c["lab"]]))
+            skipped.append(dict(c, reason=ref("scholars.rank.same_lab", name=lab_of[c["lab"]]), same_lab=lab_of[c["lab"]]))
             continue
         try:
             v = check(c)
         except Unresolved as e:
-            skipped.append(dict(c, reason=f"无法核实：{e}", unchecked=True))
+            skipped.append(dict(c, reason=ref("scholars.rank.unchecked", why=str(e)), unchecked=True))
             continue
         reason = v.get("noise") or v.get("inactive")
         if not reason and (v.get("field_papers") or 0) < min_papers:
-            reason = f"近期领域论文 {v.get('field_papers') or 0} 篇（需 ≥{min_papers}）"
+            reason = ref("scholars.rank.few_papers", n=v.get("field_papers") or 0, min=min_papers)
         if reason:
             skipped.append(dict(c, reason=reason, verdict=v))
             continue
@@ -303,9 +307,9 @@ def plan_apply(current: list[dict[str, Any]], run: dict[str, Any], excluded: Ite
     add, notes = [], []
     for p in run.get("enter") or []:
         if any(same_person(p, x) for x in excluded):
-            notes.append(f"{p.get('name')}：已在排除名单里，没有加入")
+            notes.append(ref("scholars.rank.note_excluded", name=p.get("name")))
         elif on_list(p):
-            notes.append(f"{p.get('name')}：已经在名单里")
+            notes.append(ref("scholars.rank.note_listed", name=p.get("name")))
         else:
             add.append(p)
     remove = []
@@ -314,7 +318,7 @@ def plan_apply(current: list[dict[str, Any]], run: dict[str, Any], excluded: Ite
         if c is None:
             continue
         if c.get("pinned"):
-            notes.append(f"{c.get('name')}：已固定，没有移出")
+            notes.append(ref("scholars.rank.note_pinned", name=c.get("name")))
         else:
             remove.append(c)
     removed = {id(c) for c in remove}

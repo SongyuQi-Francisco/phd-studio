@@ -1,0 +1,6 @@
+{
+  "stage.abstract": "Abstract deadline",
+  "stage.deadline": "Full paper deadline",
+  "tag_too_long": "标签太长（最多 {max} 个字符）：{tag}…",
+  "idea_merge_promoted": "{id} 已整理成 Idea 笔记，不能再合并"
+}

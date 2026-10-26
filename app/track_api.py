@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 
-from . import reading, scholar_capture, scholar_refresh, scholars, tracker_run, tracking
+from . import i18n, msgref, reading, scholar_capture, scholar_refresh, scholars, tracker_run, tracking
 
 router = APIRouter(prefix="/api/track")
 IMG_HEADERS = {"Cache-Control": "max-age=604800"}
@@ -109,7 +109,7 @@ def scholar_pin(sid: str, body: dict[str, Any]) -> dict[str, Any]:
 def scholar_window() -> dict[str, bool]:
     """Desktop app only: show the Google Scholar window so the user can sign in."""
     if not scholar_capture.show():
-        raise HTTPException(400, "只有桌面 App 里才能打开 Scholar 窗口")
+        raise HTTPException(400, i18n.t("track.api.scholar_window"))
     return {"ok": True}
 
 
@@ -120,7 +120,7 @@ async def scholar_search(q: str) -> dict[str, Any]:
     try:
         return {"results": await run_in_threadpool(scholars.search_authors, q.strip())}
     except httpx.HTTPError as e:
-        raise HTTPException(502, scholars.redact(f"OpenAlex 查询失败：{e}"))
+        raise HTTPException(502, i18n.t("track.api.openalex_failed", error=msgref.show(scholars.redact(str(e)))))
 
 
 @router.post("/scholars")
@@ -171,7 +171,7 @@ def capture_pick(body: dict[str, Any]) -> dict[str, Any]:
     """One match of a title search, or a feed card without an arXiv id, into the reading inbox."""
     cand = body.get("candidate")
     if not isinstance(cand, dict):
-        raise HTTPException(400, "missing candidate")
+        raise HTTPException(400, i18n.t("track.api.no_candidate"))
     lines = [str(x) for x in body.get("lines") or []]
     try:
         return tracking.capture_pick(cand, str(body.get("reason") or ""), body.get("tier"), lines)

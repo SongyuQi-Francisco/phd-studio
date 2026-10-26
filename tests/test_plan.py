@@ -149,14 +149,14 @@ def test_timeline_lists_watched_venue_deadlines_as_utc_events(venue_data):
     assert sorted(tl["watched"]) == ["acl", "cikm", "kdd"]
     by_title = {e["title"]: e for e in tl["events"] if e["type"] != "milestone"}
     year = venue_data.kdd_paper.year + 1
-    kdd_abs = by_title[f"KDD {year} 摘要截止"]
+    kdd_abs = by_title[f"KDD {year} Abstract deadline"]
     assert kdd_abs["at"] == venue_data.kdd_abstract.isoformat()
     assert kdd_abs["venue"] == "kdd" and kdd_abs["acronym"] == "KDD"
     assert (kdd_abs["core"], kdd_abs["ccf"]) == ("A*", "A")
     assert kdd_abs["days"] in (19, 20)
     assert kdd_abs["link"] == "https://kdd.example/next" and kdd_abs["comment"] == "Research Track"
-    assert by_title[f"KDD {year} 全文截止"]["at"] == venue_data.kdd_paper.isoformat()
-    assert by_title[f"CIKM {venue_data.cikm_paper.year} 全文截止"]["days"] in (89, 90)
+    assert by_title[f"KDD {year} Full paper deadline"]["at"] == venue_data.kdd_paper.isoformat()
+    assert by_title[f"CIKM {venue_data.cikm_paper.year} Full paper deadline"]["days"] in (89, 90)
 
 
 def test_timeline_skips_tbd_and_past_beyond_the_window(venue_data):
@@ -262,7 +262,7 @@ def test_official_deadline_appears_in_the_timeline_with_a_marked_title(venue_dat
     venues._catalog.cache_clear()
     plan.watched_keys()
     [e] = [e for e in plan.timeline()["events"] if e.get("venue") == "acl"]
-    assert e["title"].startswith("ACL ") and "Main" in e["title"] and e["title"].endswith("全文截止")
+    assert e["title"].startswith("ACL ") and "Main" in e["title"] and e["title"].endswith("Full paper deadline")
     assert "官网" not in e["title"]
     assert e["comment"] == "Main（官网）"
 

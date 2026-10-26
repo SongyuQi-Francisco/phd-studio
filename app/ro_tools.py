@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import i18n
 from .config import EXTRA_READ_DIRS, TEXT_DIR, VAULT_DIR
 
 TEXT_SUFFIXES = {".md", ".txt", ".yaml", ".yml", ".json", ".jsonl", ".py", ".tex", ".bib", ".csv", ".toml", ".js", ".ts",
@@ -72,8 +73,9 @@ def resolve(path: str) -> Path:
     raise ToolError("只能读 vault、论文全文和配置的额外目录里的文件")
 
 
-def show(p: Path) -> str:
-    for root, prefix in ((VAULT_DIR.resolve(), ""), (TEXT_DIR.resolve(), "全文：")):
+def show(p: Path, fulltext: str = "全文：") -> str:
+    """A path as shown in tool results (the model reads Chinese labels); the chat's tool line passes `fulltext` in the interface language."""
+    for root, prefix in ((VAULT_DIR.resolve(), ""), (TEXT_DIR.resolve(), fulltext)):
         if p.is_relative_to(root):
             return prefix + (str(p.relative_to(root)) if p != root else ".")
     return str(p)
@@ -177,20 +179,21 @@ def file_tools() -> list[Tool]:
              "长文件用 offset/limit 分段读。", {"type": "object", "properties": {
                  "path": s, "offset": {"type": "integer", "description": "从第几行开始，默认 1"},
                  "limit": {"type": "integer", "description": "读多少行，默认 400"}}, "required": ["path"]},
-             _read, lambda a: f"读 {_shown(a.get('path'))}"),
+             _read, lambda a: i18n.t("tools.summary.read", path=_shown(a.get("path")))),
         Tool("list_dir", "列出文件夹内容。path 相对 vault 根目录，默认根目录。",
              {"type": "object", "properties": {"path": s}, "required": []},
-             _list, lambda a: f"列目录 {_shown(a.get('path') or '.')}"),
+             _list, lambda a: i18n.t("tools.summary.list", path=_shown(a.get("path") or "."))),
         Tool("search_text", "在文件里搜文本（正则，不区分大小写），返回 文件:行号: 内容。path 默认整个 vault；"
              "glob 可限定文件名，如 *.md。", {"type": "object", "properties": {"pattern": s, "path": s, "glob": s},
                                            "required": ["pattern"]},
-             _search, lambda a: f"搜 {str(a.get('pattern', ''))[:40]}"),
+             _search, lambda a: i18n.t("tools.summary.search", pattern=str(a.get("pattern", ""))[:40])),
     ]
 
 
 def _shown(path: Any) -> str:
+    """A path for the chat's tool line (the interface language)."""
     try:
-        return show(resolve(str(path or ".")))
+        return show(resolve(str(path or ".")), i18n.t("chat.fulltext"))
     except ToolError:
         return str(path)[:60]
 
@@ -198,7 +201,7 @@ def _shown(path: Any) -> str:
 def studio_tools() -> list[Tool]:
     """The studio assistant's read-only queries, wrapped from studio_tools."""
     from . import studio_tools as st
-    from .claude_chat import STUDIO_TOOL_LABELS
+    from .claude_chat import studio_tool_label
 
     async def no_emit(_: dict[str, Any]) -> None:  # read-only tools never report changes
         return None
@@ -209,10 +212,9 @@ def studio_tools() -> list[Tool]:
             res = await handler(a)
             return "\n".join(c.get("text", "") for c in res.get("content", []))
 
-        label = STUDIO_TOOL_LABELS.get(t.name, t.name)
         schema = t.input_schema if isinstance(t.input_schema, dict) else {"type": "object", "properties": {}}
         out.append(Tool(t.name, t.description, schema, run,
-                        lambda a, label=label: f"{label} {str(a.get('query') or a.get('status') or '')[:40]}".strip()))
+                        lambda a, name=t.name: f"{studio_tool_label(name)} {str(a.get('query') or a.get('status') or '')[:40]}".strip()))
     return out
 
 

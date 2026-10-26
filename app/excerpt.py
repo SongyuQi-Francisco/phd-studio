@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
+from . import i18n
 from .config import DATA_DIR
 from .library import note_path
 
@@ -119,7 +120,7 @@ def _insertion(src: str, section: str, line: str) -> tuple[int, str, bool]:
 
 def append(stem: str, text: str, page: int | None, section: str, comment: str | None = None) -> dict[str, Any]:
     if not text.strip():
-        raise ValueError("没有选中文字")
+        raise ValueError(i18n.t("api.excerpt.no_selection"))
     path = note_path(stem)
     line = line_for(text, page, comment)
     with _locked():

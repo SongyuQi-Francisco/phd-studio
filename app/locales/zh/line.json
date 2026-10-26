@@ -1,0 +1,6 @@
+{
+  "not_found": "没有这条研究线",
+  "not_found_key": "没有这条研究线：{key}",
+  "packet_label": "起草导师汇报包",
+  "status_note": "{date}：{text}"
+}

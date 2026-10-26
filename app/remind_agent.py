@@ -28,12 +28,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from . import i18n
 from .config import CONFIG_FILE, STUDIO_DIR
 
 LABEL = "local.phd-studio.reminders"
 AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
 LOG = Path.home() / "Library" / "Logs" / "PhD Studio Reminders.log"
-EVERY = "每小时整点"  # StartCalendarInterval below; reminders.CHECK_EVERY assumes it
+# StartCalendarInterval below runs it on the hour (reminders.CHECK_EVERY assumes it); status() words that as "every".
 TASK = "remind --check"
 APP_NAMES = ("PhD Studio.app",)
 
@@ -131,7 +132,7 @@ def status() -> dict[str, Any]:
     found = find_app() if sys.platform == "darwin" else None
     out: dict[str, Any] = {
         "supported": sys.platform == "darwin", "installed": p.exists(), "loaded": False, "path": str(p),
-        "every": EVERY, "log": str(LOG), "can_install": official_config(),
+        "every": i18n.t("reminders.every"), "log": str(LOG), "can_install": official_config(),
         "runner": "app" if found else "python", "app": str(found[0]) if found else None,
     }
     if p.exists():
@@ -150,19 +151,19 @@ def status() -> dict[str, Any]:
 
 def install() -> dict[str, Any]:
     if sys.platform != "darwin":
-        raise RuntimeError("后台提醒只支持 macOS")
+        raise RuntimeError(i18n.t("reminders.agent.mac_only"))
     if not official_config():
-        raise RuntimeError(f"这个工作台用的是另一份配置（{CONFIG_FILE}），不能从这里安装后台检查；请在正式的工作台里装")
+        raise RuntimeError(i18n.t("reminders.agent.other_config", config=CONFIG_FILE))
     d = definition()
     if not Path(d["ProgramArguments"][0]).exists():
-        raise RuntimeError(f"找不到 {d['ProgramArguments'][0]}：先在项目里运行 uv sync")
+        raise RuntimeError(i18n.t("reminders.agent.not_found", path=d["ProgramArguments"][0]))
     AGENTS_DIR.mkdir(parents=True, exist_ok=True)
     LOG.parent.mkdir(parents=True, exist_ok=True)
     _launchctl("bootout", f"{_domain()}/{LABEL}")  # an older copy, if loaded; fails harmlessly otherwise
     plist_path().write_bytes(plistlib.dumps(d))
     r = _launchctl("bootstrap", _domain(), str(plist_path()))
     if r.returncode:
-        raise RuntimeError(f"launchctl bootstrap 失败：{(r.stderr or r.stdout).strip()[:300]}")
+        raise RuntimeError(i18n.t("reminders.agent.bootstrap_failed", error=(r.stderr or r.stdout).strip()[:300]))
     # RunAtLoad alone may be deferred for a Background job ("speculative" spawn): check once right now.
     _launchctl("kickstart", f"{_domain()}/{LABEL}")
     return status()

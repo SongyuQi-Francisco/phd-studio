@@ -5,7 +5,7 @@ from datetime import date
 
 import pytest
 
-from app import scholar_rank as R
+from app import msgref, scholar_rank as R
 
 MODEL = R.compile_model({
     "domain_gate": {"patterns": ["recommend", "recsys", "collaborative filtering"]},
@@ -81,13 +81,13 @@ def test_field_papers_needs_every_group_and_skips_workshops_and_duplicates():
 def test_noise_from_mega_collaborations():
     top = [{"title": "Observation of a new particle", "cites": 9000, "team": 180},
            {"title": "A recommender", "cites": 1000, "team": 2}]
-    assert "超大合作" in R.noise_verdict(top, MODEL)
+    assert "超大合作" in msgref.show(R.noise_verdict(top, MODEL))  # reasons are stored as references
 
 
 def test_noise_from_out_of_field_citations():
     top = [{"title": "A deep learning library", "cites": 9500, "team": 8},
            {"title": "Recommending with graphs", "cites": 500, "team": 3}]
-    assert "领域外" in R.noise_verdict(top, MODEL)
+    assert "领域外" in msgref.show(R.noise_verdict(top, MODEL))
 
 
 def test_field_scholar_is_not_noise():
@@ -100,7 +100,7 @@ def test_field_scholar_is_not_noise():
 def test_inactive_verdict():
     today = date(2026, 10, 25)
     assert R.inactive_verdict("2026-05-01", today) is None
-    assert "3 年内没有" in R.inactive_verdict("2019-01-01", today)
+    assert "3 年内没有" in msgref.show(R.inactive_verdict("2019-01-01", today))
     assert R.inactive_verdict(None, today)
 
 
@@ -122,7 +122,7 @@ def test_rank_orders_by_citations_and_filters():
     out = R.rank(cands, check, top_n=2, alternates=0, min_papers=3)
     assert [c["name"] for c in out["list"]] == ["C", "A"]
     assert [c["rank"] for c in out["list"]] == [1, 2]
-    reasons = {c["name"]: c["reason"] for c in out["skipped"]}
+    reasons = {c["name"]: msgref.show(c["reason"]) for c in out["skipped"]}
     assert "已故" in reasons["E"] and "大合作" in reasons["D"] and "1 篇" in reasons["B"]
     assert "D" not in calls and "E" not in calls  # flagged people never cost a lookup
 
@@ -156,8 +156,8 @@ def test_one_per_lab_keeps_the_best_cited_and_says_who_holds_the_lab():
     out = R.rank(LABS, check, top_n=3, alternates=1, min_papers=3)
     assert [c["name"] for c in out["list"]] == ["Head", "Other", "Loner"]
     assert out["alternates"] == []  # Twin shares lab-y with Other
-    reasons = {c["name"]: c["reason"] for c in out["skipped"]}
-    assert reasons == {"Student": "同实验室已有 Head", "Twin": "同实验室已有 Other"}
+    reasons = {c["name"]: msgref.show(c["reason"]) for c in out["skipped"]}
+    assert reasons == {"Student": "同 lab 已有 Head", "Twin": "同 lab 已有 Other"}
     assert "Student" not in calls and "Twin" not in calls  # no lookup spent on them
 
 
@@ -178,7 +178,7 @@ def test_pinned_scholar_holds_their_lab():
     check, calls = checks({n: 9 for n in ("Head", "Student", "Other", "Loner", "Twin")})
     out = R.rank(LABS, check, top_n=2, alternates=0, min_papers=3, pinned=[{"name": "Twin", "scholar_id": "T" * 12}])
     assert [c["name"] for c in out["list"]] == ["Head", "Loner", "Twin"]
-    assert {c["name"]: c["reason"] for c in out["skipped"]}["Other"] == "同实验室已有 Twin"
+    assert {c["name"]: msgref.show(c["reason"]) for c in out["skipped"]}["Other"] == "同 lab 已有 Twin"
 
 
 def test_excluded_matches_by_name_when_ids_differ():
@@ -186,7 +186,7 @@ def test_excluded_matches_by_name_when_ids_differ():
     check, calls = checks({"Ada Example": 9, "Grace Sample": 9})
     out = R.rank(cands, check, top_n=2, alternates=0, excluded=[{"name": "ada example"}])
     assert [c["name"] for c in out["list"]] == ["Grace Sample"]
-    assert out["skipped"][0]["reason"] == "在排除名单里" and "Ada Example" not in calls
+    assert msgref.show(out["skipped"][0]["reason"]) == "在排除名单里" and "Ada Example" not in calls
 
 
 def test_unavailable_lookup_stops_the_ranking():
@@ -217,7 +217,7 @@ def test_unresolved_candidate_is_skipped_not_fatal():
         return {"field_papers": 9}
     out = R.rank([person("Zhang Wei", 900), person("Ada Example", 800)], check, top_n=2, alternates=0)
     assert [c["name"] for c in out["list"]] == ["Ada Example"]
-    assert out["skipped"][0]["unchecked"] and "同名多人" in out["skipped"][0]["reason"]
+    assert out["skipped"][0]["unchecked"] and "同名多人" in msgref.show(out["skipped"][0]["reason"])
 
 
 def author(aid, name, cites, insts=(), topics=()):
@@ -270,4 +270,5 @@ def test_plan_apply_rechecks_excludes_and_pins():
     plan = R.plan_apply(current, run, excluded=[{"name": "Dan", "scholar_id": "D" * 12}])
     assert plan["add"] == [] and plan["remove"] == []  # excluded after the suggestion; pinned after it
     assert [(n, c["name"]) for n, c in plan["order"]] == [(1, "Ada"), (2, "Bob")]
-    assert any("排除" in n for n in plan["notes"]) and any("固定" in n for n in plan["notes"])
+    notes = [msgref.show(n) for n in plan["notes"]]
+    assert any("排除" in n for n in notes) and any("固定" in n for n in notes)

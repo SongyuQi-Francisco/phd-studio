@@ -9,7 +9,8 @@ details' edition and for every newer one), and only a change since counts: a new
 looked at (say a placeholder page with no CFP yet) stays quiet until it gets a link or deadlines, and a
 difference that was already looked at does not keep the warning on.
 
-Pure functions over the catalog entry; no I/O.
+Pure functions over the catalog entry; no I/O. The reasons are worded in this Mac's interface language
+(`i18n.t`), each with a short label for the chip (`short`).
 """
 from __future__ import annotations
 
@@ -17,12 +18,10 @@ import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from . import config
+from . import config, i18n
 
 TOLERANCE = timedelta(hours=36)  # AoE / UTC / PT renderings of the same deadline differ by up to about a day
 RECENT = timedelta(days=30)      # without a baseline, ccfddl dates older than this are not compared
-
-SHORT = {"edition": "有新一届", "age": "核对已久", "link": "链接有变", "dates": "截稿有变"}
 
 
 def edition_year(detail: dict[str, Any] | None) -> int | None:
@@ -110,11 +109,13 @@ def _day(iso: str) -> str:
 
 def _changes(now_shown: dict[str, Any], was: dict[str, Any]) -> tuple[str | None, str | None]:
     """How what ccfddl shows differs from what it showed at the last check: (link change, date change) as text."""
-    link = f"{was.get('link') or '（无）'} → {now_shown['link']}" if now_shown["link"] and now_shown["link"] != was.get("link") else None
+    link = f"{was.get('link') or i18n.t('venue.fresh.no_link')} → {now_shown['link']}" if now_shown["link"] and now_shown["link"] != was.get("link") else None
     new = sorted(set(now_shown["dates"]) - set(was.get("dates") or []))
     gone = sorted(set(was.get("dates") or []) - set(now_shown["dates"]))
-    parts = ([f"新增 {'、'.join(map(_day, new))}"] if new else []) + ([f"移除 {'、'.join(map(_day, gone))}"] if gone else [])
-    return link, "；".join(parts) or None
+    items = i18n.t("venue.sep.items")
+    parts = ([i18n.t("venue.fresh.added", days=items.join(map(_day, new)))] if new else []) \
+        + ([i18n.t("venue.fresh.removed", days=items.join(map(_day, gone)))] if gone else [])
+    return link, i18n.t("venue.sep.clauses").join(parts) or None
 
 
 def _newer_reasons(entry: dict[str, Any], year: int, seen: dict[str, Any]) -> list[dict[str, str]]:
@@ -126,8 +127,9 @@ def _newer_reasons(entry: dict[str, Any], year: int, seen: dict[str, Any]) -> li
             continue                    # not listed then: the edition rule covers a new one
         link, dates = _changes(_shown(e), was)
         if link or dates:
-            out.append({"code": "edition", "text": f"ccfddl 的 {e['year']} 届有新信息：" + "；".join(
-                x for x in (f"链接 {link}" if link else None, f"截稿日期 {dates}" if dates else None) if x)})
+            what = (i18n.t("venue.fresh.part_link", link=link) if link else None, i18n.t("venue.fresh.part_dates", dates=dates) if dates else None)
+            out.append({"code": "edition", "text": i18n.t("venue.fresh.newer_info", year=e["year"],
+                                                          what=i18n.t("venue.sep.clauses").join(x for x in what if x))})
     return out
 
 
@@ -140,18 +142,18 @@ def _ccfddl_reasons(entry: dict[str, Any], detail: dict[str, Any], year: int, no
     if seen and seen.get("year") == year:
         link, dates = _changes(fp, seen)
         if link:
-            out.append({"code": "link", "text": f"ccfddl 的 {year} 届链接变了：{link}"})
+            out.append({"code": "link", "text": i18n.t("venue.fresh.link_changed", year=year, link=link)})
         if dates:
-            out.append({"code": "dates", "text": f"ccfddl 的 {year} 届截稿日期有变化：{dates}"})
+            out.append({"code": "dates", "text": i18n.t("venue.fresh.dates_changed", year=year, dates=dates)})
         return out
     known = _known_links(detail)
     if fp["link"] and fp["link"] not in known and not any(k.startswith(fp["link"] + "/") for k in known):
-        out.append({"code": "link", "text": f"ccfddl 的 {year} 届链接 {fp['link']} 不在详情记录的官网 / CFP / 来源里"})
+        out.append({"code": "link", "text": i18n.t("venue.fresh.link_unknown", year=year, link=fp["link"])})
     mine = _detail_instants(detail)
     new = [i for i in fp["dates"] if datetime.fromisoformat(i) >= now - RECENT
            and not any(abs(datetime.fromisoformat(i) - m) <= TOLERANCE for m in mine)]
     if new:
-        out.append({"code": "dates", "text": f"ccfddl 的 {year} 届有详情里没有的截稿日期：{'、'.join(map(_day, new))}"})
+        out.append({"code": "dates", "text": i18n.t("venue.fresh.dates_new", year=year, dates=i18n.t("venue.sep.items").join(map(_day, new)))})
     return out
 
 
@@ -168,22 +170,22 @@ def check(entry: dict[str, Any], now: datetime | date | None = None, months: int
     seen = (entry.get("override") or {}).get("ccfddl_seen") or {}
     reasons: list[dict[str, str]] = []
     if year is None:
-        reasons.append({"code": "edition", "text": "没有记录这些详情属于哪一届"})
+        reasons.append({"code": "edition", "text": i18n.t("venue.fresh.no_edition")})
     elif upcoming and year < upcoming:
         if upcoming > (seen.get("upcoming") or 0):
-            reasons.append({"code": "edition", "text": f"详情是 {year} 届的，ccfddl 已有 {upcoming} 届"})
+            reasons.append({"code": "edition", "text": i18n.t("venue.fresh.older_edition", year=year, upcoming=upcoming)})
         else:
             reasons += _newer_reasons(entry, year, seen)
     since = None
     if verified is None:
-        reasons.append({"code": "age", "text": "没有记录上次核对的日期"})
+        reasons.append({"code": "age", "text": i18n.t("venue.fresh.no_verified")})
     else:
         since = months_between(verified, now.date())
         if since >= months:
-            reasons.append({"code": "age", "text": f"上次核对是 {verified.isoformat()}，已过 {since} 个月（超过 {months} 个月）"})
+            reasons.append({"code": "age", "text": i18n.t("venue.fresh.age", date=verified.isoformat(), n=since, limit=months)})
     if year:
         reasons += _ccfddl_reasons(entry, detail, year, now)
     for r in reasons:
-        r["short"] = SHORT[r["code"]]
+        r["short"] = i18n.t(f"venue.short.{r['code']}")  # i18n-keys: venue.short.{edition,age,link,dates}
     return {"stale": bool(reasons), "reasons": reasons, "edition_year": year, "ccfddl_year": upcoming,
             "verified_at": verified.isoformat() if verified else None, "months_since": since, "limit_months": months}

@@ -31,7 +31,7 @@ from urllib.parse import urlsplit
 import httpx
 import pymupdf as fitz
 
-from . import library, notes, reading, tracking
+from . import i18n, library, msgref, notes, reading, tracking
 from .config import DATA_DIR, LAB_TRACKER_DIR, PROFILE, TRACKER_DIR, VAULT_DIR, secret
 from .store import Store
 
@@ -86,6 +86,7 @@ def redact(text: str) -> str:
 
 
 def _oa(path: str, **params: Any) -> dict[str, Any]:
+    """One OpenAlex GET. Its errors carry msgref references (the job keeps them; the page words them)."""
     key = secret("OPENALEX_API_KEY", "openalex")
     if key:
         params["api_key"] = key
@@ -93,11 +94,11 @@ def _oa(path: str, **params: Any) -> dict[str, Any]:
         with _oa_pace:
             r = httpx.get(f"{OPENALEX}/{path}", params=params, headers=UA, timeout=40)
     except httpx.HTTPError as e:  # the message may carry the URL (and the key): rebuild it
-        raise httpx.HTTPError(f"OpenAlex 连接失败（{e.__class__.__name__}）") from None
+        raise httpx.HTTPError(msgref.ref("scholars.oa.connect", cls=e.__class__.__name__)) from None
     if r.status_code == 429:
-        raise httpx.HTTPError("OpenAlex 今日免费额度已用完（可在 secrets/openalex.env 里放 OPENALEX_API_KEY）")
+        raise httpx.HTTPError(msgref.ref("scholars.oa.quota"))
     if r.status_code >= 400:
-        raise httpx.HTTPError(f"OpenAlex 返回 HTTP {r.status_code}")
+        raise httpx.HTTPError(msgref.ref("scholars.oa.http", status=r.status_code))
     return r.json()
 
 
@@ -153,7 +154,7 @@ def add(body: dict[str, Any]) -> dict[str, Any]:
     name = (body.get("name") or "").strip()
     oa = _short(body.get("openalex"))
     if not name or not re.fullmatch(r"A\d+", oa):
-        raise ValueError("需要姓名和 OpenAlex 作者 id（A 开头）")
+        raise ValueError(i18n.t("scholars.add.need_id"))
     for s in scholars():
         if s.get("openalex") == oa:
             return s
@@ -434,7 +435,7 @@ def fetch_one(s: dict[str, Any], refresh: bool = False) -> dict[str, Any]:
         return {**data, "stale": False}
     except (httpx.HTTPError, ValueError, KeyError) as e:
         _failed_at[s["id"]] = time.time()
-        msg = redact(str(e)) if isinstance(e, httpx.HTTPError) else f"OpenAlex 数据异常（{e.__class__.__name__}）"
+        msg = redact(str(e)) if isinstance(e, httpx.HTTPError) else msgref.ref("scholars.oa.bad_data", cls=e.__class__.__name__)
         if hit:
             return {**hit[0], "stale": True, "error": msg}
         return {"stale": True, "error": msg, "works": [], "arxiv": [], "by_year": [], "author": {}}
@@ -458,13 +459,21 @@ def refresh_in_background(force: bool = False, ids: set[str] | None = None) -> d
             _todo.extend(extra)
             _forced.update(s["id"] for s in extra if force)
             _job["total"] = len(_todo)
-            return dict(_job)
+            return job_view()
         _todo[:] = want
         _forced.clear()
         _forced.update(s["id"] for s in want if force)
         _job.update(running=True, done=0, total=len(want), current=None, error=None)
     threading.Thread(target=_run_job, daemon=True).start()
-    return dict(_job)
+    return job_view()
+
+
+def job_view() -> dict[str, Any]:
+    """The background job as the page reads it: its current step and error are kept as msgref references."""
+    job = dict(_job)
+    for k in ("current", "error"):
+        job[k] = msgref.show(job.get(k))
+    return job
 
 
 def _run_job() -> None:
@@ -477,11 +486,11 @@ def _run_job() -> None:
                 return
             s = _todo[i] if i < n else None
         if s is None:
-            _job["current"] = "机构 logo"
+            _job["current"] = msgref.ref("scholars.job.logos")
             try:
                 _institutions()
             except Exception as e:  # logos are optional
-                _job["error"] = redact(f"机构信息：{e}")
+                _job["error"] = msgref.ref("scholars.job.inst_error", error=redact(str(e)))
             _fetch_logos()
             inst_for = n
             _prune(CACHE / "img", keep=300, days=180)
@@ -493,7 +502,7 @@ def _run_job() -> None:
                 _job["error"] = got["error"]
         except Exception as e:  # one scholar's failure never stops the others
             _failed_at[s["id"]] = time.time()
-            _job["error"] = redact(f"{s['name']}：{e.__class__.__name__}")
+            _job["error"] = msgref.ref("scholars.job.scholar_error", name=redact(s["name"]), cls=e.__class__.__name__)
         i += 1
         _job["done"] = i
 
@@ -533,6 +542,7 @@ def activity(refresh: bool = False) -> dict[str, Any]:
     if _logos_pending(insts) and time.time() - _logos_tried[0] > 1800:  # a job with no scholars: just the logos
         _logos_tried[0] = time.time()
         refresh_in_background(ids=set())
+    unknown_venue = i18n.t("scholars.unknown_venue")
     today = _today()
     cut = {k: (today - timedelta(days=k)).isoformat() for k in (30, 90, 365)}
     months = _months(12)
@@ -569,7 +579,7 @@ def activity(refresh: bool = False) -> dict[str, Any]:
             approx = w.get("source") == "OpenAlex" and w["date"].endswith("-01-01")
             w.update(score=sc, topics=hits, tier=tier, lines=sorted(ln), line_hits=ln, date_approx=approx)
             rel += bool(ln)
-            venues[w.get("venue") or "未知"] += 1
+            venues[w.get("venue") or unknown_venue] += 1
             for t in hits:
                 topics[t] += 1
             if not approx:
@@ -609,7 +619,7 @@ def activity(refresh: bool = False) -> dict[str, Any]:
             "venues": venues.most_common(6), "coauthors": coauthors.most_common(10),
             "topics": [(labels.get(t, t), n) for t, n in topics.most_common(6)],
             "fetched": data.get("fetched"), "age_h": round(fetched_age / 3600, 1) if fetched_age is not None else None,
-            "error": data.get("error"),
+            "error": msgref.show(data.get("error")),
         })
     plist = sorted(papers.values(), key=lambda p: p["date"], reverse=True)
     for p in plist:
@@ -624,7 +634,7 @@ def activity(refresh: bool = False) -> dict[str, Any]:
     monthly_all = [{"month": m, "relevant": sum(1 for p in exact if p["date"][:7] == m and p["lines"]),
                     "other": sum(1 for p in exact if p["date"][:7] == m and not p["lines"])} for m in months]
     return {"as_of": today.isoformat(), "months": months, "scholars": rows, "papers": plist, "totals": totals,
-            "monthly": monthly_all, "topic_labels": labels, "lines": list(terms), "job": dict(_job)}
+            "monthly": monthly_all, "topic_labels": labels, "lines": list(terms), "job": job_view()}
 
 
 # ---------- institutions, avatars, thumbnails ----------

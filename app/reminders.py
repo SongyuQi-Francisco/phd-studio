@@ -35,7 +35,7 @@ from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from typing import Any, Callable, Iterator
 
-from . import notify, plan
+from . import i18n, notify, plan
 from .config import DATA_DIR, DEVICE, PLAN_FILE
 from .store import Store
 
@@ -63,10 +63,9 @@ KEEP_SENT_DAYS = 30  # sent-log entries are dropped this long after their event
 HEARTBEAT = timedelta(hours=6)
 
 store = Store(FILE, ("settings", "devices", "sent"),
-              "# Deadline reminders, managed by PhD Studio (Settings → 截稿提醒). Shared by your Macs.\n")
+              "# Deadline reminders, managed by PhD Studio (Settings → Deadline reminders). Shared by your Macs.\n")
 
-KIND_LABEL = {"milestone": "里程碑", "gate": "Gate", "kill": "Kill 点", "deadline": "截止"}
-WEEKDAYS = "一二三四五六日"
+KINDS = ("milestone", "gate", "kill", "deadline")  # a milestone's kind; worded by kind_label()
 
 
 # ---------- this Mac ----------
@@ -105,20 +104,20 @@ def _validate(patch: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for k, v in patch.items():
         if k not in DEFAULTS:
-            raise ValueError(f"unknown setting {k}")
+            raise ValueError(i18n.t("reminders.err.unknown_setting", name=k))
         if k in ("enabled", "quiet"):
             if not isinstance(v, bool):
-                raise ValueError(f"{k} must be true or false")
+                raise ValueError(i18n.t("reminders.err.not_bool", name=k))
             out[k] = v
         elif k == "leads":
             leads = sorted({int(x) for x in v}, reverse=True)
             if not leads or any(x < 0 or x > MAX_LEAD for x in leads):
-                raise ValueError(f"lead times must be 0–{MAX_LEAD} days, at least one")
+                raise ValueError(i18n.t("reminders.err.leads", max=MAX_LEAD))
             out[k] = leads
         elif k == "types":
             types = {t: bool(v.get(t, True)) for t in TYPES} if isinstance(v, dict) else None
             if not types or not any(types.values()):
-                raise ValueError("remind about at least one kind of event")
+                raise ValueError(i18n.t("reminders.err.types"))
             out[k] = types
         elif k in ("quiet_start", "quiet_end", "time"):
             out[k] = _hhmm(v)
@@ -174,7 +173,8 @@ def events() -> list[dict[str, Any]]:
             tgts = e.get("targets") or []
             if e.get("muted") and not tgts:
                 continue
-            stage = e.get("stage") or ("abstract" if "摘要" in e["title"] else "deadline")
+            title = e["title"]
+            stage = e.get("stage") or ("abstract" if "摘要" in title or "abstract" in title.lower() else "deadline")
             out.append({"key": f"v:{e['venue']}:{stage}:{at.astimezone(timezone.utc).date()}",
                         "type": "target" if tgts else "venue", "title": e["title"], "at": at, "venue": e["venue"],
                         "targets": [{"id": t["id"], "title": t["title"], "line": t.get("line")} for t in tgts],
@@ -277,28 +277,47 @@ def schedule(evs: list[dict[str, Any]], cfg: dict[str, Any], now: datetime, sent
 
 # ---------- message text ----------
 
+# All the text below is worded in this Mac's interface language when the notification is made (the
+# hourly check runs as its own process and reads the same setting), never at import.
+
+def kind_label(kind: str | None) -> str:
+    """A milestone's kind: 里程碑 / Gate / Kill 检查点 / 截止 (Milestone / Gate / Kill check / Deadline)."""
+    # i18n-keys: reminders.kind.{milestone,gate,kill,deadline}
+    return i18n.t(f"reminders.kind.{kind if kind in KINDS else 'milestone'}")
+
+
 def _when(d: datetime) -> str:
-    return f"{d.month}月{d.day}日 周{WEEKDAYS[d.weekday()]}"
+    """'1月22日 周五' / 'Fri, Jan 22'."""
+    months, weekdays = i18n.t("reminders.months").split(","), i18n.t("reminders.weekdays").split(",")
+    return i18n.t("reminders.when", month=months[d.month - 1], day=d.day, weekday=weekdays[d.weekday()])
 
 
 def _left(days_left: int, milestone: bool) -> str:
-    verb = "到期" if milestone else "截止"
-    return {0: f"今天{verb}", 1: f"明天{verb}"}.get(days_left, f"还有 {days_left} 天")
+    if days_left in (0, 1):
+        day = "today" if days_left == 0 else "tomorrow"
+        # i18n-keys: reminders.left.{today,tomorrow}_milestone reminders.left.{today,tomorrow}_deadline
+        return i18n.t(f"reminders.left.{day}_{'milestone' if milestone else 'deadline'}")
+    return i18n.t("reminders.left.days", n=days_left)
+
+
+def _titles(items: list[dict[str, Any]]) -> str:
+    return i18n.t("reminders.list_sep").join(x["title"] for x in items)
 
 
 def message(r: dict[str, Any], tz: tzinfo | None = None) -> dict[str, str]:
     """Title, subtitle and body of one reminder's notification."""
     at = _local(r["at"], tz)
     if r["type"] == "milestone":
-        sub = " · ".join(x for x in (KIND_LABEL.get(r.get("kind"), "里程碑"), r.get("line")) if x)
-        return {"title": f"{r['title']} · {_left(r['days_left'], True)}", "subtitle": sub, "body": f"{_when(at)} 到期"}
+        sub = " · ".join(x for x in (kind_label(r.get("kind")), r.get("line")) if x)
+        return {"title": f"{r['title']} · {_left(r['days_left'], True)}", "subtitle": sub,
+                "body": i18n.t("reminders.body.milestone", when=_when(at))}
     if r["type"] == "target":
-        sub = "投稿目标 · " + "、".join(t["title"] for t in r.get("targets") or [])
+        sub = i18n.t("reminders.sub.target", titles=_titles(r.get("targets") or []))
     else:
         ranks = " / ".join(x for x in (r.get("ccf") and f"CCF {r['ccf']}", r.get("core") and f"CORE {r['core']}") if x)
-        sub = "关注的会议" + (f" · {ranks}" if ranks else "")
+        sub = i18n.t("reminders.sub.venue_ranks", ranks=ranks) if ranks else i18n.t("reminders.sub.venue")
     return {"title": f"{r['title']} · {_left(r['days_left'], False)}", "subtitle": sub,
-            "body": f"{_when(at)} {at:%H:%M} 截止（本地时间）"}
+            "body": i18n.t("reminders.body.deadline", when=_when(at), time=f"{at:%H:%M}")}
 
 
 # ---------- state ----------
@@ -431,9 +450,11 @@ def _check(now: datetime, dry_run: bool, send: Sender, tz: tzinfo | None) -> dic
                     break
         rest = todo[len(batch):]
         if rest and len(done) == len(batch):
-            names = "、".join(r["title"] for r in rest[:3]) + ("等" if len(rest) > 3 else "")
-            out = send(f"另有 {len(rest)} 项临近", names, subtitle="PhD Studio 截稿提醒", open_={"view": "timeline"},
-                       ident=f"summary-{now:%Y%m%d%H%M}")
+            names = _titles(rest[:3])
+            if len(rest) > 3:
+                names = i18n.t("reminders.names_more", names=names)
+            out = send(i18n.t("reminders.more_due", n=len(rest)), names, subtitle=i18n.t("reminders.notify_title"),
+                       open_={"view": "timeline"}, ident=f"summary-{now:%Y%m%d%H%M}")
             if out.get("ok"):
                 done += rest
         res["sent"] = [message(r, tz)["title"] for r in done]
@@ -451,8 +472,8 @@ def _finish(res: dict[str, Any]) -> dict[str, Any]:
 
 
 def test_notification() -> dict[str, Any]:
-    out = notify.send("PhD Studio 截稿提醒", "测试通知：之后截稿和里程碑临近时会这样提醒你。",
-                      subtitle="这是一条测试通知", open_={"view": "timeline"}, ask=True)
+    out = notify.send(i18n.t("reminders.notify_title"), i18n.t("reminders.test.body"),
+                      subtitle=i18n.t("reminders.test.subtitle"), open_={"view": "timeline"}, ask=True)
     local = _read_local()
     local["last_test"] = {"at": _stamp(), **{k: out.get(k) for k in ("ok", "via", "error")}}
     _write_local(local)

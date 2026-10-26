@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
-from . import providers
+from . import i18n, providers
 from .claude_chat import registry
 
 router = APIRouter()
@@ -30,12 +30,12 @@ async def set_chat_model(stem: str, req: ModelReq) -> dict[str, Any]:
     try:
         chat = registry.get(stem)
     except FileNotFoundError:
-        raise HTTPException(404, "没有这个对话")
+        raise HTTPException(404, i18n.t("model.no_chat"))
     p = providers.get(req.provider)
     if p is None:
-        raise HTTPException(400, f"没有这个模型来源：{req.provider}")
+        raise HTTPException(400, i18n.t("model.no_provider", provider=req.provider))
     if not await run_in_threadpool(p.valid_model, req.model):
-        raise HTTPException(400, f"{p.label} 没有模型 {req.model}")
+        raise HTTPException(400, i18n.t("model.no_model", label=p.label, model=req.model))
     try:
         return await chat.set_model(req.provider, req.model)
     except RuntimeError as e:

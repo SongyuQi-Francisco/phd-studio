@@ -1,0 +1,6 @@
+{
+  "not_found": "No such research line",
+  "not_found_key": "No such research line: {key}",
+  "packet_label": "Draft advisor packet",
+  "status_note": "{date}: {text}"
+}

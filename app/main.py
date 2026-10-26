@@ -59,12 +59,12 @@ def _stem_or_404(stem: str) -> str:
         return stem
     if line_chat.is_line_key(stem):  # a research line's own chat
         if not line_chat.known(stem):
-            raise HTTPException(404, "没有这条研究线")
+            raise HTTPException(404, i18n.t("line.not_found"))
         return stem
     try:
         library.validate(stem)
     except FileNotFoundError:
-        raise HTTPException(404, f"没有这篇论文的笔记：{stem}")
+        raise HTTPException(404, i18n.t("api.paper_note_not_found", stem=stem))
     return stem
 
 
@@ -103,11 +103,11 @@ async def pdf(stem: str, variant: str = "original") -> FileResponse:
         try:
             path = await run_in_threadpool(library.ensure_pdf, stem)
         except FileNotFoundError as e:
-            raise HTTPException(404, f"找不到 PDF：{e}")
+            raise HTTPException(404, i18n.t("api.pdf_not_found", error=e))
     else:
         path = bilingual.output(stem, variant)
         if path is None:
-            raise HTTPException(404, "双语版本还没生成")
+            raise HTTPException(404, i18n.t("api.bilingual_missing"))
     return FileResponse(path, media_type="application/pdf")
 
 
@@ -126,7 +126,7 @@ async def translate_text(req: TranslateReq) -> dict[str, str]:
     try:
         return await run_in_threadpool(translate, req.text)
     except RuntimeError as e:
-        raise HTTPException(502, f"翻译失败：{e}")
+        raise HTTPException(502, i18n.t("api.translate_failed", error=e))
 
 
 class CropReq(BaseModel):
@@ -137,7 +137,7 @@ class CropReq(BaseModel):
 def save_crop(req: CropReq) -> dict[str, str]:
     data = base64.b64decode(req.png_base64.split(",", 1)[-1])
     if data[:8] != b"\x89PNG\r\n\x1a\n":
-        raise HTTPException(400, "不是 PNG")
+        raise HTTPException(400, i18n.t("api.not_png"))
     name = f"{uuid.uuid4().hex[:12]}.png"
     (CROPS_DIR / name).write_bytes(data)
     return {"name": name}
@@ -156,7 +156,7 @@ def excerpt_sections(stem: str) -> dict[str, Any]:
     try:
         text = library.note_path(stem).read_text(encoding="utf-8")
     except FileNotFoundError:
-        raise HTTPException(400, "这篇还没有笔记，先建笔记再摘录")
+        raise HTTPException(400, i18n.t("api.excerpt.no_note"))
     return {"sections": excerpt.headings(text), "default": excerpt.NEW_SECTION}
 
 
@@ -166,9 +166,9 @@ def excerpt_add(stem: str, req: ExcerptReq) -> dict[str, Any]:
     try:
         return excerpt.append(stem, req.text, req.page, req.section, req.comment)
     except FileNotFoundError:
-        raise HTTPException(400, "这篇还没有笔记，先建笔记再摘录")
+        raise HTTPException(400, i18n.t("api.excerpt.no_note"))
     except KeyError:
-        raise HTTPException(400, f"笔记里没有「{req.section}」这一节")
+        raise HTTPException(400, i18n.t("api.excerpt.no_section", section=req.section))
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -187,7 +187,7 @@ def excerpt_undo(stem: str, req: ExcerptUndoReq) -> dict[str, bool]:
     try:
         return excerpt.undo(stem, req.line, req.inserted, req.section, req.created, req.mtime_ns)
     except FileNotFoundError:
-        raise HTTPException(404, "没有这篇笔记")
+        raise HTTPException(404, i18n.t("api.note_not_found"))
 
 
 @app.get("/api/crops/{name}")
@@ -220,7 +220,7 @@ class PushReq(BaseModel):
     paper: str | None = None
     arxiv: str | None = None
     ext: str | None = None  # doi:<doi> / openreview:<id> / acl:<id>, for a paper without a note or arXiv id
-    reason: str = "自己加的"
+    reason: str | None = None  # None: the default words of the Mac that adds it (api.reason_self)
     tier: str | None = None
     lines: list[str] = []
 
@@ -228,7 +228,8 @@ class PushReq(BaseModel):
 @app.post("/api/reading")
 def reading_push(req: PushReq) -> dict[str, Any]:
     try:
-        item, what = reading.push(paper=req.paper, arxiv=req.arxiv, ext=req.ext, reason=req.reason, source="self",
+        reason = i18n.t("api.reason_self") if req.reason is None else req.reason
+        item, what = reading.push(paper=req.paper, arxiv=req.arxiv, ext=req.ext, reason=reason, source="self",
                                   tier=req.tier, lines=req.lines)
     except reading.ReadingError as e:
         raise HTTPException(400, str(e))
@@ -333,7 +334,7 @@ def venue_list(q: str = "", ccf: str = "", core: str = "", scope: str = "all", l
 def venue_detail(key: str) -> dict[str, Any]:
     v = venues.get(key)
     if not v:
-        raise HTTPException(404, "没有这个会议")
+        raise HTTPException(404, i18n.t("api.venue_not_found"))
     v["watched"] = v["key"] in set(plan.watched_keys())
     return v
 
@@ -352,7 +353,7 @@ async def venue_refresh() -> dict[str, Any]:
     try:
         return await run_in_threadpool(venues.refresh, True)
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"更新失败：{e}")
+        raise HTTPException(502, i18n.t("api.refresh_failed", error=e))
 
 
 class WatchReq(BaseModel):
@@ -433,7 +434,7 @@ def vault_note(path: str) -> dict[str, Any]:
     try:
         n = notes.read(notes.resolve(path))
     except FileNotFoundError:
-        raise HTTPException(404, "没有这篇笔记")
+        raise HTTPException(404, i18n.t("api.note_not_found"))
     p = notes.resolve(path)
     out = {k: n[k] for k in ("path", "name", "frontmatter", "body", "obsidian_url")}
     out["paper"] = p.stem if p.parent == library.PAPERS_DIR.resolve() else None
@@ -444,7 +445,7 @@ def vault_note(path: str) -> dict[str, Any]:
 def vault_note_find(name: str) -> dict[str, Any]:
     p = notes.find_by_name(name)
     if not p:
-        raise HTTPException(404, "vault 里没有这篇笔记")
+        raise HTTPException(404, i18n.t("api.vault_note_not_found"))
     rel = notes.rel(p)
     paper = p.parent.resolve() == library.PAPERS_DIR.resolve()
     return {"path": rel, "paper": p.stem if paper else None}
@@ -466,7 +467,7 @@ def track_run(run_id: str) -> dict[str, Any]:
     try:
         return tracking.run(run_id)
     except FileNotFoundError:
-        raise HTTPException(404, "没有这次运行")
+        raise HTTPException(404, i18n.t("api.run_not_found"))
 
 
 @app.get("/api/track/labs")
@@ -576,7 +577,7 @@ async def chat_ws(ws: WebSocket, stem: str) -> None:
             kind = msg.get("type")
             if kind == "send":
                 if chat.lock.locked():
-                    await ws.send_json({"type": "error", "message": "上一条还在回答中"})
+                    await ws.send_json({"type": "error", "message": i18n.t("chat.busy_send")})
                     continue
                 chat.task = asyncio.create_task(chat.send(
                     text=msg.get("text", ""),

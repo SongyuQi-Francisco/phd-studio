@@ -1,0 +1,13 @@
+{
+  "unavailable": "{reason}. No other model was used instead.",
+  "list_sep": ", ",
+  "no_vision": "{name} can't read images. At the top of the panel, switch to Claude or one of these models, then send again: {models}",
+  "no_vision_any": "{name} can't read images. At the top of the panel, switch to Claude or another model that can read images, then send again.",
+  "provider_gone": "The model provider “{provider}” this conversation was set to no longer exists. Pick a model again at the top of the panel.",
+  "context_failed": "Couldn't prepare the context: {error}",
+  "stopped": "Stopped.",
+  "turn_failed": "{label} error: {error}",
+  "no_chat": "No such conversation",
+  "no_provider": "No such model provider: {provider}",
+  "no_model": "{label} has no model {model}"
+}

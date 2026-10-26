@@ -20,7 +20,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from . import config, library, notes
+from . import config, i18n, library, notes
 from .i18n import answer_language
 from .config import (AGENTS_MD, CHATS_DIR, IDEA_RADAR, IDEA_TEMPLATE, IDEAS_DIR, PLAN_FILE, PROFILE, ROADMAP,
                      STATE_DIR, VAULT_DIR)
@@ -181,13 +181,13 @@ def resolve(key: str) -> dict[str, Any]:
     """The research line (as on the 方向 page) a chat key belongs to. Reads plan, notes and packets:
     call it off the event loop."""
     if not known(key):
-        raise FileNotFoundError(f"没有这条研究线：{key}")
+        raise FileNotFoundError(i18n.t("line.not_found_key", key=key))
     from . import direction  # direction imports this module
 
     for item in direction.lines():
         if item.get("chat_key") == key:
             return item
-    raise FileNotFoundError(f"没有这条研究线：{key}")
+    raise FileNotFoundError(i18n.t("line.not_found_key", key=key))
 
 
 def _count_turns(p: Path) -> int:
@@ -538,7 +538,7 @@ def packet_prompt(line: dict[str, Any], today: date | None = None) -> dict[str, 
 <template>
 {filled.strip()}
 </template>"""
-    return {"prompt": prompt, "label": "起草导师汇报包", "path": _rel(target),
+    return {"prompt": prompt, "label": i18n.t("line.packet_label"), "path": _rel(target),
             "template": {"source": tpl["source"], "path": tpl["path"]}, "previous": prev,
             "map": rmap and {k: rmap[k] for k in ("slug", "since", "total")}}
 

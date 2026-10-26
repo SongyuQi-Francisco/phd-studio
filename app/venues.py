@@ -27,7 +27,7 @@ from typing import Any
 import httpx
 import yaml
 
-from . import venue_fresh, venue_overrides
+from . import i18n, venue_fresh, venue_overrides
 from .config import DATA_DIR, STUDIO_DIR
 
 VENUE_DIR = DATA_DIR / "venues"
@@ -40,11 +40,9 @@ CORE_SOURCE = "ICORE2026"
 CORE_URL = ("https://portal.core.edu.au/conf-ranks/?search=&by=all&source=" + CORE_SOURCE
             + "&sort=arank&page=1&do=Export")
 MAX_AGE = timedelta(days=7)
-CCF_FIELDS = {
-    "DS": "体系结构/并行/存储", "NW": "计算机网络", "SC": "网络与信息安全", "SE": "软件工程/系统",
-    "DB": "数据库/数据挖掘/信息检索", "CT": "计算理论", "CG": "图形学与多媒体", "AI": "人工智能",
-    "HI": "人机交互与普适计算", "MX": "交叉/综合/新兴",
-}
+# ccfddl's CCF sub-field codes. A catalog entry keeps the code (the catalog is cached, whatever the interface
+# language); `field_name` words it, as `summary` does for the page.
+CCF_FIELDS = ("DS", "NW", "SC", "SE", "DB", "CT", "CG", "AI", "HI", "MX")
 _refresh_lock = threading.Lock()
 log = logging.getLogger(__name__)
 
@@ -215,7 +213,7 @@ def _catalog(_stamp: Any) -> dict[str, dict[str, Any]]:
             e["ccf"] = ccf if ccf in ("A", "B", "C") else None
             if not e["core"] and str(rank.get("core") or "N") not in ("N", ""):
                 e["core"] = str(rank["core"])
-            e["field"] = CCF_FIELDS.get(item.get("sub"), item.get("sub"))
+            e["field"] = item.get("sub")
             e["dblp"] = item.get("dblp")
             if not e["title"]:
                 e["title"] = item.get("description") or ""
@@ -273,6 +271,8 @@ def _official_edition(d: dict[str, Any] | None) -> dict[str, Any] | None:
             continue
         a, p = _parse_official(row.get("abstract")), _parse_official(row.get("paper"))
         if a or p:
+            # "（官网）" and the timezone "官网" mark an edition taken from the CFP page: plan.py and web/plan.js
+            # look for them, and the catalog is cached whatever the interface language, so they stay as they are
             timeline.append({"abstract": a, "deadline": p, "comment": f"{row.get('track') or '主会'}（官网）"})
     if not timeline:
         return None
@@ -329,9 +329,16 @@ def freshness(e: dict[str, Any]) -> dict[str, Any] | None:
         return None
 
 
+def field_name(code: str | None) -> str | None:
+    """The CCF sub-field in the interface language; a code that is not one of CCF's own is shown as it is."""
+    if code in CCF_FIELDS:
+        return i18n.t("venue.ccf_field." + code.lower())  # i18n-keys: venue.ccf_field.{ds,nw,sc,se,db,ct,cg,ai,hi,mx}
+    return code
+
+
 def summary(e: dict[str, Any]) -> dict[str, Any]:
     return {"key": e["key"], "acronym": e["acronym"], "title": e["title"], "core": e["core"],
-            "ccf": e["ccf"], "field": e["field"], "next": next_deadline(e),
+            "ccf": e["ccf"], "field": field_name(e["field"]), "next": next_deadline(e),
             "has_detail": bool(e.get("detail")), "freshness": freshness(e),
             "accept_rate": (e["accept_rates"][-1] if e["accept_rates"] else None)}
 

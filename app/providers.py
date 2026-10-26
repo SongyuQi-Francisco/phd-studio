@@ -42,6 +42,7 @@ from typing import Any
 
 import httpx
 
+from . import i18n
 from .config import DATA_DIR, SECRETS_DIR, TEXT_DIR, VAULT_DIR, load_secrets
 
 ENV_DROP = ("PYTHONHOME", "PYTHONNOUSERSITE", "PYTHONPATH", "PYTHONEXECUTABLE", "__PYVENV_LAUNCHER__")
@@ -104,6 +105,11 @@ def _state(state: str, detail: str, fix: str = "", cmd: str = "") -> dict[str, A
     return {"ok": state == "ok", "state": state, "detail": detail, "fix": fix, "cmd": cmd}
 
 
+def unavailable_text(label: str, st: dict[str, Any]) -> str:
+    """'Codex 不可用：没装 Codex CLI。安装后…' from a status() result."""
+    return i18n.t("providers.unavailable", label=label, detail=st["detail"], fix=st["fix"]).strip()
+
+
 @dataclass
 class Turn:
     text: str                     # this turn's message, with its context blocks
@@ -164,13 +170,13 @@ class Claude(Provider):
 
         st = claude_status()
         if st["ok"]:
-            return _state("ok", f"已连接 · {st['method']}")
-        return _state("no_login", "未登录", st.get("hint", ""), "claude setup-token")
+            return _state("ok", i18n.t("providers.claude.connected", method=st["method"]))
+        return _state("no_login", i18n.t("providers.claude.not_logged_in"), st.get("hint", ""), "claude setup-token")
 
     def models(self) -> list[dict[str, Any]]:
-        return [{"id": "", "label": "默认（设置里的伴读模型）", "vision": True},
+        return [{"id": "", "label": i18n.t("providers.model.default"), "vision": True},
                 {"id": "opus", "label": "Opus", "vision": True}, {"id": "sonnet", "label": "Sonnet", "vision": True},
-                {"id": "haiku", "label": "Haiku（快）", "vision": True}]
+                {"id": "haiku", "label": i18n.t("providers.model.haiku"), "vision": True}]
 
 
 # ---------------- CLI providers ----------------
@@ -183,8 +189,8 @@ class Run:
     code: int | None = None
 
     def detail(self) -> str:
-        lines = [t for t in self.tail if "Reading additional input from stdin" not in t]
-        return " ".join(lines[-3:])[:400] or f"没有输出（退出码 {self.code}）"
+        lines = [line for line in self.tail if "Reading additional input from stdin" not in line]
+        return " ".join(lines[-3:])[:400] or i18n.t("providers.no_output", code=self.code)
 
 
 async def end_process(proc: asyncio.subprocess.Process) -> None:
@@ -258,8 +264,7 @@ _TOO_LONG = ("maximum context length", "context length", "context_length_exceede
 def too_long(label: str, detail: str) -> str | None:
     """The context-length error, in words, whichever provider said it."""
     if any(k in detail.lower() for k in _TOO_LONG):
-        return (f"{label} 的上下文超长了（{detail}）。点面板右上角的「新对话」重新开始，"
-                "或在面板顶部换一个上下文更长的模型。")
+        return i18n.t("providers.too_long", label=label, detail=detail)
     return None
 
 
@@ -281,7 +286,7 @@ def _inner_message(msg: str) -> str:
 def _short_cmd(command: str) -> str:
     m = re.match(r"^\S*sh -l?c (['\"])(.*)\1$", command, re.S)
     cmd = m.group(2) if m else command
-    return cmd.replace(str(VAULT_DIR) + "/", "").replace(str(TEXT_DIR) + "/", "全文：")[:80]
+    return cmd.replace(str(VAULT_DIR) + "/", "").replace(str(TEXT_DIR) + "/", i18n.t("providers.fulltext"))[:80]
 
 
 class Codex(Provider):
@@ -299,16 +304,17 @@ class Codex(Provider):
     def status(self) -> dict[str, Any]:
         b = self.binary()
         if not b:
-            return _state("no_cli", "没装 Codex CLI",
-                          "安装后在终端运行 codex login，用 ChatGPT 账号登录", "npm install -g @openai/codex")
+            return _state("no_cli", i18n.t("providers.codex.not_installed"),
+                          i18n.t("providers.codex.not_installed_fix"), "npm install -g @openai/codex")
         out = run_quick([b, "login", "status"])
         if out is None:
-            return _state("error", "codex 运行不了或没有响应", "在终端运行 codex login status 看看", "codex login status")
+            return _state("error", i18n.t("providers.codex.broken"), i18n.t("providers.codex.broken_fix"), "codex login status")
         text = f"{out.stdout}\n{out.stderr}".strip().lower()
         if out.returncode == 0 and "logged in" in text and "not logged in" not in text:
-            how = "ChatGPT 账号" if "chatgpt" in text else "API key"
-            return _state("ok", f"已登录（{how}）")
-        return _state("no_login", "Codex 没登录", "在终端运行 codex login，用 ChatGPT 账号登录", "codex login")
+            return _state("ok", i18n.t("providers.codex.logged_in_chatgpt" if "chatgpt" in text
+                                       else "providers.codex.logged_in_key"))
+        return _state("no_login", i18n.t("providers.codex.not_logged_in"),
+                      i18n.t("providers.codex.not_logged_in_fix"), "codex login")
 
     def _configured_model(self) -> str:
         try:
@@ -380,7 +386,7 @@ class Codex(Provider):
             listed = sorted(listed, key=lambda m: m["id"] != default)
             if not any(m["id"] == default for m in listed):
                 listed.insert(0, {"id": default, "label": default, "vision": True})
-        return listed or [{"id": "", "label": "Codex 默认", "vision": True}]
+        return listed or [{"id": "", "label": i18n.t("providers.model.codex_default"), "vision": True}]
 
     def args(self, turn: Turn, binary: str) -> list[str]:
         # No user config: the read-only sandbox and built-in tools only, without the user's plugins and
@@ -404,23 +410,22 @@ class Codex(Provider):
         if long := too_long("Codex", detail):
             return long
         if "no rollout found" in low or "thread/resume failed" in low:
-            return (f"Codex 里找不到这个对话之前的线程（{detail}）。旧线程已清掉，再发一次会用 Codex 开新线程，"
-                    "看不到之前的内容。")
+            return i18n.t("providers.codex.thread_lost", detail=detail)
         if any(k in low for k in ("not logged in", "unauthorized", "401", "please log in", "authentication", "token expired")):
-            return f"Codex 未登录或登录已过期：在终端运行 codex login 后重新发送。（{detail}）"
+            return i18n.t("providers.codex.login_expired", detail=detail)
         if any(k in low for k in ("usage limit", "rate limit", "429", "quota")):
-            return f"Codex 用量达到上限（ChatGPT 套餐额度），稍后再试。（{detail}）"
+            return i18n.t("providers.codex.limit", detail=detail)
         if "model" in low and any(k in low for k in ("not supported", "not found", "does not exist")):
-            return f"Codex 用不了这个模型：{detail}。在面板顶部换一个 Codex 模型。"
-        return f"Codex 出错：{detail}"
+            return i18n.t("providers.codex.bad_model", detail=detail)
+        return i18n.t("providers.codex.error", detail=detail)
 
     async def stream(self, turn: Turn) -> AsyncIterator[dict[str, Any]]:
         b = self.binary()
         if not b:
             st = self.status()
-            yield {"type": "error", "message": f"Codex 不可用：{st['detail']}。{st['fix']}"}
+            yield {"type": "error", "message": unavailable_text("Codex", st)}
             return
-        yield {"type": "model", "model": turn.model or "默认模型"}
+        yield {"type": "model", "model": turn.model or i18n.t("providers.model.unnamed")}
         run = Run()
         seen: set[str] = set()
         done = failed = False
@@ -440,7 +445,8 @@ class Codex(Provider):
                     seen.add(item.get("id"))
                     what = (_short_cmd(item.get("command", "")) if it == "command_execution"
                             else item.get("query") or item.get("tool") or "")
-                    yield {"type": "tool", "name": it, "summary": f"{'命令' if it == 'command_execution' else it} {what}".strip()}
+                    command = i18n.t("providers.tool.command") if it == "command_execution" else it
+                    yield {"type": "tool", "name": it, "summary": f"{command} {what}".strip()}
             elif kind == "error":
                 last_error = _inner_message(ev.get("message", ""))
             elif kind == "turn.failed":
@@ -476,7 +482,13 @@ decision = "allow"
 priority = 200
 """
 NO_MCP = "phd-studio-no-mcp-servers"  # an allow-list of MCP servers that matches none of the user's
-GEMINI_ALIASES = {"auto": "自动", "pro": "Pro", "flash": "Flash", "flash-lite": "Flash-Lite"}
+GEMINI_NAMES = {"pro": "Pro", "flash": "Flash", "flash-lite": "Flash-Lite"}
+GEMINI_ALIASES = ("auto", *GEMINI_NAMES)  # what the CLI calls a model before it says which one it used
+
+
+def gemini_name(asked: str) -> str:
+    """How an alias is shown as the model, until the CLI says which model answered."""
+    return i18n.t("providers.model.gemini_auto_name") if asked == "auto" else GEMINI_NAMES.get(asked, asked)
 
 
 class Gemini(Provider):
@@ -495,20 +507,19 @@ class Gemini(Provider):
 
     def status(self) -> dict[str, Any]:
         if not self.binary():
-            return _state("no_cli", "没装 Gemini CLI",
-                          "安装后在终端运行 gemini，选 Login with Google 登录一次", "brew install gemini-cli")
+            return _state("no_cli", i18n.t("providers.gemini.not_installed"),
+                          i18n.t("providers.gemini.not_installed_fix"), "brew install gemini-cli")
         if self._api_key():
-            return _state("ok", "已配置 API key（gemini.env）")
+            return _state("ok", i18n.t("providers.gemini.key_set"))
         if (self.home / "oauth_creds.json").exists():
-            return _state("ok", "已登录（Google 账号）")
-        return _state("no_login", "Gemini CLI 没登录",
-                      f"在终端运行 gemini，选 Login with Google 登录一次（或把 GEMINI_API_KEY=… 写进 {_tilde(SECRETS_DIR / 'gemini.env')}）",
-                      "gemini")
+            return _state("ok", i18n.t("providers.gemini.logged_in"))
+        return _state("no_login", i18n.t("providers.gemini.not_logged_in"),
+                      i18n.t("providers.gemini.not_logged_in_fix", path=_tilde(SECRETS_DIR / "gemini.env")), "gemini")
 
     def models(self) -> list[dict[str, Any]]:
-        return [{"id": "auto", "label": "自动（Gemini CLI 选）", "vision": True},
+        return [{"id": "auto", "label": i18n.t("providers.model.gemini_auto"), "vision": True},
                 {"id": "pro", "label": "Pro", "vision": True}, {"id": "flash", "label": "Flash", "vision": True},
-                {"id": "flash-lite", "label": "Flash-Lite（快）", "vision": True}]
+                {"id": "flash-lite", "label": i18n.t("providers.model.flash_lite"), "vision": True}]
 
     def prepare(self) -> None:
         """An empty working folder of our own (not the vault, so no .gemini settings there apply) and the
@@ -543,21 +554,20 @@ class Gemini(Provider):
         if long := too_long("Gemini", detail):
             return long
         if "unknown argument" in low or "unknown arguments" in low or "not a valid choice" in low:
-            return (f"这个 Gemini CLI 版本太旧，不支持工作台用来保证只读的参数（{detail}）。"
-                    "在终端运行 brew upgrade gemini-cli（或 npm install -g @google/gemini-cli）后再试。")
+            return i18n.t("providers.gemini.too_old", detail=detail)
         if any(k in low for k in ("auth method", "login", "credential", "unauthenticated", "401", "authentication")):
-            return f"Gemini 未登录或登录已过期：在终端运行 gemini 重新登录后再发。（{detail}）"
+            return i18n.t("providers.gemini.login_expired", detail=detail)
         if any(k in low for k in ("quota", "429", "resource_exhausted", "rate limit")):
-            return f"Gemini 用量达到上限，稍后再试。（{detail}）"
+            return i18n.t("providers.gemini.limit", detail=detail)
         if "model" in low and any(k in low for k in ("not found", "not supported", "invalid")):
-            return f"Gemini 用不了这个模型：{detail}。在面板顶部换一个 Gemini 模型。"
-        return f"Gemini 出错：{detail}"
+            return i18n.t("providers.gemini.bad_model", detail=detail)
+        return i18n.t("providers.gemini.error", detail=detail)
 
     async def stream(self, turn: Turn) -> AsyncIterator[dict[str, Any]]:
         b = self.binary()
         if not b:
             st = self.status()
-            yield {"type": "error", "message": f"Gemini 不可用：{st['detail']}。{st['fix']}"}
+            yield {"type": "error", "message": unavailable_text("Gemini", st)}
             return
         key = self._api_key()
         env = child_env(b, {"GEMINI_API_KEY": key} if key else None)
@@ -566,7 +576,7 @@ class Gemini(Provider):
         done = failed = False
         last_error = ""
         asked = turn.model or "auto"
-        yield {"type": "model", "model": GEMINI_ALIASES.get(asked, asked)}
+        yield {"type": "model", "model": gemini_name(asked)}
         async for ev in run_jsonl(self.args(turn, b), self.message(turn), env, self.workspace, run):
             kind = ev.get("type")
             if kind == "init":
@@ -580,7 +590,7 @@ class Gemini(Provider):
                 p = ev.get("parameters") or {}
                 what = next((str(p[k]) for k in ("file_path", "absolute_path", "path", "dir_path", "pattern", "query", "url")
                              if p.get(k)), "")
-                what = what.replace(str(VAULT_DIR) + "/", "").replace(str(TEXT_DIR) + "/", "全文：")
+                what = what.replace(str(VAULT_DIR) + "/", "").replace(str(TEXT_DIR) + "/", i18n.t("providers.fulltext"))
                 yield {"type": "tool", "name": ev.get("tool_name", "tool"), "summary": f"{ev.get('tool_name', '')} {what[:80]}".strip()}
             elif kind == "error" and ev.get("severity") == "error":
                 last_error = ev.get("message", "")
@@ -591,7 +601,8 @@ class Gemini(Provider):
                     done = True
                 else:
                     failed = True
-                    yield {"type": "error", "message": self.friendly((ev.get("error") or {}).get("message") or last_error or "失败")}
+                    why = (ev.get("error") or {}).get("message") or last_error or i18n.t("providers.failed")
+                    yield {"type": "error", "message": self.friendly(why)}
         if not done and not failed:
             yield {"type": "error", "message": self.friendly(last_error or run.detail())}
 
@@ -606,7 +617,8 @@ def served_by(stats: Any) -> str:
     if not isinstance(stats, dict) or not stats:
         return ""
     ranked = sorted(stats, key=lambda m: -((stats[m] or {}).get("output_tokens") or 0) if isinstance(stats[m], dict) else 0)
-    return " + ".join(ranked[:2]) + (f" 等 {len(ranked)} 个" if len(ranked) > 2 else "")
+    names = " + ".join(ranked[:2])
+    return i18n.t("providers.served_more", names=names, n=len(ranked)) if len(ranked) > 2 else names
 
 
 # ---------------- API providers (OpenAI-compatible chat completions) ----------------
@@ -676,8 +688,9 @@ class ApiProvider(Provider):
     def status(self) -> dict[str, Any]:
         where = _tilde(SECRETS_DIR / f"{self.key_file}.env")
         if self.key():
-            return _state("ok", f"已配置 API Key（{self.key_file}.env）")
-        return _state("no_key", f"缺 {self.label} API Key", f"把 {self.key_names[0]}=… 写进 {where}")
+            return _state("ok", i18n.t("providers.api.key_set", file=self.key_file))
+        return _state("no_key", i18n.t("providers.api.key_missing", label=self.label),
+                      i18n.t("providers.api.key_missing_fix", name=self.key_names[0], where=where))
 
     def context(self, model: str) -> int:
         """The model's context window in tokens (128k when unknown)."""
@@ -698,16 +711,16 @@ class ApiProvider(Provider):
         if long := too_long(self.label, detail):
             return long
         if status in (401, 403):
-            return f"{self.label} API Key 无效或没有权限：检查 {where} 里的 {self.key_names[0]}。（{detail}）"
+            return i18n.t("providers.api.bad_key", label=self.label, where=where, name=self.key_names[0], detail=detail)
         if status == 402 or "余额" in detail or "balance" in detail.lower():
-            return f"{self.label} 账户余额不足。（{detail}）"
+            return i18n.t("providers.api.balance", label=self.label, detail=detail)
         if status == 429:
-            return f"{self.label} 限流或额度用完，稍后再试。（{detail}）"
+            return i18n.t("providers.api.limit", label=self.label, detail=detail)
         if "model" in detail.lower() or "模型" in detail:
-            return f"{self.label} 用不了模型 {model}：{detail}。在面板顶部换一个模型。"
+            return i18n.t("providers.api.bad_model", label=self.label, model=model, detail=detail)
         if status >= 500:
-            return f"{self.label} 服务暂时出错（HTTP {status}），稍后再试。（{detail}）"
-        return f"{self.label} 出错（HTTP {status}）：{detail}"
+            return i18n.t("providers.api.server", label=self.label, status=status, detail=detail)
+        return i18n.t("providers.api.error", label=self.label, status=status, detail=detail)
 
     def _user_content(self, turn: Turn) -> Any:
         if not turn.images:
@@ -722,7 +735,7 @@ class ApiProvider(Provider):
         key = self.key()
         if not key:
             st = self.status()
-            yield {"type": "error", "message": f"{self.label} 不可用：{st['detail']}。{st['fix']}"}
+            yield {"type": "error", "message": unavailable_text(self.label, st)}
             return
         messages: list[dict[str, Any]] = [{"role": "system", "content": turn.instructions}, *turn.history,
                                           {"role": "user", "content": self._user_content(turn)}]
@@ -739,7 +752,7 @@ class ApiProvider(Provider):
                     if dropped:
                         dropped_total += dropped
                         yield {"type": "tool", "name": "trim",
-                               "summary": f"上下文太长：这次没带上最早的 {dropped_total} 条对话"}
+                               "summary": i18n.t("providers.trimmed", n=dropped_total)}
                     body: dict[str, Any] = {"model": turn.model, "messages": messages, "stream": True}
                     if specs:
                         body["tools"] = specs
@@ -802,24 +815,28 @@ class ApiProvider(Provider):
                             yield {"type": "tool", "name": c["name"], "summary": tool.summary(args)}
                             result = await tool.call(args)
                         messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})
-                yield {"type": "error", "message": f"{self.label} 连续调用工具超过 {MAX_TOOL_ROUNDS} 轮，已停下。换个问法再试。"}
+                yield {"type": "error", "message": i18n.t("providers.tool_rounds", label=self.label, rounds=MAX_TOOL_ROUNDS)}
         except httpx.HTTPError as e:
-            yield {"type": "error", "message": f"连不上 {self.label}：{type(e).__name__} {e}"}
+            yield {"type": "error", "message": i18n.t("providers.connect_failed", label=self.label, error=f"{type(e).__name__} {e}")}
 
 
 class GLM(ApiProvider):
-    id, label = "glm", "智谱 GLM"
+    id = "glm"
     key_file = "zhipu"
     key_names = ("ZHIPU_API_KEY", "ZHIPUAI_API_KEY", "GLM_API_KEY")
     base_url = "https://open.bigmodel.cn/api/paas/v4"
     base_env = "ZHIPU_BASE_URL"  # e.g. the international endpoint
 
+    @property
+    def label(self) -> str:  # type: ignore[override]
+        return i18n.t("providers.label.glm")  # "智谱 GLM" / "Zhipu GLM"
+
     def models(self) -> list[dict[str, Any]]:
         return [{"id": "glm-5.1", "label": "GLM-5.1", "ctx": 200_000}, {"id": "glm-5.3", "label": "GLM-5.3", "ctx": 200_000},
                 {"id": "glm-4.7", "label": "GLM-4.7", "ctx": 200_000},
-                {"id": "glm-4.7-flash", "label": "GLM-4.7-Flash（免费）", "ctx": 200_000},
-                {"id": "glm-5v-turbo", "label": "GLM-5V-Turbo（看图）", "vision": True, "ctx": 200_000},
-                {"id": "glm-4.6v", "label": "GLM-4.6V（看图）", "vision": True, "ctx": 128_000}]
+                {"id": "glm-4.7-flash", "label": i18n.t("providers.model.glm_flash"), "ctx": 200_000},
+                {"id": "glm-5v-turbo", "label": i18n.t("providers.model.glm_5v"), "vision": True, "ctx": 200_000},
+                {"id": "glm-4.6v", "label": i18n.t("providers.model.glm_46v"), "vision": True, "ctx": 128_000}]
 
     def translate_model(self) -> str:
         return self._secrets().get("ZHIPU_TRANSLATE_MODEL") or "glm-4.7-flash"
@@ -833,8 +850,8 @@ class DeepSeek(ApiProvider):
     base_env = "DEEPSEEK_BASE_URL"
 
     def models(self) -> list[dict[str, Any]]:
-        return [{"id": "deepseek-chat", "label": "DeepSeek 对话", "ctx": 128_000},
-                {"id": "deepseek-reasoner", "label": "DeepSeek 推理", "ctx": 128_000}]
+        return [{"id": "deepseek-chat", "label": i18n.t("providers.model.deepseek_chat"), "ctx": 128_000},
+                {"id": "deepseek-reasoner", "label": i18n.t("providers.model.deepseek_reasoner"), "ctx": 128_000}]
 
 
 PROVIDERS: dict[str, Provider] = {p.id: p for p in (Claude(), Codex(), Gemini(), GLM(), DeepSeek())}
@@ -849,7 +866,7 @@ def describe_all() -> list[dict[str, Any]]:
 
 
 def display(pid: str, model: str) -> str:
-    """How an answer or a divider names its model: 'Codex · gpt-x', 'Claude · 默认模型'."""
+    """How an answer or a divider names its model: 'Codex · gpt-x', 'Claude · 默认模型' (or 'Default model')."""
     p = get(pid)
     label = p.label if p else pid
-    return f"{label} · {model or '默认模型'}"
+    return f"{label} · {model or i18n.t('providers.model.unnamed')}"

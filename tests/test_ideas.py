@@ -325,7 +325,7 @@ def test_merge_needs_two_distinct_live_unmerged_unpromoted_ideas(trio):
         idea_ops.merge([a["id"], c["id"]])
     e, f = plan.add_idea("e"), plan.add_idea("f")
     plan.idea_store.update("ideas", e["id"], {"status": "promoted", "note": "Ideas/e.md"})
-    with pytest.raises(ValueError, match="already a note"):
+    with pytest.raises(ValueError, match="已整理成 Idea 笔记"):
         idea_ops.merge([e["id"], f["id"]])
     assert raw(f["id"])["status"] == "new"
 

@@ -205,7 +205,7 @@ def test_a_ccfddl_link_the_details_do_not_have_is_flagged(link):
 def test_ccfddl_deadline_the_details_do_not_have_is_flagged():
     # details say 2027-01-05 AoE (= 2027-01-06T11:59:59Z); ccfddl moved it a week
     f = vf.check(entry(eds=[ed(2027, "https://2027.example.org/", "2027-01-13T11:59:59+00:00")]), NOW)
-    assert codes(f) == ["dates"] and "2027-01-13" in f["reasons"][0]["text"] and f["reasons"][0]["short"] == "截稿有变"
+    assert codes(f) == ["dates"] and "2027-01-13" in f["reasons"][0]["text"] and f["reasons"][0]["short"] == "Deadline 有变"
 
 
 @pytest.mark.parametrize("iso", ["2027-01-06T11:59:59+00:00", "2027-01-06T11:59:00+00:00", "2027-01-05T23:59:59+00:00", "2027-01-07T11:59:59+00:00"])

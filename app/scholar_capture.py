@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
 
+from .msgref import ref
+
 BASE = os.environ.get("STUDIO_SCHOLAR_BASE", "https://scholar.google.com").rstrip("/")
 PACE = (5.0, 9.0)  # seconds between page loads
 USER_WAIT = 15 * 60  # how long a manual run waits for the user to sign in / solve a CAPTCHA
@@ -29,7 +31,7 @@ _win: dict[str, Any] = {"w": None}
 
 
 class CaptureError(RuntimeError):
-    pass
+    """Its message is a stored reference (msgref): the refresh job keeps it and the page words it."""
 
 
 class NeedsUser(RuntimeError):
@@ -118,7 +120,7 @@ def _load(w: Any, url: str) -> None:
     w.events.loaded.clear()
     w.load_url(url)
     if not w.events.loaded.wait(40):
-        raise CaptureError(f"页面加载超时：{url}")
+        raise CaptureError(ref("scholars.capture.timeout", url=url))
     time.sleep(1.0)
 
 
@@ -160,7 +162,7 @@ def _page(w: Any, url: str, show_on_block: bool, progress: Callable[..., None]) 
             time.sleep(3)
             r = _read(w)
             continue
-        raise CaptureError("页面结构不认识（Scholar 可能改版了）")
+        raise CaptureError(ref("scholars.capture.unknown_page"))
 
 
 def capture(labels: list[str], pages: int, profiles: list[str], *, show_on_block: bool,
@@ -203,7 +205,7 @@ def capture(labels: list[str], pages: int, profiles: list[str], *, show_on_block
                 if key in done_keys:
                     url, done = state["next"][key], done + 1
                     continue
-                progress(current=f"{q}（第 {n + 1} 页）", done=done, total=total)
+                progress(current=ref("scholars.capture.page", label=q, n=n + 1), done=done, total=total)
                 w = w or _window()
                 r = _page(w, url, show_on_block, progress)
                 for i, row in enumerate(r.get("rows") or []):
@@ -218,7 +220,7 @@ def capture(labels: list[str], pages: int, profiles: list[str], *, show_on_block
         for sid in profiles:
             if sid in rows or f"user:{sid}" in done_keys:
                 continue
-            progress(current=f"个人主页 {sid}", done=done, total=total)
+            progress(current=ref("scholars.capture.profile", id=sid), done=done, total=total)
             w = w or _window()
             r = _page(w, f"{BASE}/citations?user={quote(sid)}&hl=en", show_on_block, progress)
             if r.get("profile"):

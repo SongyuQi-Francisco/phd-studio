@@ -1,0 +1,14 @@
+{
+  "no_pdf": "Can't find the PDF: {error}",
+  "shutting_down": "The workbench is shutting down",
+  "start_failed": "pdf2zh failed to start: {error}",
+  "not_queued": "This paper isn't in the queue",
+  "cant_retry": "This paper has no failed attempt, or is already in the queue",
+  "bad_days": "Days must be one of {days}",
+  "queue.enter": "Moved to {tier}",
+  "queue.backfill": "Back-fill ({tier})",
+  "queue.retry": "Retry",
+  "queue.failed": "Failed",
+  "queue.made": "Already has a bilingual PDF",
+  "queue.left": "No longer in {tiers}"
+}

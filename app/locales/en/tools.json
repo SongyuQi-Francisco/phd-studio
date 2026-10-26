@@ -1,0 +1,47 @@
+{
+  "changed.reading_push": "Reading list: {key} ({what})",
+  "changed.reading_update": "Reading list: updated {key}",
+  "changed.milestone_add": "Milestone: {title} ({date})",
+  "changed.milestone_deleted": "Milestone: deleted",
+  "changed.milestone_update": "Milestone: updated {title}",
+  "changed.target_add": "Submission target: {title} → {venue}",
+  "changed.target_deleted": "Submission target: deleted",
+  "changed.target_update": "Submission target: updated {title}",
+  "changed.venue_watch": "Watched: {venue}",
+  "changed.venue_unwatch": "Unwatched: {venue}",
+  "changed.venue_check": "Venue check: the update proposal for {acronym} awaits your confirmation ({what})",
+  "changed.venue_check_changes": {
+    "one": "{n} change",
+    "other": "{n} changes"
+  },
+  "changed.venue_check_none": "no changes, only the check date is updated",
+  "changed.idea_add": "Idea: {text}",
+  "changed.idea_update": "Idea: updated ({status})",
+  "changed.idea_merge": {
+    "one": "Idea: merged {n} idea",
+    "other": "Idea: merged {n} ideas"
+  },
+  "changed.follow_remove": "Unfollowed: {value}",
+  "changed.follow_person": "Followed scholar: {value}",
+  "changed.follow_keyword": "Followed keyword: {value}",
+  "changed.map_seed": {
+    "one": "Research map: the first draft of {title} awaits your confirmation ({n} change)",
+    "other": "Research map: the first draft of {title} awaits your confirmation ({n} changes)"
+  },
+  "changed.map_update": {
+    "one": "Research map: the update proposal for {title} awaits your confirmation ({n} change)",
+    "other": "Research map: the update proposal for {title} awaits your confirmation ({n} changes)"
+  },
+  "reading_result.added": "added to Inbox",
+  "reading_result.listed": "already on the list; merged",
+  "reading_result.read": "already read",
+  "reading_result.dismissed": "skipped earlier; not added again",
+  "idea_status.new": "new",
+  "idea_status.kept": "kept",
+  "idea_status.promoted": "promoted",
+  "idea_status.dropped": "dropped",
+  "idea_status.merged": "merged",
+  "summary.read": "Read {path}",
+  "summary.list": "List {path}",
+  "summary.search": "Search {pattern}"
+}

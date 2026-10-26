@@ -556,7 +556,7 @@ def test_test_notification(monkeypatch: pytest.MonkeyPatch) -> None:
     send = Sender()
     monkeypatch.setattr(notify, "send", send)
     assert reminders.test_notification()["ok"]
-    assert send.sent[0]["title"] == "PhD Studio 截稿提醒" and send.sent[0]["ask"] is True  # only it may prompt
+    assert send.sent[0]["title"] == "PhD Studio Deadline 提醒" and send.sent[0]["ask"] is True  # only it may prompt
     assert reminders.status(now=NOON)["last_test"]["ok"] is True
 
 

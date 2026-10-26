@@ -15,15 +15,13 @@ from datetime import date, datetime
 from difflib import SequenceMatcher
 from typing import Any
 
-from . import plan, venue_fresh, venue_overrides, venues
+from . import i18n, plan, venue_fresh, venue_overrides, venues
 from .config import STATE_DIR, VAULT_DIR, VENUE_OVERRIDES_FILE
 
 PROPOSALS_FILE = STATE_DIR / "venue_proposals.json"
-# Fields a proposal may change, in the order the diff shows them.
-FIELDS = [("status", "状态"), ("edition", "届次"), ("edition_year", "届次年份"), ("dates", "会议日期"), ("location", "地点"),
-          ("homepage", "官网"), ("cfp_url", "CFP 页面"), ("deadlines", "各赛道截稿"), ("tracks", "赛道与页数"),
-          ("format.template", "模板"), ("format.review_model", "审稿模式"), ("format.notable_rules", "投稿规则"),
-          ("notes", "备注"), ("sources", "来源")]
+# Fields a proposal may change, in the order the diff shows them; the label is venue.field.<field>, "." as "_".
+FIELDS = ("status", "edition", "edition_year", "dates", "location", "homepage", "cfp_url", "deadlines", "tracks",
+          "format.template", "format.review_model", "format.notable_rules", "notes", "sources")
 _lock = threading.Lock()
 
 
@@ -98,10 +96,13 @@ def _value(d: dict[str, Any], field: str) -> Any:
 
 def _line(x: Any) -> str:
     if isinstance(x, dict) and "track" in x:
-        dates = " · ".join(p for p in (x.get("abstract") and f"摘要 {x['abstract']}", x.get("paper") and f"全文 {x['paper']}") if p)
-        return f"{x.get('track') or '主会'}：{dates or '—'}"
+        dates = " · ".join(p for p in (x.get("abstract") and i18n.t("venue.diff.abstract", date=x["abstract"]),
+                                       x.get("paper") and i18n.t("venue.diff.paper", date=x["paper"])) if p)
+        return i18n.t("venue.diff.deadline_row", track=x.get("track") or i18n.t("venue.diff.main_track"), dates=dates or "—")
     if isinstance(x, dict) and "name" in x:
-        return f"{x['name']}：{x.get('page_limit') or '—'}" + (f"（{x['notes']}）" if x.get("notes") else "")
+        if x.get("notes"):
+            return i18n.t("venue.diff.track_row_notes", name=x["name"], limit=x.get("page_limit") or "—", notes=x["notes"])
+        return i18n.t("venue.diff.track_row", name=x["name"], limit=x.get("page_limit") or "—")
     return str(x)
 
 
@@ -114,7 +115,7 @@ def _lines(v: Any) -> list[str]:
 def diff_detail(before: dict[str, Any], after: dict[str, Any]) -> list[dict[str, Any]]:
     """Per changed field, the removed (-) and added (+) lines."""
     out = []
-    for field, label in FIELDS:
+    for field in FIELDS:
         a, b = _lines(_value(before, field)), _lines(_value(after, field))
         if a == b:
             continue
@@ -122,6 +123,7 @@ def diff_detail(before: dict[str, Any], after: dict[str, Any]) -> list[dict[str,
         for op, i1, i2, j1, j2 in SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
             if op != "equal":
                 lines += [{"op": "-", "text": t} for t in a[i1:i2]] + [{"op": "+", "text": t} for t in b[j1:j2]]
+        label = i18n.t("venue.field." + field.replace(".", "_"))  # i18n-keys: venue.field.{status,edition,edition_year,dates,location,homepage,cfp_url,deadlines,tracks,format_template,format_review_model,format_notable_rules,notes,sources}
         out.append({"field": field, "label": label, "lines": lines})
     return out
 
@@ -148,7 +150,7 @@ def _after(before: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
 def _entry(venue: str) -> dict[str, Any]:
     e = venues.catalog().get(venues._key(venue))
     if not e:
-        raise ValueError(f"unknown venue {venue}")
+        raise ValueError(f"unknown venue {venue}")  # also what the assistant's tool gets back (plan.py says the same)
     return e
 
 
@@ -191,7 +193,7 @@ def _commit(key: str, patch: dict[str, Any]) -> dict[str, Any]:
     e = _entry(key)
     before = e.get("detail") or {}
     if not before and not patch:
-        raise ValueError(f"{e['acronym']} 还没有详情，没有可核对的内容")
+        raise ValueError(i18n.t("venue.check.no_details", acronym=e["acronym"]))
     patch = {**patch, "verified_at": date.today().isoformat()}
     after = venue_overrides.merge_detail(before, patch)
     saved = venue_overrides.save(e["key"], patch, venue_fresh.fingerprint(e, venue_fresh.edition_year(after)), name=e["acronym"],
@@ -205,10 +207,10 @@ def apply(venue: str, proposal_id: str) -> dict[str, Any]:
     key = venues._key(venue)
     rec = pending().get(key)
     if not rec or rec["id"] != proposal_id:
-        raise LookupError("这条核对结果已经处理过或不存在")
+        raise LookupError(i18n.t("venue.check.gone"))
     e = _entry(key)
     if rec["base"] != _digest(e.get("detail")):
-        raise Conflict("会议详情在助手核对之后又变了（比如另一台电脑已更新），请重新核对")
+        raise Conflict(i18n.t("venue.check.conflict"))
     saved = _commit(key, _fields(rec["details"], e.get("detail") or {}))
     _drop(key)
     return {"ok": True, "venue": key, "verified_at": saved["details"]["verified_at"]}
@@ -218,7 +220,7 @@ def dismiss(venue: str, proposal_id: str) -> dict[str, Any]:
     key = venues._key(venue)
     rec = pending().get(key)
     if not rec or rec["id"] != proposal_id:
-        raise LookupError("这条核对结果已经处理过或不存在")
+        raise LookupError(i18n.t("venue.check.gone"))
     _drop(key)
     return {"ok": True, "venue": key}
 

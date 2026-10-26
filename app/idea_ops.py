@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
-from . import plan
+from . import i18n, plan
 from .plan import MERGED, idea_store
 from .store import Store, new_id, now
 
@@ -174,7 +174,7 @@ def merge(ids: list[str], text: str | None = None, line: str | None = None, sour
             if s.get("status") == MERGED:
                 raise ValueError(f"{s['id']} was already merged into another idea")
             if s.get("status") == "promoted":
-                raise ValueError(f"{s['id']} is already a note; merge before 整理成笔记")
+                raise ValueError(i18n.t("plan.idea_merge_promoted", id=s["id"]))
         stamp = now()
         lines = [s["line"] for s in srcs if s.get("line")]
         text = (text or "").strip() or srcs[0]["text"]

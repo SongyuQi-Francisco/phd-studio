@@ -1,0 +1,17 @@
+{
+  "reason_self": "Added by me",
+  "not_png": "Not a PNG image",
+  "venue_not_found": "No such venue",
+  "vault_note_not_found": "No note with that name in the vault",
+  "note_not_found": "No such note",
+  "paper_note_not_found": "This paper has no note: {stem}",
+  "pdf_not_found": "PDF not found: {error}",
+  "bilingual_missing": "The bilingual PDF hasn't been made yet",
+  "translate_failed": "Translation failed: {error}",
+  "refresh_failed": "Couldn't update the venue data: {error}",
+  "run_not_found": "No such run",
+  "idea_not_found": "No such Idea: {id}",
+  "excerpt.no_note": "This paper has no note yet. Create the note first, then add excerpts.",
+  "excerpt.no_section": "The note has no “{section}” section",
+  "excerpt.no_selection": "No text selected"
+}

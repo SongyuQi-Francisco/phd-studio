@@ -197,7 +197,7 @@ def test_catalog_merges_ccfddl_titles_onto_core_acronyms(venue_data):
     kdd = cat["kdd"]
     assert (kdd["acronym"], kdd["core"], kdd["ccf"]) == ("KDD", "A*", "A")
     assert kdd["title"] == "ACM SIGKDD Conference on Knowledge Discovery and Data Mining"
-    assert kdd["field"] == "数据库/数据挖掘/信息检索"
+    assert kdd["field"] == "DB" and venues.summary(kdd)["field"] == "数据库/数据挖掘/信息检索"  # the catalog keeps the code
     assert kdd["dblp"] == "kdd"
     assert [e["year"] for e in kdd["editions"]] == sorted(e["year"] for e in kdd["editions"])
     assert len(kdd["editions"]) == 2
