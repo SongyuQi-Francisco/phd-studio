@@ -1,25 +1,33 @@
+// i18n: done
 // Right panel: Claude co-reader (one persistent session per paper) and the paper's Obsidian note.
 // Each conversation can be switched to another model (models.js); only Claude may write.
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { html, Icon, renderMarkdown, api, composing } from "/lib.js";
 import { ModelPicker, answeredBy, providerLabel } from "/models.js";
+import { t } from "/i18n.js";
 
-const NEEDS_CLAUDE = "这一步要改 vault，只有 Claude 能做：在面板顶部把模型换成 Claude 再试。";
-
+// Prompts sent to Claude: not UI text, so they stay in Chinese. None of them names a language: the
+// reply follows the answer-language setting (app/claude_chat.py puts it in the system prompt).
 export const PROMPTS = {
-  brief: "给我这篇论文的中文速读：①要解决的问题 ②方法核心（一句话 + 关键机制）③主要证据（关键数字，带页码）④局限 ⑤和我当前课题的关系。先读全文再回答。",
-  page: (p) => `用中文讲解第 ${p} 页：这一页在讲什么、关键概念和公式、容易误解的细节。`,
-  relate: "这篇论文和我正在推进的课题有什么关系？分别列出：可以借鉴的、需要在论文里区分开的、可能构成威胁（撞车）的。先看我的 Roadmap 和研究线笔记。",
-  explainSel: "用中文讲解选中的这段：先给通俗意思，再拆关键术语和符号，最后说它在本文论证里起什么作用。",
-  explainImg: "这是从论文里框选的区域。用中文讲解：它表达了什么；如果是公式，逐个解释符号并推导关键步骤；如果是图表，说明每个轴/列的含义和主要结论。",
-  intake: "为这篇论文按 AGENTS.md 的 Paper Intake 规则新建论文笔记：用 Paper Note Template 的结构，先核对一手来源（arXiv 页面），只写有原文依据的内容，并按规则更新 Literature Matrix。动手前先说明笔记文件名和打算写的要点。",
-  note: (rel) => `根据我们目前的讨论和论文原文，更新这篇论文的笔记（${rel}）。只补充或修正有原文依据的内容，保持现有结构和语言，遵守 AGENTS.md 的 Claim Gate。动手前先用两三句话说明打算改哪里。`,
-  audit: (rel, today) => `对这篇论文的笔记（${rel}）做一次 Claim Gate 审计，严格遵守 AGENTS.md。今天是 ${today}。
-1. 逐条核对笔记里的每个论断（Problem、Method、Evidence、Relevance、Excerpts 以及其他小节），对照论文全文标为：✅ 有原文支持（给出页码 [p.N]）/ ⚠️ 原文里找不到或表述过度 / ❌ 与原文矛盾。数字、数据集、指标、基线逐个对。
-2. 发表状态（同行评审的会议/期刊，还是 arXiv 预印本）和代码是否开源，必须到一手来源核实（arXiv、OpenReview、ACL Anthology、ACM/出版社页面、官方项目页），不要凭记忆。
-3. 先给一张审计表（论断 | 结论 | 依据与页码），再列出需要修改的地方。
-4. 然后用 Edit 修改笔记：更新 ## Claim Gate 小节（Verified source / Still uncertain，写明核实日期 ${today}），修正有问题的论断。只改有依据的地方，保持原有结构和语言。如果某个重要论断变了，按规则同时更新 07 Evidence/Verification Log.md。每处修改都会先给我看差异。`,
+  brief: "给我这篇论文的速读：①要解决的问题 ②方法核心（一句话 + 关键机制）③主要证据（关键数字，带页码）④局限 ⑤和我当前课题的关系。先读全文再回答。", // i18n-ignore
+  page: (p) => `讲解第 ${p} 页：这一页在讲什么、关键概念和公式、容易误解的细节。`, // i18n-ignore
+  relate: "这篇论文和我正在推进的课题有什么关系？分别列出：可以借鉴的、需要在论文里区分开的、可能构成威胁（撞车）的。先看我的 Roadmap 和研究线笔记。", // i18n-ignore
+  explainSel: "讲解选中的这段：先给通俗意思，再拆关键术语和符号，最后说它在本文论证里起什么作用。", // i18n-ignore
+  explainImg: "这是从论文里框选的区域。讲解：它表达了什么；如果是公式，逐个解释符号并推导关键步骤；如果是图表，说明每个轴/列的含义和主要结论。", // i18n-ignore
+  intake: "为这篇论文按 AGENTS.md 的 Paper Intake 规则新建论文笔记：用 Paper Note Template 的结构，先核对一手来源（arXiv 页面），只写有原文依据的内容，并按规则更新 Literature Matrix。动手前先说明笔记文件名和打算写的要点。", // i18n-ignore
+  note: (rel) => `根据我们目前的讨论和论文原文，更新这篇论文的笔记（${rel}）。只补充或修正有原文依据的内容，保持现有结构和语言，遵守 AGENTS.md 的 Claim Gate。动手前先用两三句话说明打算改哪里。`, // i18n-ignore
+  discussNote: (path) => `我们来讨论这篇笔记：${path}。先读它，然后告诉我要点、和我当前课题的关系、以及值得跟进的下一步。`, // i18n-ignore
+  audit: (rel, date) => [
+    `对这篇论文的笔记（${rel}）做一次 Claim Gate 审计，严格遵守 AGENTS.md。今天是 ${date}。`, // i18n-ignore
+    "1. 逐条核对笔记里的每个论断（Problem、Method、Evidence、Relevance、Excerpts 以及其他小节），对照论文全文标为：✅ 有原文支持（给出页码 [p.N]）/ ⚠️ 原文里找不到或表述过度 / ❌ 与原文矛盾。数字、数据集、指标、基线逐个对。", // i18n-ignore
+    "2. 发表状态（同行评审的会议/期刊，还是 arXiv 预印本）和代码是否开源，必须到一手来源核实（arXiv、OpenReview、ACL Anthology、ACM/出版社页面、官方项目页），不要凭记忆。", // i18n-ignore
+    "3. 先给一张审计表（论断 | 结论 | 依据与页码），再列出需要修改的地方。", // i18n-ignore
+    `4. 然后用 Edit 修改笔记：更新 ## Claim Gate 小节（Verified source / Still uncertain，写明核实日期 ${date}），修正有问题的论断。只改有依据的地方，保持原有结构和语言。如果某个重要论断变了，按规则同时更新 07 Evidence/Verification Log.md。每处修改都会先给我看差异。`, // i18n-ignore
+  ].join("\n"),
 };
+
+// The date in the audit prompt: a machine format (YYYY-MM-DD), not the interface's.
+const today = () => new Date().toLocaleDateString("sv"); // i18n-ignore
 
 // loose: also link "p. 3" / "§5.4" written in prose (paper notes, the paper's own chat).
 function Markdown({ text, onPage, onSection, loose }) {
@@ -40,14 +48,14 @@ function Diff({ text }) {
 
 function Permission({ p, answer }) {
   return html`<div class="perm">
-    <div class="perm-head"><${Icon} name="file" sm /><span>${p.is_new ? "新建" : "修改"}</span><b title=${p.path}>${p.path}</b></div>
-    <${Diff} text=${p.diff || "(无变化)"} />
+    <div class="perm-head"><${Icon} name="file" sm /><span>${t(p.is_new ? "chat.perm.new" : "chat.perm.edit")}</span><b title=${p.path}>${p.path}</b></div>
+    <${Diff} text=${p.diff || t("chat.perm.no_change")} />
     ${p.resolved === undefined
       ? html`<div class="perm-foot">
-          <button class="btn ghost" onClick=${() => answer(p.id, false)}>不要改</button>
-          <button class="btn primary" onClick=${() => answer(p.id, true)}>允许写入</button>
+          <button class="btn ghost" onClick=${() => answer(p.id, false)}>${t("chat.perm.deny")}</button>
+          <button class="btn primary" onClick=${() => answer(p.id, true)}>${t("chat.perm.allow")}</button>
         </div>`
-      : html`<div class="perm-done">${p.resolved ? "已写入 vault" : "已拒绝"}</div>`}
+      : html`<div class="perm-done">${t(p.resolved ? "chat.perm.written" : "chat.perm.declined")}</div>`}
   </div>`;
 }
 
@@ -69,7 +77,7 @@ function AssistantMsg({ m, onPage, onSection, answer }) {
 
 // A provider or model switch, kept in the transcript where it happened.
 function EventMsg({ m }) {
-  return html`<div class="msg-event"><span>${m.kind === "provider" ? `以下由 ${m.label} 回答 · 新线程，看不到上面的内容` : `改用 ${m.label}`}</span></div>`;
+  return html`<div class="msg-event"><span>${t(m.kind === "provider" ? "chat.event.provider" : "chat.event.model", { label: m.label })}</span></div>`;
 }
 
 function UserMsg({ m }) {
@@ -105,7 +113,7 @@ export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, r
     if (old && old.readyState === WebSocket.OPEN) return resolve(old);
     const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/chat/${encodeURIComponent(stem)}`);
     ws.onopen = () => resolve(ws);
-    ws.onerror = () => reject(new Error("连接不上本地服务"));
+    ws.onerror = () => reject(new Error(t("chat.no_server")));
     ws.onclose = () => { if (wsRef.current === ws) { wsRef.current = null; setBusy(false); update((m) => ({ ...m, streaming: false })); } };
     ws.onmessage = (ev) => {
       const d = JSON.parse(ev.data);
@@ -158,7 +166,7 @@ export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, r
   const send = useCallback(async (body, opts = {}) => {
     if (busy) return;
     if (opts.write && !isClaude) {  // never hand a write to a read-only model, never switch for the user
-      setMsgs((prev) => [...prev, { role: "user", text: opts.label || body }, { role: "assistant", segments: [{ type: "error", text: NEEDS_CLAUDE }] }]);
+      setMsgs((prev) => [...prev, { role: "user", text: opts.label || body }, { role: "assistant", segments: [{ type: "error", text: t("chat.needs_claude") }] }]);
       return;
     }
     const sel = opts.selection !== undefined ? opts.selection : attachments.selection;
@@ -195,7 +203,7 @@ export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, r
   const pick = async (provider, model) => {
     if (provider === binding.provider && model === binding.model) return;
     if (provider !== binding.provider && msgs.some((m) => m.role === "user")
-      && !confirm(`换成 ${providerLabel(provider)} 会开始新线程：它看不到上面的对话（记录会保留在这里）。`)) return;
+      && !confirm(t("chat.confirm_switch", { label: providerLabel(provider) }))) return;
     try {
       const r = await api(`/api/chat/${encodeURIComponent(stem)}/model`, { json: { provider, model } });
       setBinding(r.binding);
@@ -203,16 +211,16 @@ export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, r
     } catch (e) { alert(e.message); }
   };
   const reset = async () => {
-    if (!confirm(`开始新对话？当前对话会存档，${who} 不再记得之前的内容。`)) return;
+    if (!confirm(t("chat.confirm_reset", { who }))) return;
     wsRef.current?.close();
     await api(`/api/chat/${encodeURIComponent(stem)}`, { method: "DELETE" });
     setMsgs([]);
   };
 
   const submit = () => {
-    const t = text.trim();
-    if (!t && !attachments.selection && !attachments.images.length) return;
-    if (t) send(t); else if (attachments.images.length) send(PROMPTS.explainImg, { label: "讲解" }); else send(PROMPTS.explainSel, { label: "讲解" });
+    const body = text.trim();
+    if (!body && !attachments.selection && !attachments.images.length) return;
+    if (body) send(body); else if (attachments.images.length) send(PROMPTS.explainImg, { label: t("chat.explain") }); else send(PROMPTS.explainSel, { label: t("chat.explain") });
   };
 
   const onKey = (e) => {
@@ -232,32 +240,32 @@ export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, r
 
   return html`
     <div class="side-head">
-      ${onBack && html`<button class="tb-btn back" title=${"回到" + backLabel} onClick=${onBack}><${Icon} name="left" sm />${backLabel}</button>`}
+      ${onBack && html`<button class="tb-btn back" title=${t("chat.back_to", { label: backLabel })} onClick=${onBack}><${Icon} name="left" sm />${backLabel}</button>`}
       <div class="meta">${title && html`<span class="side-title">${title}</span>`}
         <${ModelPicker} binding=${binding} busy=${busy} fallbackOk=${claudeOk} onPick=${pick} /></div>
-      <button class="tb-btn" title="新对话" onClick=${reset}><${Icon} name="refresh" sm /></button>
+      <button class="tb-btn" title=${t("chat.new_chat")} onClick=${reset}><${Icon} name="refresh" sm /></button>
     </div>
     ${banner}
     <div class="chat" ref=${listRef} onScroll=${onScroll}>
       ${msgs.length === 0
-        ? html`<div class="chat-empty"><${Icon} name="sparkle" /><div>${emptyHint || "划选文字，或按住 ⌥ 框选图表 / 公式"}</div></div>`
+        ? html`<div class="chat-empty"><${Icon} name="sparkle" /><div>${emptyHint || t("chat.empty_hint")}</div></div>`
         : msgs.map((m) => m.role === "user" ? html`<${UserMsg} m=${m} />` : m.role === "event" ? html`<${EventMsg} m=${m} />`
           : html`<${AssistantMsg} m=${m} onPage=${onPage} onSection=${onSection} answer=${answer} />`)}
     </div>
     <div class="composer">
       ${chips ? html`<div class="chips">${chips.map((c) => html`<button class="chip" disabled=${busy || (c.write && !isClaude)}
-          title=${c.write && !isClaude ? "要改数据，只有 Claude 能做" : ""}
+          title=${c.write && !isClaude ? t("chat.only_claude_data") : ""}
           onClick=${() => c.run ? c.run(send) : c.fill ? (setText(c.prompt), setTimeout(() => taRef.current?.focus(), 0)) : send(c.prompt, { selection: null, images: [], label: c.label, write: c.write })}>${c.label}</button>`)}</div>` : html`
       <div class="chips">
-        <button class="chip" disabled=${busy} onClick=${() => send(PROMPTS.brief, { selection: null, images: [], label: "速读" })}>速读</button>
-        <button class="chip" disabled=${busy} onClick=${() => { const p = getPage(); send(PROMPTS.page(p), { includePageText: true, page: p, selection: null, images: [], label: `讲解第 ${p} 页` }); }}>讲解本页</button>
-        <button class="chip" disabled=${busy} onClick=${() => send(PROMPTS.relate, { selection: null, images: [], label: "和我的课题有什么关系" })}>和我的课题</button>
-        <button class="chip" disabled=${busy || !paper || !isClaude} title=${isClaude ? "" : "要改笔记，只有 Claude 能做"} onClick=${() => paper.note_rel
-          ? send(PROMPTS.note(paper.note_rel), { selection: null, images: [], label: "更新笔记", write: true })
-          : send(PROMPTS.intake, { selection: null, images: [], label: "建笔记", write: true })}>${paper && !paper.note_rel ? "建笔记" : "更新笔记"}</button>
+        <button class="chip" disabled=${busy} onClick=${() => send(PROMPTS.brief, { selection: null, images: [], label: t("chat.quick_read") })}>${t("chat.quick_read")}</button>
+        <button class="chip" disabled=${busy} onClick=${() => { const p = getPage(); send(PROMPTS.page(p), { includePageText: true, page: p, selection: null, images: [], label: t("chat.explain_page", { p }) }); }}>${t("chat.explain_this_page")}</button>
+        <button class="chip" disabled=${busy} onClick=${() => send(PROMPTS.relate, { selection: null, images: [], label: t("chat.relate_label") })}>${t("chat.relate")}</button>
+        <button class="chip" disabled=${busy || !paper || !isClaude} title=${isClaude ? "" : t("chat.only_claude_note")} onClick=${() => paper.note_rel
+          ? send(PROMPTS.note(paper.note_rel), { selection: null, images: [], label: t("chat.update_note"), write: true })
+          : send(PROMPTS.intake, { selection: null, images: [], label: t("chat.create_note"), write: true })}>${t(paper && !paper.note_rel ? "chat.create_note" : "chat.update_note")}</button>
         <button class="chip" disabled=${busy || !paper?.note_rel || !isClaude}
-          title=${!isClaude ? "要改笔记，只有 Claude 能做" : paper?.note_rel ? "逐条核对笔记论断和发表状态，更新 Claim Gate" : "先建笔记"}
-          onClick=${() => send(PROMPTS.audit(paper.note_rel, new Date().toLocaleDateString("sv")), { selection: null, images: [], label: "Claim Gate 审计", write: true })}>Claim Gate 审计</button>
+          title=${!isClaude ? t("chat.only_claude_note") : paper?.note_rel ? t("chat.audit_title") : t("chat.need_note")}
+          onClick=${() => send(PROMPTS.audit(paper.note_rel, today()), { selection: null, images: [], label: t("chat.audit"), write: true })}>${t("chat.audit")}</button>
       </div>`}
       ${hasAttach && html`<div class="attach">
         ${attachments.selection && html`<div class="att"><${Icon} name="quote" sm /><span>${attachments.selection.text}</span>
@@ -266,10 +274,10 @@ export function ChatPanel({ stem, paper, getPage, attachments, setAttachments, r
           <button onClick=${() => setAttachments({ ...attachments, images: attachments.images.filter((_, j) => j !== i) })}><${Icon} name="x" sm /></button></div>`)}
       </div>`}
       <div class="inputbox">
-        <textarea ref=${taRef} rows="1" placeholder=${hasAttach ? `问点什么，或直接发送让 ${who} 讲解` : `问 ${who}…`} value=${text} onInput=${autosize} onKeyDown=${onKey} />
+        <textarea ref=${taRef} rows="1" placeholder=${t(hasAttach ? "chat.placeholder_attach" : "chat.placeholder", { who })} value=${text} onInput=${autosize} onKeyDown=${onKey} />
         ${busy
-          ? html`<button class="send" title="停止" onClick=${stop}><${Icon} name="stop" sm /></button>`
-          : html`<button class="send" title="发送 (Enter)" disabled=${!text.trim() && !hasAttach} onClick=${submit}><${Icon} name="send" sm /></button>`}
+          ? html`<button class="send" title=${t("chat.stop")} onClick=${stop}><${Icon} name="stop" sm /></button>`
+          : html`<button class="send" title=${t("chat.send")} disabled=${!text.trim() && !hasAttach} onClick=${submit}><${Icon} name="send" sm /></button>`}
       </div>
     </div>`;
 }
@@ -282,9 +290,9 @@ export function NotePanel({ paper, version, onAskUpdate, onAskIntake, onPage, on
   }, [paper?.stem, version]);
   if (!paper) return null;
   if (!paper.note_rel) return html`
-    <div class="side-head"><div class="meta"><span>还没有笔记</span></div></div>
-    <div class="note-empty"><p>这篇只有 arXiv 链接，还没有 Obsidian 笔记。</p>
-      <button class="btn primary" onClick=${onAskIntake}>让 Claude 建笔记</button></div>`;
+    <div class="side-head"><div class="meta"><span>${t("note.panel.empty_title")}</span></div></div>
+    <div class="note-empty"><p>${t("note.panel.empty_body")}</p>
+      <button class="btn primary" onClick=${onAskIntake}>${t("note.panel.ask_create")}</button></div>`;
   const body = md.replace(/^---\n[\s\S]*?\n---\n?/, "");
   const statusCls = paper.status === "verified" ? "ok" : paper.status?.includes("preprint") ? "warn" : "";
   const obsidian = paper.obsidian_url;
@@ -292,15 +300,15 @@ export function NotePanel({ paper, version, onAskUpdate, onAskIntake, onPage, on
     <div class="side-head">
       <div class="meta"><span>${paper.note_rel}</span></div>
       <div style="display:flex;gap:2px">
-        <a class="tb-btn" href=${obsidian} title="在 Obsidian 打开"><${Icon} name="external" sm /></a>
-        <button class="tb-btn" onClick=${onAskUpdate}><${Icon} name="sparkle" sm />让 Claude 更新</button>
+        <a class="tb-btn" href=${obsidian} title=${t("note.open_obsidian")}><${Icon} name="external" sm /></a>
+        <button class="tb-btn" onClick=${onAskUpdate}><${Icon} name="sparkle" sm />${t("note.panel.ask_update")}</button>
       </div>
     </div>
     <div class="note">
       <div class="props">
         ${paper.status && html`<span class=${"tag " + statusCls}>${paper.status}</span>`}
         ${paper.year && html`<span class="tag">${paper.year}</span>`}
-        ${paper.tags.slice(0, 6).map((t) => html`<span class="tag">${t}</span>`)}
+        ${paper.tags.slice(0, 6).map((tag) => html`<span class="tag">${tag}</span>`)}
       </div>
       <${Markdown} text=${body} onPage=${onPage} onSection=${onSection} loose />
     </div>`;

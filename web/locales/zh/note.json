@@ -1,0 +1,7 @@
+{
+  "open_obsidian": "在 Obsidian 打开",
+  "panel.empty_title": "还没有笔记",
+  "panel.empty_body": "这篇只有 arXiv 链接，还没有 Obsidian 笔记。",
+  "panel.ask_create": "让 Claude 建笔记",
+  "panel.ask_update": "让 Claude 更新"
+}
