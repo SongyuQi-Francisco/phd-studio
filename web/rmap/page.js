@@ -125,6 +125,7 @@ export function RmapPage({ version, toast, lines = [], open, onAsk, onOpenNote, 
   const gen = useRef(0); // the latest map request; older answers are dropped
   const [waiting, setWaiting] = useState({}); // slug -> proposals waiting for a confirm, for the project switcher
   const [pview, setPview] = useState(null); // the open project-scoped view (rmap.view with scope "project"), by id
+  const wantNode = useRef(null); // {slug, id}: a node to select once its map is read (ctx.open)
 
   useEffect(() => {
     ensureCss("/rmap/rmap.css");
@@ -152,6 +153,11 @@ export function RmapPage({ version, toast, lines = [], open, onAsk, onOpenNote, 
       setMap((old) => (old?.slug === s && old.stamp === m.stamp ? old : m)); setError("");
       if (lastSeq.current[s] == null) lastSeq.current[s] = m.seq;
       rmap.emit("load", { slug: s, map: m });
+      const want = wantNode.current;
+      if (want?.slug === s) {
+        wantNode.current = null;
+        if (m.nodes.some((n) => n.id === want.id)) { setSelected(want.id); rmap.emit("select", { slug: s, node: want.id }); }
+      }
       return m;
     } catch (e) { setError(e.message); return null; }
   }, []);
@@ -200,13 +206,20 @@ export function RmapPage({ version, toast, lines = [], open, onAsk, onOpenNote, 
   }, [slug, refresh]);
   const select = useCallback((id) => { setSelected(id); rmap.emit("select", { slug, node: id }); }, [slug]);
   const pick = (key) => { setActive(key); if (key.startsWith("view:")) rmap.emit("view", { id: key.slice(5) }); };
+  // Open a project's map (from a view: the peer analysis, the overview) and select a node once it is read.
+  const openNode = useCallback((s, id = null) => {
+    setPview(null); // the map itself, not a project view
+    if (s === slug && map?.slug === s) { if (id) select(id); return; }
+    wantNode.current = id ? { slug: s, id } : null;
+    setActive(s);
+  }, [slug, map, select]);
   const fold = useCallback((id) => setCollapsed((c) => { const x = new Set(c); if (x.has(id)) x.delete(id); else x.add(id); return x; }), []);
 
   const ctx = useMemo(() => meta && {
-    slug, map, meta, projects: projects || [], selected, select, layers, t: label, toast, onAsk, onOpenNote, onOpenPaper, version,
+    slug, map, meta, projects: projects || [], selected, select, open: openNode, layers, t: label, toast, onAsk, onOpenNote, onOpenPaper, version,
     view: { focus, setFocus, collapsed, setCollapsed, fold, pending, setPending, setSide },
     api: { apply, refresh, base: slug ? base(slug) : null, call: api },
-  }, [slug, map, meta, projects, selected, layers, apply, refresh, focus, collapsed, pending, version]);
+  }, [slug, map, meta, projects, selected, openNode, layers, apply, refresh, focus, collapsed, pending, version]);
 
   const created = async (p) => { setAdding(false); await loadProjects(); setActive(p.slug); };
   const applied = async (s) => { const ps = await loadProjects(); if (s && ps.some((p) => p.slug === s)) setActive(s); if (s === slug) refresh(); };

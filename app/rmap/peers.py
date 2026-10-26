@@ -523,9 +523,14 @@ def match_text(title: str, text: str = "", *, key: str | None = None, limit: int
 
 def paper_info(stem: str) -> dict[str, Any]:
     """What the reader's open paper looks like as a peer or as evidence: title, ids, entity, words to match."""
-    from .. import library, sources
+    from .. import library, reading, sources
     info = library.get_paper(stem)
+    item = reading.find(reading.load(), stem)
+    if item and info.get("external") and item.get("title"):  # no note yet: the reading list knows the title
+        info["title"] = item["title"]
     text = re.sub(r"^---\n.*?\n---\n", "", info.get("note_markdown") or "", flags=re.S)
+    if item and item.get("reason"):
+        text = item["reason"] + "\n" + text
     ext = stem if library.ext_key(stem) else (sources.ext_key("doi", info["doi"]) if info.get("doi") else None)
     arxiv = info.get("arxiv") or None
     return {"stem": stem, "title": info.get("title") or stem, "arxiv": arxiv, "ext": ext,

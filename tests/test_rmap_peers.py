@@ -305,3 +305,37 @@ def test_peer_rules_in_a_javascript_engine(engine, tmp_path):
     args = [exe, "-m", "test.mjs"] if engine == "jsc" else [exe, "test.mjs"]
     r = subprocess.run(args, cwd=tmp_path, capture_output=True, text=True, timeout=60)
     assert r.returncode == 0 and r.stdout.strip().endswith("ok"), r.stdout + r.stderr
+
+
+@pytest.mark.parametrize("engine", ["node", "jsc"])
+def test_reader_tool_registry_in_a_javascript_engine(engine, tmp_path):
+    exe = shutil.which("node") if engine == "node" else (str(JSC) if JSC.exists() else None)
+    if not exe:
+        pytest.skip(f"{engine} is not installed")
+    shutil.copy(PROJECT / "web" / "reader-tools.js", tmp_path / "reader-tools.mjs")
+    shutil.copy(PROJECT / "tests" / "js" / "reader_tools.test.mjs", tmp_path / "test.mjs")
+    args = [exe, "-m", "test.mjs"] if engine == "jsc" else [exe, "test.mjs"]
+    r = subprocess.run(args, cwd=tmp_path, capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0 and r.stdout.strip().endswith("ok"), r.stdout + r.stderr
+
+
+def test_the_hooks_stay_wired():
+    """The reader renders the registered tools and loads 挂到地图; the map page hands views ctx.open (documented)."""
+    main = (PROJECT / "web" / "main.js").read_text(encoding="utf-8")
+    assert 'import { readerTools } from "/reader-tools.js";' in main and 'import "/rmap/attach.js";' in main
+    assert "readerTools().map((tool) =>" in main and "tool.render({ stem, paper, toast })" in main
+    attach = (PROJECT / "web" / "rmap" / "attach.js").read_text(encoding="utf-8")
+    assert 'readerTool({ id: "rmap-attach"' in attach
+    page = (PROJECT / "web" / "rmap" / "page.js").read_text(encoding="utf-8")
+    assert "open: openNode" in page and "wantNode.current" in page
+    assert "| `open(slug, node?)` |" in (PROJECT / "docs" / "research-map.md").read_text(encoding="utf-8")
+
+
+def test_a_paper_without_a_note_takes_its_title_from_the_reading_list(slug: str, client: TestClient):
+    with reading.editing() as items:
+        items.append({"id": "r9", "arxiv": "2610.90002", "title": "Late-Interaction Rerankers Are Strong Attribution Judges",
+                      "status": "reading", "reason": "a reranker as verifier"})
+    r = client.get("/api/rmap/peers/paper", params={"stem": "arxiv:2610.90002"}).json()
+    assert r["title"] == "Late-Interaction Rerankers Are Strong Attribution Judges" and r["note"] is None
+    assert r["entity"] == "paper:2610.90002" and r["url"] == "https://arxiv.org/abs/2610.90002"
+    assert r["matches"][0]["title"] == "Late-interaction reranker as verifier"

@@ -16,6 +16,8 @@ import { NoteSheet } from "/note.js";
 import { ZoteroButton, ZoteroSettings } from "/zotero.js";
 import { ReminderRow } from "/reminders.js";
 import { RmapPage, seedPrompt } from "/rmap/page.js";
+import { readerTools } from "/reader-tools.js";
+import "/rmap/attach.js"; // registers the research map's "add to map" button in the reader's toolbar
 
 // ---------------- library ----------------
 
@@ -256,6 +258,7 @@ function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef
           </span>`
         : html`<button class="tb-btn" title=${t("reader.add_to_list_title")} onClick=${onAddToList}><${Icon} name="plus" sm />${t("reader.add_to_list")}</button>`)}
       ${paper && html`<${ZoteroButton} stem=${stem} toast=${toast} onNoteChanged=${onNoteChanged} />`}
+      ${paper && readerTools().map((tool) => html`<span class="reader-tool" key=${tool.id}>${tool.render({ stem, paper, toast })}</span>`)}
       <span class="grow" />
       <span class="pageinput"><input value=${page} onKeyDown=${(e) => e.key === "Enter" && v.goTo(Number(e.target.value))} />/ ${pages || "–"}</span>
       <div class="tb-sep" />

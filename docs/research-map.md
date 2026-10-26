@@ -295,6 +295,7 @@ Every hook gets `ctx`:
 | `slug`, `map` | `{project, nodes, edges, attachments: {kind: [...]}, warnings, stamp, seq}` as `GET /projects/{slug}` returns it |
 | `meta`, `projects` | `/meta`; the project list with counts |
 | `selected`, `select(id)` | the selected node |
+| `open(slug, node?)` | switch to a project's map (e.g. from a view) and select one of its nodes once the map is read |
 | `layers` | `{layer id: on}` |
 | `layout` | in layer hooks: `{boxes: {node id: {x, y, w, h, col, pinned}}, edges, columns, width, height, hidden, hasKids, visible}` in SVG map coordinates (`web/rmap/layout.js`) |
 | `view` | `{focus, setFocus, collapsed, setCollapsed, fold(id)}`: focus and collapsed branches (collapse is kept per map on this Mac) |
