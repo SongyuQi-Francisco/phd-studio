@@ -3,7 +3,7 @@
 // i18n: done
 import { useEffect, useState } from "preact/hooks";
 import { html, Icon, api } from "/lib.js";
-import { t } from "/i18n.js";
+import { t, lang, formatDate, formatDateTime } from "/i18n.js";
 
 // A few extra icons in the same stroke style as lib.js Icon.
 const GLYPHS = {
@@ -14,6 +14,12 @@ const GLYPHS = {
 export function Glyph({ name, sm }) {
   return html`<svg class=${"i" + (sm ? " sm" : "")} viewBox="0 0 24 24" aria-hidden="true"><path d=${GLYPHS[name]} /></svg>`;
 }
+
+// Dates for the dashboard pages in the interface language: "10/26" | "Oct 26", with the year, with the clock.
+const monthStyle = () => (lang() === "zh" ? "numeric" : "short");
+export const monthDay = (d) => formatDate(d, { month: monthStyle(), day: "numeric" });
+export const dayYear = (d) => formatDate(d, { year: "numeric", month: monthStyle(), day: "numeric" });
+export const dayTime = (d) => formatDateTime(d, { year: "numeric", month: monthStyle(), day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 
 export const daysTo = (iso) => Math.ceil((new Date(iso) - new Date()) / 86400000);
 

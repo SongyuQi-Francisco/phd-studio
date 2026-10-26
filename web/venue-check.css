@@ -1,5 +1,5 @@
 /* Venue details freshness: badge, reasons, the assistant's proposal diff, stale list, overview note. */
-.fresh-tag { cursor: help; }
+.fresh-tag { cursor: help; white-space: nowrap; }
 
 .v-check { display: flex; flex-direction: column; gap: 10px; margin: 6px 0 4px; }
 .v-stale, .v-proposal { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--surface-2); }

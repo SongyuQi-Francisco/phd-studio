@@ -1,0 +1,6 @@
+{
+  "week_of": "{date} 那周",
+  "heat_total": "{weeks} 周共 {total}",
+  "heat_less": "少",
+  "heat_more": "多"
+}
