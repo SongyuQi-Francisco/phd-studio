@@ -36,19 +36,21 @@ const noDeadline = (target) => SENT.includes(target.status) ? t("plan.nodl.sent"
   : !target.edition ? t("plan.nodl.next_tba") : target.state === "past" ? t("plan.nodl.past", { edition: target.edition }) : t("plan.nodl.tba", { edition: target.edition });
 // days to the target's next deadline: its calendar event, else the date the target itself reports
 const daysOf = (target, ev) => ev ? daysTo(ev.at) : target.state === "upcoming" && target.next_at ? daysTo(target.next_at) : null;
-// Deadlines taken from the verified CFP carry the track as "<track>（官网）", with "主会" when none is named: these are
-// the backend's machine labels, so strip the tag and show the default track in the interface language.
+// A deadline taken from the CFP page is flagged `source: "official"` and names its track in `track` ("main" when the CFP
+// names none). Older data marks it with "（官网）" in `comment` ("主会" being the default track, "官网" the time zone):
+// both shapes are read, and the machine values are worded here in the interface language.
+const isOfficial = (x) => x.source === "official" || !!x.comment?.includes("官网"); // i18n-ignore: the old tag
+const fromOfficial = (row) => isOfficial(row) || row.timezone === "官网"; // i18n-ignore: the old time zone label
 const trackName = (label) => {
-  const name = (label || "").replace("（官网）", "").trim(); // i18n-ignore: the data's own tag
-  return !name || name === "主会" ? t("plan.main_track") : name; // i18n-ignore: the data's own default track
+  const name = (label || "").replace("（官网）", "").trim(); // i18n-ignore: the old tag
+  return !name || name === "main" || name === "主会" ? t("plan.main_track") : name; // i18n-ignore: the old default track
 };
-const commentName = (comment) => (comment.includes("官网") ? trackName(comment) : comment); // i18n-ignore: the data's own tag
-const tzName = (tz) => (tz === "官网" ? t("plan.sheet.tz_official") : tz); // i18n-ignore: the backend's label for deadlines from the CFP
-// A venue deadline's title and its part after "ACME 2027", worded here: the server's own title is Chinese.
-const evStage = (e) => [e.comment?.includes("官网") && trackName(e.comment), // i18n-ignore: the data's own tag
+const trackOf = (x) => trackName(x.track ?? x.comment);
+// A venue deadline's title and its part after "ACME 2027", worded here so it follows the interface language.
+const evStage = (e) => [isOfficial(e) && trackOf(e),
   t(e.stage === "abstract" ? "plan.stage.abstract" : "plan.stage.full")].filter(Boolean).join(" ");
 const evTitle = (e) => (e.stage ? `${e.acronym} ${e.edition} ${evStage(e)}` : e.title);
-const roundLabel = (r) => [trackName(r.comment),
+const roundLabel = (r) => [trackOf(r),
   r.abstract && t("plan.abstract_at", { at: md(r.abstract) }), r.deadline ? t("plan.full_at", { at: md(r.deadline) }) : t("plan.full_tba")].filter(Boolean).join(" · ");
 
 function Ranks({ core, ccf }) {
@@ -347,7 +349,7 @@ export function VenueSheet({ vkey, onClose, toast, onChanged, onAsk }) {
           <b class="v-when">${fmt(n.at)}</b>
           ${n.paper_at && n.kind === "abstract" && html`<span class="small">${t("plan.full_at", { at: fmt(n.paper_at) })} <${Days} d=${daysTo(n.paper_at)} /></span>`}
           <span class="muted small">${[n.date, n.place].filter(Boolean).join(" · ")}</span>
-          <span class="muted small">${t("plan.sheet.tz_source", { tz: tzName(n.timezone) })}${n.comment ? " · " + commentName(n.comment) : ""}</span>` : html`<span class="muted">${t("plan.sheet.no_deadline")}</span>`}
+          <span class="muted small">${fromOfficial(n) ? t("plan.sheet.from_official") : t("plan.sheet.tz_source", { tz: n.timezone })}${fromOfficial(n) ? " · " + trackOf(n) : n.comment ? " · " + n.comment : ""}</span>` : html`<span class="muted">${t("plan.sheet.no_deadline")}</span>`}
       </div>
       ${rates.length > 0 && html`<div class="v-rate"><b>${(rates[rates.length - 1].rate * 100).toFixed(1)}%</b><span class="muted small">${rates[rates.length - 1].year} ${t("common.term.acceptance_rate")}</span></div>`}
     </div>
