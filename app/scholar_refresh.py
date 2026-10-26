@@ -95,8 +95,8 @@ def exclude(person: dict[str, Any], reason: str) -> dict[str, Any]:
     for e in excluded():
         if R.same_person(e, rec):
             return _shown_excluded(e)
-    # kept in the shared vault file as a reference: worded when the page reads it
-    return _shown_excluded(store.add("excluded", {**rec, "reason": reason or msgref.ref("scholars.refresh.manual_exclude")}, "x"))
+    # kept in the shared vault file as {code, params, text} (msgref.persist): worded when the page reads it
+    return _shown_excluded(store.add("excluded", {**rec, "reason": reason or msgref.persist(msgref.ref("scholars.refresh.manual_exclude"))}, "x"))
 
 
 def _shown_excluded(rec: dict[str, Any]) -> dict[str, Any]:
@@ -433,6 +433,19 @@ def _current() -> list[dict[str, Any]]:
             for s in scholars.scholars()]
 
 
+def _save_run(run_id: str, run: dict[str, Any]) -> str:
+    """Write a new suggestion into the vault file (the one before it, if still open, is superseded); its id."""
+    with store.editing() as data:
+        for old in data["runs"]:  # one open suggestion at a time
+            if old.get("status") == "proposed" and not old.get("deleted"):
+                old.update(status="superseded", updated_at=_now())
+        while any(x["id"] == run_id and x.get("status") != "proposed" for x in data["runs"]):
+            run_id += "-b"  # never overwrite a run that was applied or dismissed (e.g. synced in)
+        data["runs"] = [x for x in data["runs"] if x["id"] != run_id]
+        data["runs"].append({"id": run_id, **msgref.persist(run), "updated_at": _now()})  # the references in it, as fields
+    return run_id
+
+
 def _run(manual: bool) -> None:
     run_id = (f"run-{date.today():%Y-%m}" if not manual else f"run-{datetime.now():%Y-%m-%d-%H%M}") + f"-{DEVICE}"
     try:
@@ -474,14 +487,7 @@ def _run(manual: bool) -> None:
                "ranking": [slim(c) for c in result["list"]], "alternates": [slim(c) for c in result["alternates"]],
                "skipped": [slim(c) for c in result["skipped"][:40]],
                "enter": [slim(c) for c in d["enter"]], "leave": [slim(c) for c in d["leave"]], "moves": d["moves"]}
-        with store.editing() as data:
-            for old in data["runs"]:  # one open suggestion at a time
-                if old.get("status") == "proposed" and not old.get("deleted"):
-                    old.update(status="superseded", updated_at=_now())
-            while any(x["id"] == run_id and x.get("status") != "proposed" for x in data["runs"]):
-                run_id += "-b"  # never overwrite a run that was applied or dismissed (e.g. synced in)
-            data["runs"] = [x for x in data["runs"] if x["id"] != run_id]
-            data["runs"].append({"id": run_id, **run, "updated_at": _now()})
+        run_id = _save_run(run_id, run)
         _progress(stage="done", run_id=run_id)
         _record_attempt(True)
     except R.CheckUnavailable as e:

@@ -149,13 +149,14 @@ def options(e: dict[str, Any], now: datetime | None = None, keep: int = 5) -> di
         if not isinstance(ed.get("year"), int):
             continue
         cur = years.setdefault(ed["year"], {"year": ed["year"], "link": ed.get("link"), "date": ed.get("date"),
-                                            "place": ed.get("place"), "timezone": ed.get("timezone"), "rounds": []})
+                                            "place": ed.get("place"), "timezone": ed.get("timezone"), "source": ed.get("source"), "rounds": []})
         for t in ed["timeline"]:
             key = round_key(t)
             if key and all(r["key"] != key for r in cur["rounds"]):
                 ats = [datetime.fromisoformat(t[k]) for k in ("abstract", "deadline") if t.get(k)]
                 cur["rounds"].append({"key": key, "abstract": t.get("abstract"), "deadline": t.get("deadline"),
-                                      "comment": t.get("comment"), "past": all(a < now for a in ats)})
+                                      "comment": t.get("comment"), "track": t.get("track"), "source": t.get("source"),
+                                      "past": all(a < now for a in ats)})
     out = sorted(years.values(), key=lambda y: y["year"])[-keep:]
     for y in out:
         y["rounds"].sort(key=lambda r: r["key"])

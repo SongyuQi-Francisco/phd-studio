@@ -228,7 +228,7 @@ class PushReq(BaseModel):
 @app.post("/api/reading")
 def reading_push(req: PushReq) -> dict[str, Any]:
     try:
-        reason = i18n.t("api.reason_self") if req.reason is None else req.reason
+        reason = i18n.tv("api.reason_self") if req.reason is None else req.reason  # stored in the reading list: the vault language
         item, what = reading.push(paper=req.paper, arxiv=req.arxiv, ext=req.ext, reason=reason, source="self",
                                   tier=req.tier, lines=req.lines)
     except reading.ReadingError as e:

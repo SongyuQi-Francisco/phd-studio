@@ -97,11 +97,13 @@ def test_the_websocket_says_the_previous_answer_is_still_running(client, monkeyp
     assert not problems({"busy": busy})
 
 
-def test_the_default_reading_reason_is_worded_by_the_mac_that_adds_it(client, make_note):
-    for lang, reason in (("zh", "自己加的"), ("en", "Added by me")):
-        config.save_settings({"ui_language": lang})
-        make_note(f"P {lang}")
-        assert client.post("/api/reading", json={"paper": f"P {lang}"}).json()["item"]["reason"] == reason
+def test_the_default_reading_reason_is_worded_in_the_vault_language_not_the_interface_language(client, make_note, monkeypatch):
+    """It is stored in reading.yaml, which both Macs read: the interface language of the Mac that adds it must not leak in."""
+    config.save_settings({"ui_language": "en"})
+    for vault, reason in (("zh", "自己加的"), ("en", "Added by me")):
+        monkeypatch.setitem(config.PROFILE, "vault_language", vault)
+        make_note(f"P {vault}")
+        assert client.post("/api/reading", json={"paper": f"P {vault}"}).json()["item"]["reason"] == reason
     note = client.post("/api/reading", json={"paper": "P zh", "reason": "mine"}).json()["item"]["reason"]
     assert note.endswith("| mine")  # a reason the user gave is stored as given
 
@@ -207,6 +209,14 @@ def test_change_cards_follow_the_interface_language(card):
         "unfollow": unfollow,
     }
     assert not problems(cases)
+
+
+def test_the_assistant_signs_its_reading_list_entries_in_the_vault_language(card, monkeypatch):
+    config.save_settings({"ui_language": "en"})
+    for n, (vault, by) in enumerate((("zh", "工作台助手"), ("en", "Workbench assistant"))):
+        monkeypatch.setitem(config.PROFILE, "vault_language", vault)
+        card("reading_push", arxiv=f"2501.0000{n}", title="T", reason="r")
+        assert reading._load_raw()[-1]["pushed_by"] == by
 
 
 def test_change_cards_use_the_decided_terms(card):

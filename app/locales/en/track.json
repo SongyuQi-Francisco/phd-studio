@@ -35,5 +35,12 @@
   "run.no_stats": "ingest printed no statistics",
   "thumb.no_paper": "No such paper",
   "thumb.no_pdf": "No local PDF yet",
-  "thumb.bad_pdf": "Can't open the PDF"
+  "thumb.bad_pdf": "Can't open the PDF",
+  "vault_reason.sep": ", ",
+  "vault_reason.scholars": "Track · top scholars in the field: {names}",
+  "vault_reason.scholars_lines": "Track · top scholars in the field: {names} · touches {lines}",
+  "vault_reason.follow_person": "Following scholar: {value}",
+  "vault_reason.follow_keyword": "Following keyword: {value}",
+  "vault_reason.exclude_review": "Excluded while reviewing a suggestion",
+  "api.bad_reason": "Unknown reason"
 }

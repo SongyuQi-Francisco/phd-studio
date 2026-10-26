@@ -1,4 +1,5 @@
 {
+  "pushed_by": "Workbench assistant",
   "changed.reading_push": "Reading list: {key} ({what})",
   "changed.reading_update": "Reading list: updated {key}",
   "changed.milestone_add": "Milestone: {title} ({date})",

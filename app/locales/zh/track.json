@@ -32,5 +32,12 @@
   "run.no_stats": "ingest 没有输出统计",
   "thumb.no_paper": "没有这篇论文",
   "thumb.no_pdf": "还没有本地 PDF",
-  "thumb.bad_pdf": "PDF 打不开"
+  "thumb.bad_pdf": "PDF 打不开",
+  "vault_reason.sep": "、",
+  "vault_reason.scholars": "追踪 · 领域 Top 学者：{names}",
+  "vault_reason.scholars_lines": "追踪 · 领域 Top 学者：{names} · 触及 {lines}",
+  "vault_reason.follow_person": "关注学者：{value}",
+  "vault_reason.follow_keyword": "关注关键词：{value}",
+  "vault_reason.exclude_review": "确认建议时排除",
+  "api.bad_reason": "不认识的理由"
 }

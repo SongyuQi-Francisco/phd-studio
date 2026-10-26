@@ -127,7 +127,7 @@ def test_overridden_deadlines_feed_the_timeline_when_ccfddl_has_nothing_upcoming
     shipped(acl(deadlines=[{"track": "Main", "abstract": None, "paper": "2099-01-05 AoE"}]))
     vo.save("acl", {"deadlines": [{"track": "Main", "abstract": None, "paper": "2099-03-01 AoE"}]}, None, name="ACL")
     ed = venues.catalog()["acl"]["editions"][-1]
-    assert ed["timezone"] == "官网" and ed["timeline"][0]["deadline"].startswith("2099-03-02")
+    assert ed["source"] == "official" and ed["timeline"][0]["deadline"].startswith("2099-03-02")
 
 
 def test_the_edition_year_of_overridden_details_names_the_official_edition(venue_data):
@@ -140,7 +140,7 @@ def test_ccfddl_editions_exclude_the_one_built_from_the_cfp(venue_data):
     shipped(acl())
     acl_entry = venues.catalog()["acl"]
     assert len(acl_entry["editions"]) == len(acl_entry["ccfddl_editions"]) + 1
-    assert all(e["timezone"] != "官网" for e in acl_entry["ccfddl_editions"])
+    assert all(e.get("source") != "official" for e in acl_entry["ccfddl_editions"])
 
 
 def test_summary_carries_freshness_only_for_venues_with_details(venue_data):

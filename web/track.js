@@ -28,6 +28,10 @@ const KW_SEP = /[,，\n]/; // i18n-ignore
 const pushResult = (r) => (r === "added" ? t("track.added_inbox") : /^already listed/.test(r) ? t("track.already_listed") : /^already read/.test(r) ? t("track.already_read")
   : /^dismissed earlier/.test(r) ? t("track.dismissed_earlier") : r);
 
+// A reason that is stored in a shared vault file (the reading list, the exclusion list) is worded by the server in the
+// vault language, not in this Mac's interface language: ask for it by key (a string passes through as it is).
+const vaultReason = async (reason) => (typeof reason === "string" ? reason : (await api("/api/track/reason", { json: reason })).text);
+
 // Prompts for the assistant, not interface text: it answers in the answer language.
 const PROMPT_ADD = (p, reason) => `帮我把这篇论文加入阅读清单：「${p.title}」${p.doi ? `（${p.doi}）` : ""}，理由：${reason}。先找到它的 arXiv 版本（找不到就告诉我，不要猜），然后用 reading_push 推进收件箱${(p.lines || []).length ? `，lines 设为 ${p.lines.join("、")}` : ""}。`; // i18n-ignore
 const PROMPT_REVIEW_FRESH = (run, since) => `按 research_tracker/WEEKLY_RUNBOOK.md 第 3 步审阅刚跑完的巡检 ${run}（since ${since}）：检查 tier-A 的同名误匹配，写 run note 的 ANALYSIS 区块，只给真正的必读建 paper note。先读 vault 的 AGENTS.md。`; // i18n-ignore
@@ -45,20 +49,17 @@ function PaperCard({ p, reason, lines, faces, labels, toast, onOpenPaper, onAsk,
   const add = async (e) => {
     e.stopPropagation();
     const doi = /^https?:\/\/(?:dx\.)?doi\.org\/(10\..+)$/i.exec(p.doi || "")?.[1];
-    if (!p.arxiv && (p.ext || doi)) {  // OpenReview / ACL Anthology / DOI paper: listed by its own key
-      try {
-        const r = await api("/api/track/capture/pick", { json: { candidate: { ...(p.ext ? { key: p.ext } : { doi }), title: p.title, url: p.url || p.doi, venue: p.venue_full || p.venue }, reason, lines: lines ?? p.lines ?? [] } });
-        setState(r.item.status); toast(pushResult(r.result)); onAdded?.();
-      } catch (x) { toast(x.message); }
-      return;
-    }
-    if (!p.arxiv) {
-      onAsk(PROMPT_ADD(p, reason), t("track.ask.add"));
-      return;
-    }
     try {
-      const r = await api("/api/reading", { json: { arxiv: p.arxiv, reason, lines: lines ?? p.lines ?? [] } });
-      setState(r.item.status); toast(pushResult(r.result)); onAdded?.();
+      const why = await vaultReason(reason);
+      if (!p.arxiv && (p.ext || doi)) {  // OpenReview / ACL Anthology / DOI paper: listed by its own key
+        const r = await api("/api/track/capture/pick", { json: { candidate: { ...(p.ext ? { key: p.ext } : { doi }), title: p.title, url: p.url || p.doi, venue: p.venue_full || p.venue }, reason: why, lines: lines ?? p.lines ?? [] } });
+        setState(r.item.status); toast(pushResult(r.result)); onAdded?.();
+      } else if (!p.arxiv) {
+        onAsk(PROMPT_ADD(p, why), t("track.ask.add"));
+      } else {
+        const r = await api("/api/reading", { json: { arxiv: p.arxiv, reason: why, lines: lines ?? p.lines ?? [] } });
+        setState(r.item.status); toast(pushResult(r.result)); onAdded?.();
+      }
     } catch (x) { toast(x.message); }
   };
   const url = p.arxiv ? `https://arxiv.org/abs/${p.arxiv}` : safeUrl(p.url) || safeUrl(p.doi);
@@ -268,7 +269,7 @@ function ProposalSheet({ R, list, onClose, toast }) {
   const reasonOf = (c) => p.skipped.find((x) => x.name === c.name)?.reason || t("track.proposal.default_reason");
   const ex = async (c) => {
     if (!confirm(t("track.proposal.confirm_exclude", { name: c.name }))) return;
-    try { await api("/api/track/scholars/exclude", { json: { name: c.name, scholar_id: c.scholar_id, openalex: c.openalex, reason: t("track.proposal.exclude_reason") } }); toast(t("track.proposal.excluded", { name: c.name })); R.load(); }
+    try { await api("/api/track/scholars/exclude", { json: { name: c.name, scholar_id: c.scholar_id, openalex: c.openalex, reason: await vaultReason({ key: "exclude_review" }) } }); toast(t("track.proposal.excluded", { name: c.name })); R.load(); }
     catch (e) { toast(e.message); }
   };
   const move = (c) => { const m = p.moves.find((x) => x.name === c.name); return !m ? html`<span class="tk-mv new">${t("track.new")}</span>` : m.from === m.to ? "" : m.from > m.to ? html`<span class="tk-mv up">▲${m.from - m.to}</span>` : html`<span class="tk-mv down">▼${m.to - m.from}</span>`; };
@@ -499,10 +500,10 @@ function ScholarsTab({ toast, onOpenPaper, onOpenNote, onAsk, onChanged, version
   const pickScholar = (id) => { setOpen(open === id ? null : id); };
   const only = (id) => { setSid(sid === id ? null : id); setTimeout(() => listRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50); };
   const clear = () => { setSid(null); setTopic(null); setLine(""); setMonth(null); };
-  // stored on the reading list item as its reason
+  // stored on the reading list item as its reason: worded by the server (vaultReason)
   const reason = (p) => {
-    const who = names(p.scholars.map((x) => byId[x]?.name).filter(Boolean));
-    return p.lines.length ? t("track.reason.scholars_lines", { names: who, lines: names(p.lines) }) : t("track.reason.scholars", { names: who });
+    const who = p.scholars.map((x) => byId[x]?.name).filter(Boolean);
+    return p.lines.length ? { key: "scholars_lines", params: { names: who, lines: p.lines } } : { key: "scholars", params: { names: who } };
   };
 
   return html`
@@ -679,7 +680,7 @@ function Follows({ toast, onOpenPaper, onAsk, version, onChanged }) {
         ${(f.sources || []).filter((s) => !s.ok).map((s) => html`<span class="err" title=${s.stale ? t("track.follows.stale_title") : ""}>${s.error}</span>`)}
       </button>`; })}</div>
     <${PaperGrid} papers=${papers} render=${(p, ready) => html`<${PaperCard} thumbReady=${ready} key=${p.arxiv || p.ext} p=${{ ...p, date: p.published, venue: p.source === "arxiv" ? "arXiv" : venueShort(p.venue), venue_full: p.venue, abstract: p.summary, topics: p.keywords }}
-      reason=${t(p._f.kind === "person" ? "track.reason.follow_person" : "track.reason.follow_keyword", { value: p._f.value })} lines=${[]}
+      reason=${{ key: p._f.kind === "person" ? "follow_person" : "follow_keyword", params: { value: p._f.value } }} lines=${[]}
       extra=${html`<span class="tk-chip on">${p._f.value}</span>`} toast=${toast} onOpenPaper=${onOpenPaper} onAsk=${onAsk} onAdded=${onChanged} />`} />`}`;
 }
 
@@ -825,7 +826,7 @@ export function TrackPage({ version, onAsk, toast, onOpenPaper, onOpenNote, onCh
   const common = { toast, onOpenPaper, onOpenNote, onAsk, onChanged, version };
   return html`<div class="page tk"><div class="page-inner wide">
     <div class="tk-head"><h1>${t("common.nav.track")}</h1>
-      <div class="seg">${TABS.map((k) => html`<button class=${tab === k ? "on" : ""} onClick=${() => setTab(k)}>${tabLabel(k)}</button>`)}</div>
+      <div class="seg">${TABS.map((k) => html`<button class=${tab === k ? "on" : ""} data-tab=${k} onClick=${() => setTab(k)}>${tabLabel(k)}</button>`)}</div>
       <span class="spacer" />
       <${Patrol} toast=${toast} onAsk=${onAsk} onDone=${() => { setRunsVersion((v) => v + 1); onChanged?.(); }} />
     </div>

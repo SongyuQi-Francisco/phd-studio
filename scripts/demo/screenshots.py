@@ -106,6 +106,12 @@ class Shots:
         page.locator(".seg button", has_text=label).first.click()
         self.settle(page, 1.3)
 
+    def track_tab(self, page: Page, key: str) -> None:
+        """One of the tracking page's tabs (scholars / radar / follows / labs) by its data-tab, not its label,
+        which follows the interface language."""
+        page.locator(f'.tk-head .seg button[data-tab="{key}"]').click()
+        self.settle(page, 1.3)
+
     def side_tab(self, page: Page, title: str) -> None:
         page.locator(f'.rail-btn[title="{title}"]').click()
         self.settle(page, 1.0)
@@ -211,13 +217,13 @@ class Shots:
             self.go(page, "direction")
             self.shot(page, f"page-direction{sfx}", "Direction: PhD roadmap with a you-are-here marker, research-line cards with kill-criteria lights")
             self.go(page, "track")
-            for label, key, what in [("学者动态", "scholars", "top scholars of the field: metrics, sparklines, lab and relevance chips"),
-                                     ("本周雷达", "radar", "weekly lab radar: papers kept per run by tier, topics, analysis, paper cards"),
-                                     ("关注", "follows", "followed keywords and people across arXiv, OpenReview and ACL Anthology"),
-                                     ("实验室", "labs", "tracked labs: activity heatmap across weekly runs")]:
-                self.tab(page, label)
+            for key, what in [("scholars", "top scholars of the field: metrics, sparklines, lab and relevance chips"),
+                              ("radar", "weekly lab radar: papers kept per run by tier, topics, analysis, paper cards"),
+                              ("follows", "followed keywords and people across arXiv, OpenReview and ACL Anthology"),
+                              ("labs", "tracked labs: activity heatmap across weekly runs")]:
+                self.track_tab(page, key)
                 self.settle(page, 1.0)
-                self.shot(page, f"page-track-{key}{sfx}", f"Tracking · {label}: {what} (fictional people, labs and papers)")
+                self.shot(page, f"page-track-{key}{sfx}", f"Tracking · {key}: {what} (fictional people, labs and papers)")
             self.open_paper(page)
             self.shot(page, f"page-reader{sfx}", f"Reader ({PAPER}, page 3) with the Claude co-reader panel")
             self.side_tab(page, "笔记")
@@ -257,16 +263,16 @@ class Shots:
             self.shot(page, f"closeup-reading-kpis{sfx}", "Reading list: caps (T1 5 a week, 12 queued) as progress bars",
                       page.locator(".kpis"))
             self.go(page, "track")
-            self.tab(page, "学者动态")
+            self.track_tab(page, "scholars")
             self.settle(page, 1.0)
             self.shot(page, f"closeup-track-scholar-cards{sfx}", "Tracking: fictional scholar cards with initials avatars",
                       page.locator(".tk-people"))
             self.shot(page, f"closeup-track-heatmap{sfx}", "Tracking: scholar × month heatmap, topic bars, monthly output",
                       page.locator(".tk-grid2"))
-            self.tab(page, "本周雷达")
+            self.track_tab(page, "radar")
             self.shot(page, f"closeup-track-radar{sfx}", "Tracking: papers kept per weekly run, stacked by tier",
                       page.locator(".tk-grid2"))
-            self.tab(page, "实验室")
+            self.track_tab(page, "labs")
             self.shot(page, f"closeup-track-labs{sfx}", "Tracking: lab × weekly-run heatmap", page.locator(".tk-grid2"))
             self.go(page, "direction")
             self.shot(page, f"closeup-direction-roadmap{sfx}", "Direction: PhD roadmap, year cards, you-are-here marker",
@@ -402,11 +408,11 @@ class Shots:
             self.shot(page, f"settings-reminders{sfx}", "Settings → 截稿提醒: reminders in the next 30 days, lead times, quiet hours, sending Mac")
             self.close_modals(page)
             self.go(page, "track")
-            self.tab(page, "关注")
+            self.track_tab(page, "follows")
             page.locator(".tk-capture input").first.fill("https://arxiv.org/abs/2401.18059")
             page.locator(".tk-capture input").nth(1).fill("树状索引，和 Atlas 的长文档检索对比")
             self.settle(page, 0.6)
-            self.shot(page, f"track-capture{sfx}", "Tracking · 关注 with a link pasted into the capture box (not sent) and the arXiv / OpenReview / "
+            self.shot(page, f"track-capture{sfx}", "Tracking · follows with a link pasted into the capture box (not sent) and the arXiv / OpenReview / "
                       "ACL Anthology feed")
             self.shot(page, f"closeup-track-capture{sfx}", "Capture box with a pasted arXiv link and a reason", page.locator(".tk-capture-wrap"))
 

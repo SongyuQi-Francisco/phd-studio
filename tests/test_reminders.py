@@ -253,8 +253,8 @@ def test_message_text() -> None:
            "days_left": 7}
     assert reminders.message(tgt, MEL)["subtitle"] == "投稿目标 · Paper A、Paper B"
     ms = {**ev(at, key="m:1", type_="milestone", title="Gate 2", kind="gate", line="Project A"), "days_left": 0}
-    assert reminders.message(ms, MEL) == {"title": "Gate 2 · 今天到期", "subtitle": "Gate · Project A",
-                                          "body": "1月22日 周五 到期"}
+    assert reminders.message(ms, MEL) == {"title": "Gate 2 · 今天截止", "subtitle": "Gate · Project A",
+                                          "body": "1月22日 周五 截止"}
 
 
 # ---------- settings ----------
@@ -736,7 +736,7 @@ def test_cli_remind(capsys: pytest.CaptureFixture[str]) -> None:
     assert "skipped: off" in out and "would send  Gate 2 · 还有 2 天" in out
     later = (datetime.now() + timedelta(days=1)).replace(microsecond=0).isoformat()
     assert cli.main(["remind", "--check", "--dry-run", "--now", later]) == 0
-    assert "Gate 2 · 明天到期" in capsys.readouterr().out
+    assert "Gate 2 · 明天截止" in capsys.readouterr().out
     assert cli.main(["remind", "--check", "--now", later]) == 2  # a fake clock only for a dry run
     assert cli.main(["remind"]) == 0
     assert "reminders off" in capsys.readouterr().out

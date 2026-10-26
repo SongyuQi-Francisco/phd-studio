@@ -1,4 +1,5 @@
 {
+  "pushed_by": "工作台助手",
   "changed.reading_push": "阅读清单：{key}（{what}）",
   "changed.reading_update": "阅读清单：已更新 {key}",
   "changed.milestone_add": "里程碑：{title}（{date}）",

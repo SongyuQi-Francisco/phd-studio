@@ -166,6 +166,22 @@ async def follow_feed(refresh: bool = False, days: int = 30) -> dict[str, Any]:
     return await run_in_threadpool(load)
 
 
+# What the page may ask the server to word for text it stores in a shared vault file (a reading-list reason, an
+# exclusion reason): the vault language, not this Mac's interface language, because both Macs read those files.
+VAULT_REASONS = ("scholars", "scholars_lines", "follow_person", "follow_keyword", "exclude_review")
+
+
+@router.post("/reason")
+def vault_reason(body: dict[str, Any]) -> dict[str, str]:
+    key, params = body.get("key"), body.get("params") or {}
+    if key not in VAULT_REASONS or not isinstance(params, dict):
+        raise HTTPException(400, i18n.t("track.api.bad_reason"))
+    sep = i18n.tv("track.vault_reason.sep")
+    words = {str(k): sep.join(map(str, v)) if isinstance(v, list) else str(v) for k, v in params.items()}
+    # i18n-keys: track.vault_reason.{scholars,scholars_lines,follow_person,follow_keyword,exclude_review}
+    return {"text": i18n.tv(f"track.vault_reason.{key}", **words)}
+
+
 @router.post("/capture/pick")
 def capture_pick(body: dict[str, Any]) -> dict[str, Any]:
     """One match of a title search, or a feed card without an arXiv id, into the reading inbox."""

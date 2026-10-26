@@ -295,7 +295,7 @@ def propose(**kw) -> dict:
                        {"name": "Old Prof", "citations": 700, "reason": msgref.ref("scholars.rank.inactive", n=3, last="2021-05")},
                        {"name": "Legacy", "citations": 600, "reason": "在排除名单里"}],
            "enter": [{"name": "Ada Example", "scholar_id": "A" * 12, "openalex": "A1"}], "leave": [], "moves": [], **kw}
-    return scholar_refresh.store.add("runs", run, "run")
+    return scholar_refresh.store.add("runs", msgref.persist(run), "run")  # as the app writes it into the vault file
 
 
 def test_a_stored_suggestion_follows_the_interface_language():
@@ -307,8 +307,30 @@ def test_a_stored_suggestion_follows_the_interface_language():
     check_pair(zh["pending"]["source"], en["pending"]["source"])
     assert zh["history"][0]["source"] == zh["pending"]["source"] and en["history"][0]["source"] == en["pending"]["source"]
     assert "已打开" not in zh["pending"]["source"] and "App 窗口" in zh["pending"]["source"] and "app window" in en["pending"]["source"]
-    kept = yaml.safe_load(config.LAB_TRACKER_DIR.joinpath("scholar-ranking.yaml").read_text(encoding="utf-8"))
-    assert kept["runs"][0]["skipped"][0]["reason"].startswith("i18n:scholars.rank.same_lab") and kept["runs"][0]["id"] == run["id"]
+    raw = config.LAB_TRACKER_DIR.joinpath("scholar-ranking.yaml").read_text(encoding="utf-8")
+    kept = yaml.safe_load(raw)
+    assert "i18n:" not in raw  # no encoded string in the shared file: structured fields, with the words in the vault language
+    assert kept["runs"][0]["skipped"][0]["reason"] == {"code": "scholars.rank.same_lab", "params": {"name": "Ada Example"},
+                                                       "text": "同 lab 已有 Ada Example"}
+    assert kept["runs"][0]["id"] == run["id"]
+    assert kept["runs"][0]["source"]["code"] == "scholars.refresh.src_read" and kept["runs"][0]["source"]["params"]["source"]["code"]
+    # a Mac whose version does not know the code still shows the words that were written
+    kept["runs"][0]["skipped"][0]["reason"]["code"] = "scholars.rank.made_up_later"
+    assert msgref.show(kept["runs"][0]["skipped"][0]["reason"]) == "同 lab 已有 Ada Example"
+
+
+def test_a_new_suggestion_is_written_with_structured_reasons_and_words_in_the_vault_language():
+    config.save_settings({"ui_language": "en"})
+    run = {"created": "2026-10-01T10:00:00", "status": "proposed", "source": msgref.ref("scholars.refresh.src_openalex"),
+           "skipped": [{"name": "Zed Student", "reason": msgref.ref("scholars.rank.same_lab", name="Ada Example")}]}
+    run_id = scholar_refresh._save_run("2026-10-01", run)
+    raw = config.LAB_TRACKER_DIR.joinpath("scholar-ranking.yaml").read_text(encoding="utf-8")
+    assert "i18n:" not in raw
+    stored = next(x for x in yaml.safe_load(raw)["runs"] if x["id"] == run_id)
+    assert stored["source"]["code"] == "scholars.refresh.src_openalex" and CJK.search(stored["source"]["text"])  # the vault is zh by default
+    assert stored["skipped"][0]["reason"]["text"] == "同 lab 已有 Ada Example"
+    shown = scholar_refresh.status()["pending"]  # this Mac is in English
+    assert shown["skipped"][0]["reason"] == "Ada Example already represents this lab" and not CJK.search(shown["source"])
 
 
 def test_applying_notes_are_worded_now_and_the_provenance_in_the_vault_language(monkeypatch):
@@ -335,10 +357,10 @@ def test_applying_notes_are_worded_now_and_the_provenance_in_the_vault_language(
     assert "already been handled" in str(gone.value)
 
 
-def test_the_default_exclude_reason_is_kept_as_a_reference():
+def test_the_default_exclude_reason_is_kept_as_fields_not_as_an_encoded_string():
     rec = scholar_refresh.exclude({"name": "Ada Example"}, "")
     assert rec["reason"] == "手动排除"
-    assert scholar_refresh.excluded()[0]["reason"].startswith("i18n:")
+    assert scholar_refresh.excluded()[0]["reason"] == {"code": "scholars.refresh.manual_exclude", "text": "手动排除"}  # vault language, with its code
     scholar_refresh.exclude({"name": "Grace Sample"}, "not in the field")
     zh, en = in_both(lambda: {x["name"]: x["reason"] for x in scholar_refresh.status()["excluded"]})
     assert zh == {"Ada Example": "手动排除", "Grace Sample": "not in the field"}
@@ -403,6 +425,27 @@ def test_a_failing_feed_source_is_remembered_and_worded_for_each_reading(net, mo
         assert "retrying" in text, text
     record = json.loads(next(tracking.FEED_CACHE.glob("*.fail.json")).read_text(encoding="utf-8"))
     assert record["error"].startswith("i18n:")
+
+
+def test_reasons_the_page_stores_are_worded_in_the_vault_language_not_the_interface_language(ctx, monkeypatch):
+    """The reading list and the exclusion list live in the vault, shared by both Macs."""
+    config.save_settings({"ui_language": "en"})
+
+    def ask(key: str, **params: Any) -> str:
+        r = ctx.client.post("/api/track/reason", json={"key": key, "params": params})
+        assert r.status_code == 200, r.text
+        return r.json()["text"]
+
+    assert ask("scholars_lines", names=["Ada", "Bob"], lines=["Atlas"]) == "追踪 · 领域 Top 学者：Ada、Bob · 触及 Atlas"
+    assert ask("scholars", names=["Ada"]) == "追踪 · 领域 Top 学者：Ada"
+    assert ask("follow_person", value="Ada Example") == "关注学者：Ada Example"
+    assert ask("exclude_review") == "确认建议时排除"
+    monkeypatch.setitem(config.PROFILE, "vault_language", "en")
+    config.save_settings({"ui_language": "zh"})
+    assert ask("scholars_lines", names=["Ada", "Bob"], lines=["Atlas"]) == "Track · top scholars in the field: Ada, Bob · touches Atlas"
+    assert ask("follow_keyword", value="rag") == "Following keyword: rag"
+    bad = ctx.client.post("/api/track/reason", json={"key": "track.api.no_candidate"})  # only the reasons it lists
+    assert bad.status_code == 400 and bad.json()["detail"] == "不认识的理由"
 
 
 def test_capture_defaults_are_written_into_the_reading_list_in_the_vault_language(monkeypatch):

@@ -271,13 +271,15 @@ def _official_edition(d: dict[str, Any] | None) -> dict[str, Any] | None:
             continue
         a, p = _parse_official(row.get("abstract")), _parse_official(row.get("paper"))
         if a or p:
-            # "（官网）" and the timezone "官网" mark an edition taken from the CFP page: plan.py and web/plan.js
-            # look for them, and the catalog is cached whatever the interface language, so they stay as they are
-            timeline.append({"abstract": a, "deadline": p, "comment": f"{row.get('track') or '主会'}（官网）"})
+            # An edition taken from the CFP page says so with machine values: source "official", and the track as the
+            # CFP names it, or "main" when it names none. The pages word them (the catalog is cached whatever the
+            # interface language, so no words in it).
+            timeline.append({"abstract": a, "deadline": p, "track": row.get("track") or "main", "source": "official",
+                             "comment": row.get("track") or None})
     if not timeline:
         return None
     return {"year": venue_fresh.edition_year(d), "link": d.get("cfp_url") or d.get("homepage"),
-            "date": d.get("dates"), "place": d.get("location"), "timezone": "官网", "timeline": timeline}
+            "date": d.get("dates"), "place": d.get("location"), "timezone": None, "source": "official", "timeline": timeline}
 
 
 def catalog() -> dict[str, dict[str, Any]]:
@@ -302,6 +304,7 @@ def next_deadline(e: dict[str, Any], now: datetime | None = None) -> dict[str, A
                     continue
                 dt = datetime.fromisoformat(t[kind])
                 row = {"year": ed["year"], "kind": kind, "at": t[kind], "comment": t.get("comment"),
+                       "track": t.get("track"), "source": ed.get("source"),  # source "official": taken from the CFP page
                        "link": ed.get("link"), "date": ed.get("date"), "place": ed.get("place"),
                        "timezone": ed.get("timezone")}
                 if dt >= now:

@@ -135,7 +135,7 @@ def _tools(emit: Callable[[dict[str, Any]], Awaitable[None]]) -> list[SdkMcpTool
         try:
             item, what = reading.push(paper=a.get("paper"), arxiv=a.get("arxiv"), ext=a.get("ext"), url=a.get("url"),
                                       title=a.get("title"),
-                                      reason=a["reason"], source="claude", pushed_by="工作台助手",
+                                      reason=a["reason"], source="claude", pushed_by=i18n.tv("tools.pushed_by"),
                                       tier=a.get("tier"), lines=a.get("lines"), due=a.get("due"))
         except reading.ReadingError as e:
             return _err(str(e))

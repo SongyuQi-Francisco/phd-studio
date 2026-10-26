@@ -112,7 +112,7 @@ def test_older_details_than_the_upcoming_ccfddl_edition_are_stale():
     f = vf.check(entry(detail(edition="RecSys 2026", edition_year=2026), [ed(2026, None, "2026-04-01T00:00:00+00:00"), ed(2027)]), NOW)
     assert f["stale"] and codes(f) == ["edition"]
     assert "2026" in f["reasons"][0]["text"] and "2027" in f["reasons"][0]["text"]
-    assert f["reasons"][0]["short"] == "有新一届"
+    assert f["reasons"][0]["short"] == "有下一届"
     assert (f["edition_year"], f["ccfddl_year"]) == (2026, 2027)
 
 
@@ -293,7 +293,7 @@ def test_a_placeholder_edition_that_later_gets_deadlines_is_flagged_again():
     f = vf.check(entry(d, published, override=override), NOW)
     assert codes(f) == ["edition"] and f["stale"]
     assert "2027" in f["reasons"][0]["text"] and "2027-04-14" in f["reasons"][0]["text"] and "recsys.example/27" in f["reasons"][0]["text"]
-    assert f["reasons"][0]["short"] == "有新一届"
+    assert f["reasons"][0]["short"] == "有下一届"
 
 
 def test_a_placeholder_edition_that_only_gets_a_link_is_flagged_too():

@@ -314,6 +314,7 @@ def timeline(days_back: int = 14, days_ahead: int = 400) -> dict[str, Any]:
         shown.append(view)
     events: list[dict[str, Any]] = []
     stage_name = {kind: i18n.t(f"plan.stage.{kind}") for kind in ("abstract", "deadline")}  # i18n-keys: plan.stage.{abstract,deadline}
+    main_track = i18n.t("plan.track_main")
     for k in watched_keys():
         e = cat.get(k)
         if not e:
@@ -335,16 +336,19 @@ def timeline(days_back: int = 14, days_ahead: int = 400) -> dict[str, Any]:
                             "edition": ed.get("year"),
                             # "<acronym> <year> [track ]<stage>": the pages cut the first two words off to show the rest;
                             # `stage` below is the machine value (reminders and de-duplication read that, not the title);
-                            # "（官网）" is the marker the venue details put on a track name that was verified on the site
+                            # a deadline taken from the CFP page (source "official") names its track, "main" being the
+                            # one it names none for
                             "title": f"{e['acronym']} {ed['year']} "
-                                     + (f"{(t.get('comment') or '').replace('（官网）', '')} " if "官网" in (t.get("comment") or "") else "")
+                                     + (f"{main_track if t.get('track') == 'main' else t.get('track')} "
+                                        if t.get("source") == "official" and t.get("track") else "")
                                      + stage_name[kind],
                             "at": t[kind], "days": delta, "core": e["core"], "ccf": e["ccf"],
                             "target": compact[0] if compact else None, "targets": compact,
                             "closed": [{"id": x["id"], "title": x["title"], "line": x.get("line"), "status": x["status"]}
                                        for x in closed],
                             "muted": bool(closed) and not opened,
-                            "link": ed.get("link"), "comment": t.get("comment"), "stage": kind,
+                            "link": ed.get("link"), "comment": t.get("comment"), "track": t.get("track"),
+                            "source": t.get("source"), "stage": kind,
                         })
     for m in data["milestones"]:
         at = datetime.fromisoformat(m["date"] + "T23:59:00").astimezone(timezone.utc)
