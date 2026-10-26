@@ -1,0 +1,11 @@
+{
+  "bad_time": "不认识的时间：{text}（用日期 2026-10-01、时间 2026-10-01T09:00 或事件游标）",
+  "kind.evidence": "证据",
+  "packet.added": "新增 {type}「{title}」（{status}）",
+  "packet.attached": "{kind} +{n}：{items}",
+  "packet.more": "另有 {n} 个新节点",
+  "packet.note": "{day} 改动记录：{text}",
+  "packet.removed": "删除「{title}」",
+  "packet.retitled": "「{old}」改名为「{title}」",
+  "packet.status": "「{title}」{old} → {new}"
+}
