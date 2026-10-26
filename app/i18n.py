@@ -30,6 +30,12 @@ LANGUAGE_NAMES = {"zh": "中文", "en": "English"}  # what the assistant is told
 
 log = logging.getLogger(__name__)
 _warned: set[str] = set()
+
+
+def _warn_once(msg: str) -> None:
+    if msg not in _warned:
+        _warned.add(msg)
+        log.warning("i18n: %s", msg)
 _files: dict[Path, tuple[int, dict[str, Any]]] = {}
 
 
@@ -65,16 +71,16 @@ def ui_lang() -> str:
 
 
 def vault_lang() -> str:
-    """The language of the Markdown the app writes into the vault (Reading List.md, generated views).
+    """The language of every file the app generates in the vault (Reading List.md, research-map Canvas).
 
-    [profile] vault_language in studio.toml: "zh" (default) | "en" | "ui". The vault is shared by both
-    Macs, so it is one fixed language unless set to "ui" (each Mac's interface language: two Macs set
-    differently then keep rewriting the same files).
+    [profile] vault_language in studio.toml: "zh" (default) | "en". Never this Mac's interface language:
+    the vault is shared by both Macs, and two Macs set differently would keep rewriting the same files.
     """
     v = str(PROFILE.get("vault_language") or "zh").lower()
-    if v == "ui":
-        return ui_lang()
-    return v if v in LANGS else "zh"
+    if v not in LANGS:
+        _warn_once(f"[profile] vault_language = {v!r} is not one of {LANGS}; using zh")
+        return "zh"
+    return v
 
 
 def answer_language() -> str:
@@ -141,10 +147,7 @@ def tl(lang: str, key: str, /, **params: Any) -> str:
     v = tables.get(lang, {}).get(key)
     if v is None:
         v = tables.get(other, {}).get(key)
-        msg = f"missing key {key!r}" if v is None else f"{key!r} is missing in {lang}, using {other}"
-        if msg not in _warned:
-            _warned.add(msg)
-            log.warning("i18n: %s", msg)
+        _warn_once(f"missing key {key!r}" if v is None else f"{key!r} is missing in {lang}, using {other}")
         if v is None:
             return key
     if isinstance(v, dict):

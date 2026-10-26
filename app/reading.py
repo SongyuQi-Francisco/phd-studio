@@ -187,13 +187,6 @@ def load() -> list[dict[str, Any]]:
         return items
 
 
-def refresh_view() -> None:
-    """Rewrite Reading List.md now, e.g. after the interface language changed with vault_language = "ui"."""
-    with _locked():
-        if READING_LIST.exists():
-            _write_view(_load_raw())
-
-
 @contextmanager
 def editing() -> Iterator[list[dict[str, Any]]]:
     with _locked():

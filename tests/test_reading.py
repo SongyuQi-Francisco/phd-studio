@@ -394,20 +394,10 @@ def test_view_is_in_chinese_with_tiers_kept(notes):
     assert "## 收件箱（1 篇待分拣）" in text
 
 
-def test_view_keeps_the_vault_language_when_this_mac_switches(notes):
-    push(paper="Alpha")
+def test_view_keeps_the_vault_language_whatever_this_macs_interface(notes):
     config.save_settings({"ui_language": "en"})
-    reading.refresh_view()
+    push(paper="Alpha")
     assert "# 阅读清单" in view()  # both Macs write the same headings, whatever their interface language
-
-
-def test_view_can_follow_the_interface_language(notes, monkeypatch):
-    monkeypatch.setitem(config.PROFILE, "vault_language", "ui")
-    push(paper="Alpha")
-    assert "# 阅读清单" in view()
-    config.save_settings({"ui_language": "en"})
-    reading.refresh_view()
-    assert "# Reading List" in view() and "## Inbox (1 to triage)" in view()
 
 
 def test_view_orders_a_tier_by_due_date_then_age(notes, make_note):

@@ -15,12 +15,12 @@
   "status.refuted": "证伪",
   "status.todo": "未开始",
   "status.verified": "已验证",
-  "type.decision": "决策",
-  "type.experiment": "实验",
-  "type.hypothesis": "假设",
+  "type.decision": "Decision",
+  "type.experiment": "Experiment",
+  "type.hypothesis": "Hypothesis",
   "type.kill": "Kill criteria",
-  "type.open": "开放问题",
-  "type.question": "问题",
-  "type.result": "结果",
-  "type.subline": "子线"
+  "type.open": "Open question",
+  "type.question": "Question",
+  "type.result": "Result",
+  "type.subline": "Branch"
 }
