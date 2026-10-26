@@ -4,7 +4,7 @@ Each project gets its own map that grows with the work: question → paths / hyp
 experiments → results, with what is verified, what is blocked and what was dropped. Phase 1 (#45)
 builds the data model, the single-project map and editing; later phases plug in through the
 extension points below: time replay, change view and the all-projects map (#46), the peer layer
-(#47), experiment results (#48).
+(#47), experiment results (#48, see "Experiment results" below).
 
 Code: `app/rmap/` (back end), `web/rmap/` (front end). Tests: `tests/test_rmap.py`.
 
@@ -107,7 +107,8 @@ Things hung on a node. Each kind has its own file and the same generic routes; e
 |---|---|---|---|
 | `evidence` 证据 | `evidence.yaml` | `type`: `paper` (paper note name) / `note` (vault path) / `file` (vault path) / `url`; `target`; `title`; `note`; `stance`: `supports` / `contradicts` / `context` | 1 |
 | `peer` 同行 | `peers.yaml` | `type` paper / scholar / lab, `title`, `relation` same / competing / builds_on, … ([research-map-peers.md](research-map-peers.md)) | 3 |
-| results 结果记录 | registered by #48 | e.g. config, dataset, metric, value, date, source | 4 |
+| `results` 结果记录 | `results.yaml` | `config`, `dataset`, `metric`, `value` (a number), `date`, `source`, and optionally `run`, `baseline`, `better` (`higher` / `lower`), `note`; only on experiment and result nodes. Logged once per batch. See "Experiment results" | 4 |
+| `result_sources` 结果文件 | `result_sources.yaml` | `path`, `format`, `columns`, `mapping`, `watch`, `device`: the CSV / JSON file an experiment reads its results from | 4 |
 
 A `url` target opens only with `http`, `https`, `obsidian` or `zotero`; a paper name, note or file is a
 plain vault-relative path (no scheme, no leading `/` or `~`, no `..`). The front end opens links through
@@ -214,6 +215,82 @@ kept clear), fixed-size cards with at most two evidence links (wikilinks; "n mor
 header saying it is generated; labels in the vault language (`[profile] vault_language`). Edits made to it
 in Obsidian are overwritten by the next change.
 
+## Experiment results
+
+Phase 4 (#48). Code: `app/rmap/plugins/results.py` (registers the two attachment kinds and the routes),
+`app/rmap/results/` (reading, mapping, importing, watching), `app/rmap/cli.py` (`studio map ...`), `web/rmap/ext/results.js`
+and `web/rmap/results/` (the page), `app/studio_tools.py` (the assistant's tool). Nothing in the core files knows about it.
+Tests: `tests/test_rmap_results.py`, `tests/js/rmap_results.test.mjs`.
+
+**Records.** A measurement is one `results` record on an experiment or result node: `config` (the configuration or
+method), `dataset` (optional), `metric` (as typed: `Recall@10`; the page shows it in mono capitals), `value`, `date`
+(`YYYY-MM-DD`, default: the day it was recorded), `source` (the file, `paste`, `cli`, `assistant`, `page`) and optionally
+`run` (a seed), `baseline: true` (the config is a baseline: it is grey in the charts and the gap is measured against the
+best of them), `better` (`lower` for loss or latency; otherwise guessed from the metric name, the same word list in
+`app/rmap/results/model.py` and `web/rmap/results/data.js`) and `note`. A value may be written `41.2%`, `1,234.5`,
+`0.412 ± 0.003`. Several records per metric make the trend: a measurement is told apart by (config, dataset, metric, run,
+date) within its source, so writing the same measurement again updates it, and the same one on another date is a new point.
+The change log gets one line per batch (`kind: results`, `count`), plus the sentence ("imported results.csv", or the
+numbers themselves for a report).
+
+**Tables.** `app/rmap/results/tabular.py` reads pasted text or a file: CSV, TSV (a spreadsheet paste), a Markdown table,
+JSON (an array of objects, an object of `name -> metrics`, or an object holding such an array; nested objects become
+`a.b` columns) and JSON lines. A file is read only when it is named (an absolute path or `~/`), must be a regular
+`.csv .tsv .json .jsonl .ndjson` file of at most 8 MB, and never in the secrets folder, the app's data or state
+folders, `~/.ssh`, `~/.aws`, `~/.config`, `~/Library/Application Support` (symbolic links are resolved first). The file
+picker lists CSV / JSON files under `paths.tracker` and `paths.extra_read_dirs`.
+
+**Mapping.** `app/rmap/results/mapping.py`. Which column is which is a small JSON object (`config`, `dataset`,
+`date`, `run`, `baseline` each `{col}` or a fixed `{const}`; either `metric` + `value` columns for a table with a row per
+measurement, or `metrics: [columns]` for a table with a column per metric; `baselines: [config names]`; `lower:
+[metrics]`). It is guessed from the header. Importing from a file keeps the file and its mapping on the node as a
+`result_sources` record (it merges like any record, so both Macs know it), and the next import of that file, or of one with
+the same header, starts from it. A pasted table has no file: the page remembers its mapping per header in this browser.
+
+**Import.** `importer.run_import(slug, node, text= | path=, mapping=, watch=, dry_run=)` upserts the rows as **one
+atomic batch** through `ops.apply(who="import")` (up to 19000 rows), after checking it as a whole; `dry_run` says what
+would be added, updated or left alone and writes nothing. Importing the same table twice changes nothing and logs
+nothing. A baseline ticked in the page is not unticked by a later import, and rows with no date take the file's date.
+
+**Watching.** A source with `watch: true` and `device: <this Mac>` is read again when the file's size or time moves
+(`importer.sync`, every 8 s in a background thread; state in `<data>/rmap/results-watch.json`, not in the vault). Only the Mac
+named in `device` reads it, so two Macs never import the same file twice, and a file that cannot be read says why on the
+source (once, until it changes). The thread starts the first time a results route is called (the map page does when it opens
+a project) and with `studio map result sync --loop`; `studio map result sync` reads once.
+
+**The page.** A *Results* section in the detail panel of experiment and result nodes (metric chips, the top configs against
+the baseline with the gap, a small trend, add / import / open); a *Results* layer that shows the latest value of a node's
+most recent metric in the corner of its card (toggle in the toolbar); a *Results* toolbar button for the whole map. The
+results panel (a sheet over the page) has the comparison (a ranked bar per config for one metric and dataset, baselines
+grey, the best aqua, the gap to the best baseline in mono), grouped columns across datasets, a trend line per config
+(hover for the values; click the legend to hide a line), every record (mark a baseline with the star, delete), the node's
+files (watch, read now), and the add and import forms. "Lower is better" flips the direction for a metric.
+
+**Command line.** Works with the app stopped; every write is one locked `ops.apply` batch with `who: cli`, merged field by
+field like the page's own edits, so an open page and the other Mac see it. PROJECT is a slug, title or research-line name,
+NODE an id, an id prefix or (part of) a title.
+
+```bash
+./studio map list                                    # projects
+./studio map show "Project A"                        # nodes as a tree: id, status, type, title, number of results
+./studio map status "Project A" "Ablation A" verified --note "Gate passed"
+./studio map note "Project A" "tool use did not help on long sessions" --node "Ablation A"
+./studio map result add "Project A" "Ablation A" recall@10=0.412 ndcg@10=0.35 --config "Ours k=8" --dataset "MS MARCO" [--baseline] [--lower] [--status verified]
+./studio map result list "Project A" ["Ablation A"] [--metric recall@10] [--json]
+./studio map result import "Project A" "Ablation A" ~/code/exp/results.csv [--col value=score --col dataset=@MS-MARCO] [--baseline BM25] [--watch] [--dry-run]
+./studio map result sync [--force] [--loop 10]       # read the files this Mac watches
+```
+
+For the vault rules file that tells agents how to work (`AGENTS.md` or similar), something like: *"After an experiment
+finishes, report its numbers with `./studio map result add <project> <experiment node> <metric>=<value> --config <name>
+--dataset <name>` (`--baseline` for baselines, `--status verified|refuted|blocked` when it settles the node). Never edit the
+Research Maps folder by hand."*
+
+**The assistant.** `map_record_result(project, node, results, status?, summary?)` turns numbers into a proposal that
+the user confirms on the map page (nothing is written before; the proposal also fails if the node's fields changed
+meanwhile, like every proposal). The summary lists the numbers. `map_read` shows each node's latest results. `map_propose`
+can attach `results` records too (`attach.add`, kind `results`).
+
 ## HTTP
 
 All under `/api/rmap` (`app/rmap/api.py`). Edits from the page are the user's own, like the reading list
@@ -233,6 +310,7 @@ and the plan: no approval card. The assistant only proposes; the user confirms.
 | `POST /projects/{slug}/nodes` · `PATCH` · `DELETE /nodes/{id}` | `POST` takes node fields + `parent`, `edge` |
 | `POST /projects/{slug}/edges` · `PATCH` · `DELETE /edges/{id}` | |
 | `GET` · `POST /projects/{slug}/attachments/{kind}` · `PATCH` · `DELETE …/{id}` | any registered kind |
+| `POST /projects/{slug}/results/preview` · `/results/import` · `/results/sync` · `GET /projects/{slug}/results/status` · `GET /results/files` | experiment results (plugin routes, see "Experiment results"): columns and a mapping for pasted text or a file · upsert a table onto a node (`dry_run`) · read the watched files · what this Mac watches · CSV / JSON files in the code folders |
 | `GET /proposals?slug=` · `POST /proposals/{id}/apply` · `DELETE /proposals/{id}` | the assistant's proposals (for a map, plus the ones that would create one) |
 | `GET /lines` · `POST /seed {line}` | research lines with a note and their map · a first map drafted from a note, as a proposal |
 
@@ -334,6 +412,6 @@ event), `strings.js` (extensions' labels), `util.js`, `dom.js`. Tests: `tests/te
 The research map's UI text is the `rmap` module of the i18n framework (#49, docs/i18n.md):
 `web/locales/zh/rmap.json` and `en/rmap.json` for the page, `app/locales/<lang>/rmap.json` for the server
 (proposal messages, and the canvas labels, which follow the vault language). Every file under `web/rmap/`
-is marked `// i18n: done`. Words follow docs/glossary.md (the 研究地图 table): in the Chinese UI technical
+is marked `// i18n: done`. The results feature keeps its text in its own module, `rmap_results` (`web/locales/<lang>/rmap_results.json`, `app/locales/<lang>/rmap_results.json`), and the history's name for its record kind through `rmap.strings`. Words follow docs/glossary.md (the 研究地图 table): in the Chinese UI technical
 terms stay English (Kill criteria, Gate, baseline, ablation, metric names such as Recall@10); English uses
 Hypothesis, Branch, Validated, Dead end, Falsified, Abandoned.

@@ -1,0 +1,118 @@
+/* Experiment results on the research map (#48). Colors are the map's tokens (--mp-*) and the shared chart
+   series; numbers and metric names are mono. The sheet is rendered into <body> under a .rmap wrapper. */
+.rs-mono { font-family: var(--mp-mono); font-variant-numeric: tabular-nums; }
+.rmap .grow { flex: 1; }
+
+/* ---- detail panel section ---- */
+.rs-sec { display: flex; flex-direction: column; gap: 8px; }
+.rs-sec-h { display: flex; align-items: center; gap: 6px; }
+.rs-chips { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
+.rs-chip { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px; border-radius: 6px; font-size: 11px;
+  letter-spacing: .03em; color: var(--text-2); border: 1px solid var(--line); background: transparent; max-width: 100%; }
+.rs-chip small { font-size: 10px; color: var(--text-3); }
+.rs-chip:hover { color: var(--text); background: var(--hover); }
+.rs-chip.on { color: var(--mp-verified); border-color: color-mix(in srgb, var(--mp-verified) 55%, var(--line));
+  background: color-mix(in srgb, var(--mp-verified) 12%, transparent); }
+.rs-sec .rs-chip { font-family: var(--mp-mono); }
+
+.rs-cmp { display: flex; flex-direction: column; gap: 6px; }
+.rs-row { display: grid; grid-template-columns: minmax(70px, 1.3fr) minmax(40px, 1fr) auto auto; gap: 8px; align-items: center; font-size: 12px; min-height: 22px; }
+.rs-cfg { min-width: 0; display: flex; align-items: center; gap: 6px; color: var(--text); }
+.rs-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rs-cfg em { flex: none; font-style: normal; font-size: 9.5px; padding: 1px 5px; border-radius: 4px; color: var(--text-3); border: 1px solid var(--line); letter-spacing: .03em; }
+.rs-row.base .rs-cfg { color: var(--text-2); }
+.rs-sec .rs-cfg em { display: none; } /* the detail panel is narrow: a baseline is grey, the legend line says so */
+.rs-sec .rs-delta { min-width: 62px; }
+.rs-bar { min-width: 0; }
+.rs-val { font-family: var(--mp-mono); font-size: 12px; font-weight: 600; text-align: right; min-width: 42px; }
+.rs-val small { font-size: 9.5px; font-weight: 500; color: var(--text-3); margin-left: 2px; }
+.rs-row.best .rs-val { color: var(--mp-verified); }
+.rs-delta { font-family: var(--mp-mono); font-size: 11px; text-align: right; min-width: 78px; color: var(--text-3); }
+.rs-delta small { font-size: 9.5px; margin-left: 4px; opacity: .8; }
+.rs-delta.good { color: var(--mp-verified); }
+.rs-delta.bad { color: var(--mp-blocked); }
+.rs-dir { font-size: 10.5px; color: var(--text-3); margin-top: 2px; }
+.rs-spark { display: flex; align-items: center; gap: 10px; }
+.rs-spark > span { font-size: 10.5px; color: var(--text-2); letter-spacing: .04em; flex: none; }
+.rs-spark-box { flex: 1; min-width: 0; }
+.rs-count { margin-left: 6px; font-size: 10px; padding: 0 5px; border-radius: 99px; background: color-mix(in srgb, var(--mp-verified) 18%, transparent); color: var(--mp-verified); }
+
+/* the value in the corner of a node card */
+.rs-nodechip { pointer-events: none; }
+.rs-nodechip text { font: 600 10px var(--mp-mono); fill: var(--mp-verified); }
+.rs-lg b { font: 600 10.5px var(--mp-mono); color: var(--mp-verified); margin-right: 4px; }
+
+/* ---- the sheet ---- */
+.rs-bg { position: fixed; inset: 0; z-index: 52; background: rgba(0, 0, 0, .35); display: flex; justify-content: center; align-items: flex-start;
+  padding: 4vh 16px; overflow-y: auto; animation: fadeIn .18s ease; }
+.rs-sheet { width: min(1040px, 100%); background: var(--surface); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow);
+  padding: 16px 18px 18px; display: flex; flex-direction: column; gap: 12px; animation: popIn .26s var(--spring); }
+.rs-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.rs-top h2 { margin: 0; font-size: 16px; }
+.rs-scope { height: 30px; max-width: 320px; border-radius: 9px; border: 1px solid var(--line); background: var(--surface); padding: 0 8px; color: var(--text); }
+.rs-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.rs-ds { height: 28px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); padding: 0 8px; color: var(--text); }
+.rs-dirbtn { margin-left: auto; height: 26px; padding: 0 10px; border-radius: 7px; font-size: 11.5px; color: var(--text-2); border: 1px solid var(--line); }
+.rs-dirbtn.on { color: var(--mp-active); border-color: color-mix(in srgb, var(--mp-active) 55%, var(--line)); background: color-mix(in srgb, var(--mp-active) 12%, transparent); }
+.rs-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+@media (max-width: 820px) { .rs-grid { grid-template-columns: minmax(0, 1fr); } }
+.rs-card { border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 12px 14px; background: var(--surface); min-width: 0; }
+.rs-card h4 { margin: 0 0 10px; font-size: 12.5px; font-weight: 600; color: var(--text-2); display: flex; gap: 8px; align-items: baseline; }
+.rs-card h4 small { font-size: 10.5px; color: var(--text-3); font-weight: 500; letter-spacing: .04em; }
+.rs-card h4.rs-sub { margin-top: 16px; }
+.rs-card .rs-row { grid-template-columns: minmax(130px, 1fr) minmax(60px, 1.6fr) auto auto; font-size: 12.5px; }
+.rs-trend .rs-legend { margin-bottom: 8px; }
+.rs-legend button { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: 12px; }
+.rs-legend button.muted { opacity: .4; }
+.rs-mono.ch-tick { font-family: var(--mp-mono); }
+.rs-tip { min-width: 150px; }
+.rs-tip .rs-mono { font-family: var(--mp-mono); }
+
+.rs-tablewrap { overflow-x: auto; }
+.rs-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.rs-table th { text-align: left; font-weight: 500; font-size: 10.5px; color: var(--text-3); text-transform: uppercase; letter-spacing: .05em; padding: 4px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.rs-table td { padding: 5px 8px; border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent); white-space: nowrap; }
+.rs-table .num { text-align: right; }
+.rs-table tr:hover td { background: var(--hover); }
+.rs-star { color: var(--text-3); margin-right: 6px; vertical-align: -2px; opacity: .55; }
+.rs-star.on { color: var(--mp-blocked); opacity: 1; }
+.rs-star.on svg { fill: currentColor; }
+.rs-src-cell, .rs-node { max-width: 180px; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); }
+.rs-empty { padding: 26px 8px; text-align: center; color: var(--text-2); font-size: 13px; }
+.rs-cli { display: inline-block; margin-top: 6px; padding: 6px 10px; border-radius: 8px; background: var(--hover); font: 11.5px var(--mp-mono); color: var(--text); user-select: all; }
+
+.rs-add { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--hover); }
+.rs-add input:not([type="checkbox"]), .rs-import input:not([type="checkbox"]), .rs-import select, .rs-import textarea {
+  height: 30px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); padding: 0 9px; color: var(--text); min-width: 0; font: inherit; font-size: 12.5px; }
+.rs-add .row-end { grid-column: 1 / -1; }
+.rs-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-2); white-space: nowrap; }
+.rs-sources h5 { margin: 0 0 6px; font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: .05em; font-weight: 500; }
+.rs-src { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 12px; }
+.rs-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.rs-err { color: var(--mp-blocked); font-size: 11.5px; }
+
+/* ---- import ---- */
+.rs-import { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--hover); }
+.imp-head { display: flex; align-items: center; gap: 8px; }
+.imp-text { width: 100%; height: auto !important; padding: 8px 9px !important; resize: vertical; font-size: 12px !important; box-sizing: border-box; }
+.imp-file { display: flex; flex-direction: column; gap: 6px; }
+.imp-file input { width: 100%; box-sizing: border-box; }
+.imp-near { display: flex; flex-direction: column; gap: 2px; }
+.imp-near button { display: flex; align-items: baseline; gap: 10px; padding: 4px 8px; border-radius: 7px; text-align: left; font-size: 12px; }
+.imp-near button:hover { background: var(--surface); }
+.imp-near small { color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.imp-tablewrap { overflow: auto; max-height: 190px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.imp-sample td { font-family: var(--mp-mono); font-size: 11.5px; color: var(--text-2); }
+.imp-map { display: flex; flex-direction: column; gap: 10px; }
+.imp-shape { display: inline-flex; gap: 2px; padding: 2px; border-radius: 9px; border: 1px solid var(--line); align-self: flex-start; }
+.imp-shape button { height: 26px; padding: 0 10px; border-radius: 7px; font-size: 12px; color: var(--text-2); }
+.imp-shape button.on { background: var(--surface); color: var(--text); box-shadow: var(--card-shadow); }
+.imp-picks { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px 12px; }
+.imp-pick { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--text-3); }
+.imp-pick em { color: var(--mp-blocked); font-style: normal; margin-left: 2px; }
+.imp-pick select, .imp-pick input { width: 100%; box-sizing: border-box; }
+.imp-metrics { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; font-size: 11.5px; color: var(--text-3); }
+.imp-metrics > span { margin-right: 4px; }
+.imp-foot { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.imp-sum { font-size: 11.5px; color: var(--text-2); }
+.imp-sample-list { margin: 0; padding-left: 16px; font-size: 11.5px; color: var(--text-3); }

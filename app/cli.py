@@ -17,6 +17,10 @@
     studio target update t1a2b3 [--status submitted] [--edition 2027|auto] [--deadline 2027-02-08|none] [--venue ACL]
     studio deadlines [--days 90]
     studio remind [--check [--dry-run] [--now 2026-11-01T09:00] | --test] [--json]
+    studio map show "Project A"                     (research maps: app/rmap/cli.py has the whole list)
+    studio map status "Project A" "Speed vs FA2" verified [--note "why"]
+    studio map result add "Project A" "Speed vs FA2" recall@10=0.412 --config "Ours k=8" --dataset "MS MARCO" [--baseline]
+    studio map result import "Project A" "Speed vs FA2" ~/code/exp/results.csv [--col value=score] [--watch] [--dry-run]
 
 `studio milestone "Title" ...`, `studio idea "text"` and `studio target "Title" VENUE` are short for `... add`.
 A target aims at one edition (year) of a venue, and optionally one round of it (a deadline date); without
@@ -34,6 +38,7 @@ import sys
 from datetime import datetime
 
 from . import idea_ops, plan, reading
+from .rmap import cli as map_cli
 
 
 def _row(i: dict) -> str:
@@ -215,6 +220,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--now", help="with --check --dry-run: pretend it is this local time, e.g. 2026-11-01T09:00")
     r.add_argument("--json", action="store_true")
 
+    map_cli.add_parser(sub)
+
     a = ap.parse_args(_default_to_add(list(sys.argv[1:] if argv is None else argv)))
     try:
         if a.cmd == "push":
@@ -312,7 +319,12 @@ def main(argv: list[str] | None = None) -> int:
                           + (f"  -> {who}" if who else "") + quiet)
         elif a.cmd == "remind":
             return _remind(a)
+        elif a.cmd == "map":
+            return map_cli.run(a)
     except KeyError as e:
+        if a.cmd == "map":
+            print(f"error: {e.args[0] if e.args else e}", file=sys.stderr)
+            return 2
         if a.cmd not in ("idea", "target"):
             raise
         print(f"error: no {a.cmd} {e.args[0]}", file=sys.stderr)
