@@ -39,9 +39,6 @@ SCALING = ("We suspect that for large values of dk, the dot products grow large 
            "function into regions where it has extremely small gradients")
 FIGURE1 = (0.29, 0.075, 0.71, 0.53)  # Figure 1 (the architecture) on page 3, as fractions of the page box
 
-RAIL = {"overview": "总览", "list": "阅读清单", "timeline": "时间线 · 会议与规划", "ideas": "想法 (⌘I 随手记)",
-        "direction": "方向 · 研究线与路线图", "track": "追踪 · 同行动态与捕捉"}
-
 
 class Shots:
     def __init__(self, browser: Browser, url: str, out: Path):
@@ -91,7 +88,7 @@ class Shots:
         print(f"  {path.name}")
 
     def go(self, page: Page, view: str) -> None:
-        page.locator(f'.rail-btn[title="{RAIL[view]}"]').click()
+        page.locator(f'.rail-btn[data-view="{view}"]').click()  # not the title: it follows the interface language
         self.settle(page, 1.5)
 
     def open_paper(self, page: Page, query: str = "Attention", keycap: bool = False) -> None:
@@ -444,7 +441,7 @@ class Shots:
             print(f"  ! bilingual PDF not ready ({st.get('state')})")
             return
         for label, name, what in [("双语", "reader-bilingual", "Reader · 双语: the whole paper side by side, original and Chinese (pdf2zh-next)"),
-                                  ("中文", "reader-mono", "Reader · 中文: the translated paper only")]:
+                                  ("译文", "reader-mono", "Reader · 译文: the translated paper only")]:
             page.locator(".reader .toolbar .seg button", has_text=label).click()
             page.wait_for_selector(".pdfViewer .page canvas, .pdfViewer .page .canvasWrapper", timeout=30000)
             self.settle(page, 1.5)
@@ -558,7 +555,7 @@ class Shots:
                 page.keyboard.press("Meta+j")
                 self.keycap(page, "⌘J")
                 self.settle(page, 1.2)
-                page.locator("aside.side button", has_text="最近截稿").click()
+                page.locator("aside.side button", has_text="最近 Deadline").click()
                 self.wait_answer(page, timeout=180)
                 self.scroll_chat(page, "bottom")
                 self.settle(page, 2.0)
