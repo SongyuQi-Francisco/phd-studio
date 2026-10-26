@@ -24,7 +24,7 @@ from ..config import DATA_DIR, RMAP_DIR
 from ..store import Store
 from . import model, registry
 from .clock import from_iso, parse
-from .records import FieldStore, child_live, clocks, live_ids, own_live
+from .records import FieldStore, ShardedStore, child_live, clocks, live_ids, own_live
 
 HEADER = "# Research map, managed by PhD Studio (研究地图). Edit in the app; see docs/research-map.md.\n"
 EVENTS_HEADER = "# Research map change log, managed by PhD Studio. One record per change; never edited.\n"
@@ -109,8 +109,11 @@ class Project:
     def exists(self) -> bool:
         return (self.dir / "map.yaml").exists()
 
-    def kind_store(self, kind: registry.AttachmentKind) -> FieldStore:
-        return FieldStore(self.dir / kind.filename, (kind.name,), HEADER, name=f"rmap/{self.slug}.{kind.name}")
+    def kind_store(self, kind: registry.AttachmentKind) -> FieldStore | ShardedStore:
+        name = f"rmap/{self.slug}.{kind.name}"
+        if kind.shard == "node":
+            return ShardedStore(self.dir / kind.filename, kind.name, HEADER, name=name)
+        return FieldStore(self.dir / kind.filename, (kind.name,), HEADER, name=name)
 
     def event_store(self, month: str) -> Store:
         return Store(self.dir / "events" / f"{month}.yaml", ("events",), EVENTS_HEADER,
@@ -124,8 +127,10 @@ class Project:
         return sorted({p.stem for p in d.glob("*.yaml") if re.fullmatch(r"\d{4}-\d{2}", p.stem)}, reverse=True)
 
     # ---- reading ----
-    def read(self, include_deleted: bool = False) -> dict[str, Any]:
-        """The whole map: project record, nodes, edges, every registered attachment kind, and warnings."""
+    def read(self, include_deleted: bool = False, attachments: bool = True) -> dict[str, Any]:
+        """The whole map: project record, nodes, edges, every registered attachment kind, and warnings.
+        attachments=False leaves the attachment kinds out (`attachments` is {}): a listing needs none of them, and
+        a map with thousands of result records is slow to read."""
         self.ingest()
         data = copy.deepcopy(self.map.load(include_deleted=True))
         project = next((r for r in data["project"] if r["id"] == PROJECT_ID), None) or {"id": PROJECT_ID, "title": self.slug}
@@ -137,13 +142,13 @@ class Project:
         for e in edges:
             if e["id"] in cycle:
                 e["cycle"] = True
-        attachments = {}
-        for name, kind in registry.kinds().items():
+        loaded = {}
+        for name, kind in (registry.kinds().items() if attachments else []):
             recs = self.kind_store(kind).load(include_deleted=True)[name]
-            attachments[name] = [r for r in recs if include_deleted or (child_live(r, live) and r.get("node") in live)]
+            loaded[name] = [r for r in recs if include_deleted or (child_live(r, live) and r.get("node") in live)]
         warnings = [{"kind": "cycle", "edges": sorted(cycle)}] if cycle else []
         return {"slug": self.slug, "project": project, "nodes": nodes, "edges": edges,
-                "attachments": attachments, "warnings": warnings, "stamp": self.stamp(),
+                "attachments": loaded, "warnings": warnings, "stamp": self.stamp(),
                 "seq": self._ingest_state()["seq"]}
 
     def _month_events(self, month: str) -> list[dict[str, Any]]:
@@ -288,7 +293,7 @@ def get(slug: str) -> Project:
 
 
 def summary(p: Project, m: dict[str, Any] | None = None) -> dict[str, Any]:
-    m = m or p.read()
+    m = m or p.read(attachments=False)  # a listing needs no attachments, and results can be thousands of records
     counts = {s: 0 for s in model.STATUSES}
     for n in m["nodes"]:
         counts[n.get("status", "todo")] = counts.get(n.get("status", "todo"), 0) + 1

@@ -8,6 +8,7 @@
   "edge.conflicts": "Conflicts with",
   "edge.depends": "Depends on",
   "edge.refines": "Refines",
+  "exists": "{record} already has the same {kind} record ({what})",
   "gone": "{record} was deleted",
   "moved": "{fields} of {record} changed",
   "record": "“{title}”",

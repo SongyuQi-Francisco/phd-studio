@@ -207,9 +207,11 @@ Other agents and scripts can work with the same data:
 ./studio target "Main paper" ACL --line "Project A"
 ./studio deadlines --days 90
 ./studio remind --check --dry-run
+./studio map result add "Project A" "Ablation A" recall@10=0.412 --config "Ours k=8" --dataset "MS MARCO" --status verified
+./studio map result import "Project A" "Ablation A" ~/code/exp/results.csv --baseline BM25 --watch
 ```
 
-`--reason` is required for `push`, and papers already read or dismissed are not added again. Run `./studio <command> --help` for every option. Tell your agents about it in the vault rules file (e.g. `AGENTS.md`).
+`--reason` is required for `push`, and papers already read or dismissed are not added again. Run `./studio <command> --help` for every option. `./studio map` reports experiment results and node status on a research map (see [docs/research-map.md](docs/research-map.md#experiment-results)); it works while the app is closed. Tell your agents about it in the vault rules file (e.g. `AGENTS.md`).
 
 ## Vault conventions
 

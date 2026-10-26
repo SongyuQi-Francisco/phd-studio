@@ -18,7 +18,7 @@ from typing import Any
 from .. import i18n
 from ..config import STATE_DIR
 from ..store import now
-from . import model, ops, project
+from . import model, ops, project, registry
 from .records import child_live, clocks, last_write, live_ids, own_live
 
 PROPOSALS_FILE = STATE_DIR / "rmap_proposals.json"
@@ -57,7 +57,7 @@ def propose(*, ops_: list[dict[str, Any]], summary: str, slug: str | None = None
     sim = ops.simulate(slug, ops_, who="assistant", summary=summary)
     rec = {"id": "rp" + secrets.token_hex(4), "slug": slug, "create": create, "kind": kind, "source": source,
            "summary": summary, "ops": ops_, "events": sim["events"], "created_at": now(),
-           "base": _base(slug, sim["events"]) if slug else []}
+           "base": _base(slug, sim["events"], ops_) if slug else [], "absent": _absent(slug, ops_) if slug else []}
     with _lock:
         rows = _load()
         rows.append(rec)
@@ -76,11 +76,19 @@ def _records(slug: str) -> tuple[dict[tuple[str, str], dict[str, Any]], set[str]
     return out, live_ids(m["nodes"])
 
 
-def _base(slug: str, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _base(slug: str, events: list[dict[str, Any]], ops_: list[dict[str, Any]] = ()) -> list[dict[str, Any]]:
     """What the proposal was made against: the stamps of the fields it changes, of the records it deletes
-    (all of the record: "*"), and of the existing nodes it hangs new things on (only that they live)."""
+    (all of the record: "*"), and of the existing nodes it hangs new things on (only that they live).
+    Kinds logged per batch (bulk imports) have no per-record events, so their changes are read off the operations."""
     recs, _ = _records(slug)
     base: dict[tuple[str, str], dict[str, str]] = {}
+    for op in ops_:
+        if op.get("op") in ("attach.update", "attach.delete") and isinstance(op.get("id"), str) and (op.get("kind"), op["id"]) in recs:
+            key = (op["kind"], op["id"])
+            if op["op"] == "attach.delete":
+                base.setdefault(key, {})["*"] = last_write(recs[key])
+            else:
+                base.setdefault(key, {}).update({f: clocks(recs[key]).get(f, "") for f in op.get("set") or {}})
     for ev in events:
         key = (ev["kind"], ev.get("target") or "")
         rec = recs.get(key)
@@ -94,6 +102,21 @@ def _base(slug: str, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     base.setdefault(("node", nid), {})
     return [{"kind": k, "id": i, "title": (recs[(k, i)].get("title") if k == "node" else None), "fields": f}
             for (k, i), f in base.items()]
+
+
+def _absent(slug: str, ops_: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The records an `attach.add` would create, for kinds that say what tells two of them apart (`identity`): none
+    of them may exist by the time the proposal is confirmed, or confirming would write the measurement twice."""
+    out = []
+    for op in ops_:
+        kind = registry.kinds().get(op.get("kind")) if op.get("op") == "attach.add" else None
+        if kind and kind.identity and isinstance(op.get("node"), str) and not op["node"].startswith("$"):
+            try:
+                ident = list(kind.identity(kind.clean(op.get("set") or {}, new=True)))
+            except ValueError:
+                continue
+            out.append({"kind": kind.name, "node": op["node"], "identity": ident})
+    return out
 
 
 def stale(rec: dict[str, Any]) -> list[str]:
@@ -113,6 +136,17 @@ def stale(rec: dict[str, Any]) -> list[str]:
                  if (last_write(cur) if f == "*" else clocks(cur).get(f, "")) != stamp]
         if moved:
             out.append(i18n.t("rmap.moved", record=name, fields=", ".join("*" if f == "*" else f for f in moved)))
+    kinds = registry.kinds()
+    for a in rec.get("absent") or []:
+        kind = kinds.get(a["kind"])
+        node = recs.get(("node", a["node"]))
+        if kind is None or kind.identity is None or node is None:
+            continue
+        for (k, _), r in recs.items():
+            if k == a["kind"] and r.get("node") == a["node"] and child_live(r, live) and list(kind.identity(r)) == a["identity"]:
+                out.append(i18n.t("rmap.exists", record=i18n.t("rmap.record", kind="node", title=node.get("title") or a["node"]),
+                                  kind=a["kind"], what=kind.line(r)))
+                break
     return out
 
 
@@ -175,6 +209,8 @@ def describe(rec: dict[str, Any]) -> list[str]:
         elif e["kind"] == "edge":
             a, b = (e.get("nodes") or [None, None])[:2]
             out.append(f"{_ACTION[e['action']]}连线「{names.get(a, a)}」→「{names.get(b, b)}」")
+        elif e.get("count"):  # a kind logged per batch: how many, the sentence of the proposal says which
+            out.append(f"{_ACTION[e['action']]}{e['kind']} {e['count']} 条")
         else:
             out.append(f"{_ACTION[e['action']]}{e['kind']}「{e.get('title')}」：{e.get('summary') or ''}")
     return out
