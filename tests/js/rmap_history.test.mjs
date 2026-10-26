@@ -1,6 +1,7 @@
 // web/rmap/timeline.js without a browser: run by tests/test_rmap_history.py with node, or with JavaScriptCore's
 // jsc (WebKit's engine, the one the desktop window uses). Prints "ok" or throws.
-import { mapAt, compare, metroLayout, dayMs, WEEK_MS } from "./timeline.mjs";
+import { mapAt, compare, markCycles, takeLatest, metroLayout, dayMs, WEEK_MS } from "./timeline.mjs";
+import { layoutMap } from "./layout.mjs";
 
 const out = typeof print === "function" ? print : console.log.bind(console);
 
@@ -47,6 +48,27 @@ const dropped = compare({ nodes: [h], edges: [] }, { nodes: [{ ...h, status: "dr
 eq(dropped.marks.h, { mark: "dropped", from: "active", to: "dropped" }, "dropped");
 eq(compare(null, mapAt(frames, 0)).changes.added.length, 1, "from nothing");
 
+// a depends edge reversed within a week: the week's map plus the deleted edge (a ghost) hold A -> B and B -> A
+const meta = { flow: ["refines", "depends"], node_types: [{ key: "question", col: 0 }, { key: "hypothesis", col: 1 }, { key: "experiment", col: 3 }] };
+const A = { id: "A", type: "hypothesis", title: "A", status: "active" }, B = { id: "B", type: "hypothesis", title: "B", status: "active" };
+const ab = { id: "eab", from: "A", to: "B", kind: "depends", clock: { from: "1790000000000.0000.mac" } };
+const ba = { id: "eba", from: "B", to: "A", kind: "depends", clock: { from: "1790000500000.0000.mac" } };
+const rev = compare({ nodes: [A, B], edges: [ab] }, { nodes: [A, B], edges: [ba] });
+eq(rev.view.edges.map((e) => [e.id, !!e.gone, !!e.cycle]), [["eba", false, true], ["eab", true, false]], "the later edge closes the cycle");
+const lay0 = layoutMap(rev.view, meta);
+ok(Number.isFinite(lay0.width) && Number.isFinite(lay0.height), "the layout stays finite");
+ok(Object.values(lay0.boxes).every((b) => Number.isFinite(b.x) && Number.isFinite(b.y)), "every box has a place");
+eq(markCycles([{ ...ab, cycle: true }]).map((e) => !!e.cycle), [false], "a stale mark goes");
+eq(markCycles([{ id: "s", from: "A", to: "A", kind: "refines" }, { id: "x", from: "A", to: "B", kind: "alternative" }]).map((e) => !!e.cycle),
+  [true, false], "a self loop is a cycle; lateral edges are not walked");
+const byMade = markCycles([{ ...ba, clock: { from: "1790000000000.0000.mac" } }, { ...ab, clock: { from: "1790000500000.0000.mac" } }]);
+eq(byMade.filter((e) => e.cycle).map((e) => e.id), ["eab"], "marked in the order the edges were made");
+
+// only the latest request's answer counts
+const latest = takeLatest();
+const first = latest(), second = latest();
+eq([first(), second()], [false, true], "an earlier request is stale");
+
 // the metro layout
 const w0 = "2026-09-07";
 const t0 = dayMs(w0);
@@ -64,14 +86,22 @@ const ov = {
   interchanges: [{ entity: "dataset:x", ms: day(19), projects: [{ slug: "a" }, { slug: "b" }] },
                  { entity: "paper:y", ms: day(20), projects: [{ slug: "a" }, { slug: "b" }] }],
 };
-const lay = metroLayout(ov, { weekW: 70, left: 20, laneH: 90, top: 60, labelW: 100 });
+const lay = metroLayout(ov, { weekW: 140, left: 20, laneH: 90, top: 60, labelW: 100 }); // 20 px a day: no merging
 eq(lay.lines.map((l) => l.y), [60, 150], "lanes");
-ok(Math.abs(lay.lines[0].x1 - 20) < 1e-6 && Math.abs(lay.lines[1].x1 - (20 + 90)) < 1e-6, "lines start at their first change");
+ok(Math.abs(lay.lines[0].x1 - 20) < 1e-6 && Math.abs(lay.lines[1].x1 - (20 + 180)) < 1e-6, "lines start at their first change");
 eq(lay.lines[0].stations.slice(0, 3).map((s) => s.side), ["up", "down", null], "close labels alternate, then give way");
 eq(lay.lines[1].stations[1].side, "down", "a lower lane's label next to an interchange goes below");
 eq(lay.lines[0].stations[3].side, "up", "an upper lane's label next to an interchange goes above");
 eq(lay.interchanges.map((ic) => ic.row), [0, 1], "names of close interchanges take two rows");
 ok(lay.interchanges.every((ic) => ic.y1 === 60 && ic.y2 === 150), "interchanges join the lanes");
-ok(lay.width === 20 + 4 * 70 + 56, "width");
+ok(lay.width === 20 + 4 * 140 + 56, "width");
 ok(lay.height > 150 + 40, "room for the names");
+
+// stations on consecutive days on a narrow axis become one, spanning their days
+const tight = metroLayout({ ...ov, interchanges: [], lines: [{ slug: "a", title: "A", start: day(0), end: day(27),
+  stations: [st(2), st(3, "decision"), st(4), st(12)] }] }, { weekW: 70, left: 20, minGap: 18 });
+const [g1, g2] = tight.lines[0].stations;
+eq(tight.lines[0].stations.length, 2, "close stations merged");
+eq([g1.days, g1.dayEnd, g1.kind, g1.items.length], [["d2", "d3", "d4"], "d4", "decision", 3], "a merged station");
+ok(Math.abs(g1.x - (20 + (3 / 7) * 70)) < 1e-6 && g2.days.length === 1, "placed at the middle of its days");
 out("ok");

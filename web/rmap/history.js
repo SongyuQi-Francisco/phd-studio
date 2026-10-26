@@ -14,7 +14,7 @@ import { rmap } from "/rmap/registry.js";
 import { label } from "/rmap/strings.js";
 import { MapView } from "/rmap/map.js";
 import { describe, titles, when } from "/rmap/describe.js";
-import { compare, mapAt } from "/rmap/timeline.js";
+import { compare, mapAt, takeLatest } from "/rmap/timeline.js";
 
 const PLAY_MS = 900;
 const STATUS_LEGEND = ["active", "verified", "blocked", "todo", "dropped"];
@@ -185,6 +185,7 @@ function Replay({ ctx, frames }) {
   const [playing, setPlaying] = useState(false);
   const [selected, select] = useState(null);
   const [week, setWeek] = useState(null); // the diff of the shown week: its events
+  const latest = useRef(takeLatest()).current; // scrubbing or playing: only the shown week's answer counts
   const lastSeen = useRef(last);
   useEffect(() => { // new weeks (or a fresh map): stay on "now" if that is where we were
     setWi((w) => (w >= lastSeen.current || w > last ? last : w));
@@ -201,8 +202,10 @@ function Replay({ ctx, frames }) {
   const w = weeks[wi];
   useEffect(() => {
     setWeek(null);
+    const mine = latest(); // an answer for an earlier week, still on its way, is dropped
     if (playing || !w) return;
-    const id = setTimeout(() => ctx.api.call(`${ctx.api.base}/history/diff?since=${w.start}&until=${w.end}`).then(setWeek).catch(() => setWeek({ events: [] })), 200);
+    const id = setTimeout(() => ctx.api.call(`${ctx.api.base}/history/diff?since=${w.start}&until=${w.end}`)
+      .then((r) => { if (mine()) setWeek(r); }).catch(() => { if (mine()) setWeek({ events: [] }); }), 200);
     return () => clearTimeout(id);
   }, [ctx.slug, frames, wi, playing]);
   const names = useMemo(() => titles(cmp.view, week?.events || []), [cmp, week]);
@@ -225,6 +228,7 @@ function Replay({ ctx, frames }) {
 function Compare({ ctx, frames }) {
   const first = frames.weeks[0]?.start || daysAgo(28);
   const [since, setSince] = useState(() => { const d = daysAgo(27); return d < first ? first : d; });
+  const [exact, setExact] = useState(null); // a time to ask from instead of the start of `since` (the packet preset)
   const [until, setUntil] = useState(() => iso(new Date()));
   const [d, setD] = useState(null);
   const [error, setError] = useState("");
@@ -234,25 +238,28 @@ function Compare({ ctx, frames }) {
   useEffect(() => {
     if (!since || !until) return;
     let live = true;
-    ctx.api.call(`${ctx.api.base}/history/diff?since=${since}&until=${until}`)
+    const from = exact && exact.slice(0, 10) === since ? exact : since;
+    ctx.api.call(`${ctx.api.base}/history/diff?since=${encodeURIComponent(from)}&until=${until}`)
       .then((r) => { if (live) { setD(r); setError(""); } }).catch((e) => live && setError(e.message));
     return () => { live = false; };
-  }, [ctx.slug, frames, since, until]);
+  }, [ctx.slug, frames, since, until, exact]);
   const today = iso(new Date());
   const presets = [
     { key: "week", since: daysAgo(6), until: today, text: t("rmap_history.preset.week") },
     { key: "month", since: daysAgo(27), until: today, text: t("rmap_history.preset.month") },
-    ...(packet ? [{ key: "packet", since: packet.date, until: today, text: t("rmap_history.preset.packet", { date: short(packet.date) }), title: packet.name }] : []),
+    ...(packet ? [{ key: "packet", since: packet.since.slice(0, 10), exact: packet.since, until: today,
+      text: t("rmap_history.preset.packet", { date: short(packet.date) }), title: `${packet.name} · ${packet.since.replace("T", " ").slice(0, 16)}` }] : []),
     { key: "all", since: first, until: today, text: t("rmap_history.preset.all") },
   ];
   const names = useMemo(() => d && titles(d.map, d.events), [d]);
   return html`<div>
     <div class="mp-cv-bar">
-      <label class="mp-cv-date"><span>${t("rmap_history.from")}</span><input type="date" value=${since} min=${first} max=${until} onChange=${(e) => setSince(e.target.value)} /></label>
+      <label class="mp-cv-date"><span>${t("rmap_history.from")}</span><input type="date" value=${since} min=${first} max=${until} onChange=${(e) => { setSince(e.target.value); setExact(null); }} /></label>
       <span class="mp-cv-arrow">→</span>
       <label class="mp-cv-date"><span>${t("rmap_history.to")}</span><input type="date" value=${until} min=${since} max=${today} onChange=${(e) => setUntil(e.target.value)} /></label>
-      <div class="mp-cv-presets">${presets.map((p) => html`<button key=${p.key} title=${p.title || null} class=${"mp-layer" + (p.since === since && p.until === until ? " on" : "")}
-        onClick=${() => { setSince(p.since); setUntil(p.until); }}>${p.text}</button>`)}</div>
+      <div class="mp-cv-presets">${presets.map((p) => html`<button key=${p.key} title=${p.title || null}
+        class=${"mp-layer" + (p.since === since && p.until === until && (p.exact || null) === exact ? " on" : "")}
+        onClick=${() => { setSince(p.since); setUntil(p.until); setExact(p.exact || null); }}>${p.text}</button>`)}</div>
     </div>
     ${error ? html`<p class="muted">${error}</p>` : !d ? html`<p class="muted">${t("rmap_history.loading")}</p>` : html`
       <${FrozenMap} ctx=${ctx} map=${d.map} marks=${d.marks} selected=${selected} select=${select} />

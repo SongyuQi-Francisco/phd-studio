@@ -105,8 +105,19 @@ def weeks(first_ms: int, today: date | None = None) -> list[dict[str, Any]]:
 
 # ---- replay ----
 
-def _batch(ev: dict[str, Any]) -> tuple[str, str, str]:
-    return (ev.get("device") or "", ev.get("at") or "", ev.get("group") or "")
+def _cascade_of(events: list[dict[str, Any]], i: int) -> str | None:
+    """The node whose delete took events[i] (an edge or attachment delete) along. The core logs a node's
+    cascaded deletes right before the node's own delete, on the next clock ticks of the same Mac in the same
+    batch (same `at` and `group`), with nothing else in between."""
+    ev = events[i]
+    for nxt in events[i + 1:]:
+        if nxt.get("device") != ev.get("device"):
+            continue  # the other Mac's events may fall between in stamp order
+        if nxt.get("at") != ev.get("at") or nxt.get("group") != ev.get("group") or nxt.get("action") != "delete":
+            return None
+        if nxt.get("kind") == "node":
+            return nxt.get("target") if nxt.get("target") in (ev.get("nodes") or []) else None
+    return None
 
 
 def _patch(rec: dict[str, Any], changes: dict[str, Any] | None, side: int = 1) -> None:
@@ -147,7 +158,7 @@ class State:
             rec = book.get(rid)
             if action == "add" or rec is None:  # an update or delete whose add the log lacks starts from what is known
                 data = ev.get("record") if action == "add" and not ev.get("count") else self.tl.current.get((kind, rid), {})
-                rec = book[rid] = {**copy.deepcopy(data or {}), "id": rid, "_born": ev["hlc"],
+                rec = book[rid] = {**copy.deepcopy(data or {}), "id": rid, "_born": ev.get("_born") or ev["hlc"],
                                    "created_at": self.tl.created.get((kind, rid)) or ev.get("at")}
             if action == "update":
                 if not ev.get("count"):
@@ -155,27 +166,29 @@ class State:
                 rec.pop("_deleted", None)  # written after a delete: live again
                 rec.pop("_by", None)
             elif action == "delete":
-                rec["_deleted"], rec["_by"] = True, ev.get("_by")
+                rec["_deleted"], rec["_by"] = True, (ev.get("_bys") or {}).get(rid, ev.get("_by"))
             rec["updated_at"] = ev.get("at") or rec.get("updated_at")
 
     def node_ids(self) -> set[str]:
         return {i for i, r in self.recs["node"].items() if not r.get("_deleted")}
 
     def snapshot(self) -> dict[str, Any]:
-        """The map at this point, shaped like GET /api/rmap/projects/{slug} (cycles marked, no warnings)."""
+        """The map at this point, shaped like GET /api/rmap/projects/{slug}. Edges carry `clock: {from}` (when
+        they were made) so cycles are marked in the same order as on the live map."""
         live = self.node_ids()
 
         def child(r: dict[str, Any]) -> bool:
             return not r.get("_deleted") or (bool(r.get("_by")) and r["_by"] in live)
 
         nodes = [_clean(r) for i, r in self.recs["node"].items() if i in live]
-        edges = [r for r in self.recs["edge"].values() if child(r) and r.get("from") in live and r.get("to") in live]
-        cycle = project.back_edges([{**e, "clock": {"from": e["_born"]}} for e in edges])
-        edges = [{**_clean(e), **({"cycle": True} if e["id"] in cycle else {})} for e in edges]
+        edges = [{**_clean(r), "clock": {"from": r["_born"]}} for r in self.recs["edge"].values()
+                 if child(r) and r.get("from") in live and r.get("to") in live]
+        cycle = project.back_edges(edges)
+        edges = [{**e, **({"cycle": True} if e["id"] in cycle else {})} for e in edges]
         kinds = [*registry.kinds(), *(k for k in self.recs if k not in ("node", "edge") and k not in registry.kinds())]
         atts = {k: [_clean(a) for a in self.recs.get(k, {}).values() if child(a) and a.get("node") in live] for k in kinds}
         warnings = [{"kind": "cycle", "edges": sorted(cycle)}] if cycle else []
-        return {"slug": self.tl.slug, "project": _clean(self.project) or self.tl.live["project"], "nodes": nodes,
+        return {"slug": self.tl.slug, "project": _clean(self.project) or self.tl.first_project, "nodes": nodes,
                 "edges": edges, "attachments": atts, "warnings": warnings}
 
 
@@ -189,24 +202,27 @@ class Timeline:
         self.stamp = self.live["stamp"]
         events = p.events(limit=10 ** 9)["events"]
         events.reverse()
-        live_recs = [("node", r) for r in self.live["nodes"]] + [("edge", r) for r in self.live["edges"]]
+        live_recs = [("project", self.live["project"])] + [("node", r) for r in self.live["nodes"]]
+        live_recs += [("edge", r) for r in self.live["edges"]]
         live_recs += [(k, r) for k, recs in self.live["attachments"].items() for r in recs]
         self.current = {(k, r["id"]): {f: v for f, v in r.items() if f not in META} for k, r in live_recs}
         self.created = {(k, r["id"]): r.get("created_at") for k, r in live_recs if r.get("created_at")}
 
-        # cascaded deletes: an edge or attachment deleted in the same batch as one of its nodes follows that node
-        dropped: dict[tuple[str, str, str], set[str]] = {}
-        for ev in events:
-            if ev.get("kind") == "node" and ev.get("action") == "delete":
-                dropped.setdefault(_batch(ev), set()).add(ev.get("target"))
+        # Which node delete took an edge or attachment along (it comes back with that node): the record's own
+        # tombstone says so when this delete is the one that wrote it (`deleted_by` is stamped with the event's
+        # clock); a delete undone since is told from where the core logs cascades (_cascade_of).
+        tomb = {(k, r["id"]): (clocks(r).get("deleted", ""), r.get("deleted_by")) for k, r in live_recs if r.get("deleted")}
         added, deleted, updates = set(), set(), {}
-        for ev in events:
+        for i, ev in enumerate(events):
             kind, action = ev.get("kind"), ev.get("action")
             targets = (ev.get("targets") or []) if ev.get("count") else [ev.get("target")]
             if action == "delete" and kind not in ("node", "project", "log"):
-                hit = [n for n in ev.get("nodes") or [] if n in dropped.get(_batch(ev), ())]
-                if hit:
-                    ev["_by"] = hit[0]
+                if ev.get("count"):  # one event for a batch of records: each record's tombstone
+                    ev["_bys"] = {rid: tomb[(kind, rid)][1] for rid in targets if tomb.get((kind, rid), ("",))[0] >= ev["hlc"]}
+                elif tomb.get((kind, ev.get("target")), ("",))[0] == ev["hlc"]:
+                    ev["_by"] = tomb[(kind, ev["target"])][1]
+                else:
+                    ev["_by"] = _cascade_of(events, i)
             for rid in targets:
                 if action == "add":
                     added.add((kind, rid))
@@ -216,13 +232,6 @@ class Timeline:
                     updates.setdefault((kind, rid), []).append(ev)
 
         extra = []
-        if not any(ev.get("kind") == "project" and ev.get("action") == "add" for ev in events):
-            proj = self.live["project"]
-            stamp = from_iso(proj.get("created_at")) or (events[0]["hlc"] if events else "")
-            if stamp:
-                extra.append({"id": "~project", "hlc": stamp, "at": proj.get("created_at"), "kind": "project", "action": "add",
-                              "target": project.PROJECT_ID, "synthetic": True,
-                              "record": {k: v for k, v in proj.items() if k not in META}})
         for kind, r in live_recs:
             key = (kind, r["id"])
             if key in added:
@@ -230,12 +239,13 @@ class Timeline:
             data = copy.deepcopy(self.current[key])
             for ev in reversed(updates.get(key, [])):  # the values it had before its logged updates
                 _patch(data, ev.get("changes"), side=0)
-            stamp = from_iso(r.get("created_at")) or min(clocks(r).values(), default="")
+            c = clocks(r)
+            stamp = from_iso(r.get("created_at")) or min(c.values(), default="") or (events[0]["hlc"] if events else "")
             if not stamp:
                 continue
             extra.append({"id": "~" + r["id"], "hlc": stamp, "at": r.get("created_at"), "kind": kind, "action": "add",
-                          "target": r["id"], "record": data, "synthetic": True})
-            gone = clocks(r).get("deleted")
+                          "target": r["id"], "record": data, "synthetic": True, "_born": c.get("from") or stamp})
+            gone = c.get("deleted")
             if r.get("deleted") and gone and key not in deleted:
                 extra.append({"id": "~~" + r["id"], "hlc": gone, "at": r.get("updated_at"), "kind": kind, "action": "delete",
                               "target": r["id"], "_by": r.get("deleted_by"), "synthetic": True})
@@ -243,6 +253,9 @@ class Timeline:
         for ev in self.events:
             ev["_t"] = _at_ms(ev)
         self.first_ms = min((ev["_t"] for ev in self.events), default=0)
+        first = next((ev for ev in self.events if ev.get("kind") == "project" and ev.get("action") == "add"), None)
+        # before the project's first event the map is empty; its title is the first one it had, not today's
+        self.first_project = {"id": project.PROJECT_ID, **(first.get("record") or {})} if first else self.live["project"]
 
     def state(self, b: Bound | None = None) -> State:
         """Every change within the bound, applied in log order."""
@@ -289,11 +302,27 @@ def _week_notes(evs: list[dict[str, Any]]) -> list[str]:
     return [ev["summary"] for ev in evs if ev.get("kind") == "log" and ev.get("summary")][:4]
 
 
+_frames: dict[str, tuple[tuple[str, date], dict[str, Any]]] = {}
+
+
 def frames(slug: str, today: date | None = None) -> dict[str, Any]:
     """The time scrubber's data: the weeks W1 … Wn of this map, and for every record the states it had at the
     end of each week where it changed (`[week, record]`, record None: not on the map then). The last week
-    ends now. The front end rebuilds the map of a week by taking each record's last state up to it."""
+    ends now. The front end rebuilds the map of a week by taking each record's last state up to it. Cached
+    until the map changes (or the day does)."""
     tl = timeline(slug)
+    key = (tl.stamp, today or date.today())
+    hit = _frames.get(slug)
+    if hit and hit[0] == key:
+        return hit[1]
+    out = _frames_of(tl, key[1])
+    with _lock:
+        _frames[slug] = (key, out)
+    return out
+
+
+def _frames_of(tl: Timeline, today: date) -> dict[str, Any]:
+    slug = tl.slug
     ws = weeks(tl.first_ms, today)
     out: dict[str, Any] = {"project": [], "nodes": {}, "edges": {}, "attachments": {}}
     prev: dict[tuple[str, str], str] = {}
@@ -403,30 +432,38 @@ def diff(slug: str, since: str | None = None, until: str | None = None) -> dict[
 
 def stations(tl: Timeline) -> list[dict[str, Any]]:
     """Key validations and decisions of one map, one station per day: a hypothesis, sub-line, experiment or
-    result validated; a decision taken; a node refuted or dropped; a Kill criterion partly triggered or triggered."""
+    result validated; a decision taken (once: when it is verified, or when it was made verified); a node
+    refuted or dropped; a Kill criterion partly triggered or triggered."""
     st = State(tl)
     days: dict[str, dict[str, Any]] = {}
+    decided: set[str] = set()
     for ev in tl.events:
         st.apply(ev)
-        if ev.get("kind") != "node" or ev.get("action") not in ("add", "update"):
+        action = ev.get("action")
+        if ev.get("kind") != "node" or action not in ("add", "update"):
             continue
         rec = st.recs["node"].get(ev.get("target")) or {}
-        typ = rec.get("type")
-        if ev["action"] == "add":
+        typ, nid = rec.get("type"), rec.get("id")
+        if action == "add":
             s = rec.get("status") or "todo"
-            what = ("decision" if typ == "decision" else "verified" if s == "verified" and typ in KEY_TYPES
-                    else s if s in model.FADED else None)
         elif "status" in (ev.get("changes") or {}):
-            s = ev["changes"]["status"][1]
-            what = ("decision" if typ == "decision" and s == "verified" else "verified" if s == "verified" and typ in KEY_TYPES
-                    else s if s in model.FADED else KILL.get(s) if typ == "kill" else None)
+            s = ev["changes"]["status"][1] or "todo"
         else:
-            what = None
+            continue
+        if typ == "decision" and s == "verified":
+            what = None if nid in decided else "decision"
+            decided.add(nid)
+        elif s == "verified":
+            what = "verified" if typ in KEY_TYPES else None
+        elif s in model.FADED:
+            what = s
+        else:
+            what = KILL.get(s) if typ == "kill" and action == "update" else None
         if not what:
             continue
         day = datetime.fromtimestamp(ev["_t"] / 1000).date().isoformat()
         stn = days.setdefault(day, {"day": day, "ms": ev["_t"], "items": []})
-        stn["items"].append({"node": rec.get("id"), "title": rec.get("title"), "type": typ, "what": what, "status": rec.get("status")})
+        stn["items"].append({"node": nid, "title": rec.get("title"), "type": typ, "what": what, "status": rec.get("status")})
     for stn in days.values():
         stn["kind"] = "decision" if any(x["what"] != "verified" for x in stn["items"]) else "verified"
     return sorted(days.values(), key=lambda s: s["ms"])
@@ -445,37 +482,57 @@ def _entity_firsts(tl: Timeline) -> dict[str, dict[str, Any]]:
     return out
 
 
-def overview(today: date | None = None) -> dict[str, Any]:
-    """Every map on one time axis: a line per project from its first change to now (or to its archiving),
-    its stations, and interchanges where several projects point at the same entity ("dataset:…",
-    "paper:…"): placed when the entity became shared, i.e. when the last of them took it up."""
-    lines, firsts, titles = [], {}, {}
-    now_ms = int(datetime.now().timestamp() * 1000)
-    for p in project.listing(archived=True):
-        tl = timeline(p["slug"])
-        if not tl.events:
-            continue
-        end = now_ms
-        if p.get("archived"):
+_lines: dict[str, tuple[str, dict[str, Any] | None]] = {}
+
+
+def _line(slug: str) -> dict[str, Any] | None:
+    """One project's line on the all-projects map, worked out again only when that map changed."""
+    tl = timeline(slug)
+    hit = _lines.get(slug)
+    if hit and hit[0] == tl.stamp:
+        return hit[1]
+    out = None
+    if tl.events:
+        proj = tl.live["project"]
+        end = None
+        if proj.get("archived"):
             arch = [ev for ev in tl.events if ev.get("kind") == "project" and "archived" in (ev.get("changes") or {})]
             end = arch[-1]["_t"] if arch else max(ev["_t"] for ev in tl.events)
         now = tl.state().snapshot()
-        titles[p["slug"]] = {n["id"]: n.get("title") for n in now["nodes"]}
-        lines.append({"slug": p["slug"], "title": p.get("title"), "line": p.get("line"), "archived": bool(p.get("archived")),
-                      "start": tl.first_ms, "end": end, "nodes": len(now["nodes"]),
-                      "verified": sum(1 for n in now["nodes"] if n.get("status") == "verified"),
-                      "stations": stations(tl)})
-        firsts[p["slug"]] = _entity_firsts(tl)
+        ents = {n["entity"]: n["id"] for n in now["nodes"] if n.get("entity")}
+        for recs in now["attachments"].values():
+            ents.update({a["entity"]: a["node"] for a in recs if a.get("entity") and a["entity"] not in ents})
+        out = {"slug": slug, "title": proj.get("title"), "line": proj.get("line"), "archived": bool(proj.get("archived")),
+               "start": tl.first_ms, "end": end, "nodes": len(now["nodes"]),
+               "verified": sum(1 for n in now["nodes"] if n.get("status") == "verified"), "stations": stations(tl),
+               "_firsts": _entity_firsts(tl), "_entities": ents, "_titles": {n["id"]: n.get("title") for n in now["nodes"]}}
+    with _lock:
+        _lines[slug] = (tl.stamp, out)
+    return out
+
+
+def overview(today: date | None = None) -> dict[str, Any]:
+    """Every map on one time axis: a line per project from its first change to now (or to its archiving),
+    its stations, and interchanges where several projects point at the same entity ("dataset:…",
+    "paper:…"): placed when the entity became shared, i.e. when the last of them took it up. Each project's
+    part is cached by its map's stamp, so a change in one map works out that map again, not all of them."""
+    now_ms = int(datetime.now().timestamp() * 1000)
+    found = [ln for ln in (_line(s) for s in project.slugs()) if ln]
+    lines = [{**{k: v for k, v in ln.items() if not k.startswith("_")}, "end": ln["end"] or now_ms} for ln in found]
+    users: dict[str, list[dict[str, Any]]] = {}
+    for ln in found:
+        for ent in ln["_entities"]:
+            users.setdefault(ent, []).append(ln)
     interchanges = []
-    for ent, hits in sorted(project.entities().items()):
-        slugs = sorted({h["slug"] for h in hits if h["slug"] in firsts})
-        if len(slugs) < 2:
+    for ent, lns in sorted(users.items()):
+        if len(lns) < 2:
             continue
         stops = []
-        for s in slugs:
-            f = firsts[s].get(ent) or {}
-            node = f.get("node") or next(h["node"] for h in hits if h["slug"] == s)
-            stops.append({"slug": s, "ms": f.get("ms") or 0, "at": f.get("at"), "node": node, "title": titles[s].get(node)})
+        for ln in lns:
+            f = ln["_firsts"].get(ent) or {}
+            node = f.get("node") or ln["_entities"][ent]
+            stops.append({"slug": ln["slug"], "ms": f.get("ms") or ln["start"], "at": f.get("at"), "node": node,
+                          "title": ln["_titles"].get(node)})
         interchanges.append({"entity": ent, "ms": max(x["ms"] for x in stops), "projects": stops})
     first = min((ln["start"] for ln in lines), default=0)
     return {"weeks": [{k: v for k, v in w.items() if k != "bound"} for w in weeks(first, today)],
@@ -492,10 +549,12 @@ def _line_of(m: dict[str, Any]) -> dict[str, Any]:
 
 
 def last_packet(slug: str) -> dict[str, Any] | None:
-    """The last advisor packet of this map's research line (path, name, date), if the vault has one."""
+    """The last advisor packet of this map's research line (path, name, date, and `since`: when it was
+    written, line_chat.packet_time), if the vault has one."""
     from .. import line_chat
     try:
-        return line_chat.previous_packet(_line_of(timeline(slug).live))
+        prev = line_chat.previous_packet(_line_of(timeline(slug).live))
+        return prev and {**prev, "since": line_chat.packet_time(prev)}
     except OSError:
         return None
 
@@ -546,14 +605,14 @@ def changes_text(d: dict[str, Any], lang: str) -> list[str]:
 
 
 def packet_changes(line: dict[str, Any], lang: str = "zh") -> dict[str, Any] | None:
-    """The map changes since a research line's last advisor packet (since its date, that day included; since
+    """The map changes since a research line's last advisor packet was written (line_chat.packet_time; since
     the map began when there is none), for the 起草导师汇报包 prompt (app/line_chat.py). None: no map."""
     slug = map_for_line(line)
     if not slug:
         return None
     from .. import line_chat
     prev = line_chat.previous_packet(line)
-    since = prev["date"] if prev and prev.get("date") else None
+    since = line_chat.packet_time(prev) if prev else None
     d = diff(slug, since, None)
     return {"slug": slug, "title": d["map"]["project"].get("title"), "since": since, "packet": prev,
             "total": d["total"], "lines": changes_text(d, lang)}

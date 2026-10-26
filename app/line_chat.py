@@ -16,7 +16,7 @@ import os
 import re
 import tempfile
 import unicodedata
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -315,6 +315,25 @@ def previous_packet(line: dict[str, Any], index: list[dict[str, Any]] | None = N
     return {"path": best["path"], "name": best["name"], "date": best["date"]}
 
 
+def packet_time(packet: dict[str, Any]) -> str:
+    """When a review packet was written, as a local ISO time: the time in its frontmatter (`created` /
+    `date` with a time), else the note's file time when that falls on the packet's date, else the end of
+    that date (what was done that day counts as reported)."""
+    p = VAULT_DIR / packet["path"]
+    fm = _frontmatter(p)
+    for k in ("created", "date"):
+        m = re.match(r"(20\d\d-\d\d-\d\d)[T ](\d\d:\d\d(?::\d\d)?)", str(fm.get(k) or ""))
+        if m:
+            return f"{m.group(1)}T{m.group(2)}"
+    try:
+        mtime = datetime.fromtimestamp(p.stat().st_mtime)
+        if mtime.date().isoformat() == packet["date"]:
+            return mtime.isoformat(timespec="seconds")
+    except OSError:
+        pass
+    return (date.fromisoformat(packet["date"]) + timedelta(days=1)).isoformat() + "T00:00:00"
+
+
 def annotate(items: list[dict[str, Any]]) -> None:
     """Chat key, chat size and last review packet for each research line on the 方向 page."""
     assign_keys(items)
@@ -497,7 +516,7 @@ def packet_prompt(line: dict[str, Any], today: date | None = None) -> dict[str, 
                else "这条线没有研究线笔记，先用 Grep 找相关笔记")
     rmap = map_changes(line)
     if rmap and rmap["lines"]:
-        since = f"自上次汇报（{rmap['since']}）以来" if rmap["since"] else "从地图开始到现在"
+        since = f"自上次汇报（{rmap['since'][:16].replace('T', ' ')}）以来" if rmap["since"] else "从地图开始到现在"
         sources += (f"。研究地图「{rmap['title']}」{since}的变化（应用按改动记录整理，共 {rmap['total']} 条）：\n"
                     + "\n".join(f"   - {x}" for x in rmap["lines"])
                     + "\n   写「自上次以来的进展」时拿它对照，结论和数字仍以笔记、证据为准")

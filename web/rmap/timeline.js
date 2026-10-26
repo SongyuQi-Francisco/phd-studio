@@ -5,6 +5,45 @@
 // i18n: done
 
 const FADED = ["refuted", "dropped"];
+const FLOW = ["refines", "depends"];
+
+// Flow edges that close a cycle, taken in the order the edges were made (`clock.from`, the same order the
+// server marks them in, app/rmap/project.py back_edges): the edges get `cycle: true` (and lose a stale one),
+// so the layout, which walks dagEdges, never meets a loop. Replay needs it: a week's map plus the edges
+// deleted that week (ghosts) can hold A → B and B → A at once.
+export function markCycles(edges, flow = FLOW) {
+  const made = (e) => e.clock?.from || e.clock?.kind || e.created_at || "";
+  const next = new Map();
+  const cycle = new Set();
+  const reaches = (from, goal) => {
+    const seen = new Set();
+    const stack = [from];
+    while (stack.length) {
+      const cur = stack.pop();
+      if (cur === goal) return true;
+      if (seen.has(cur)) continue;
+      seen.add(cur);
+      (next.get(cur) || []).forEach((n) => stack.push(n));
+    }
+    return false;
+  };
+  const sorted = edges.filter((e) => flow.includes(e.kind))
+    .sort((a, b) => (made(a) < made(b) ? -1 : made(a) > made(b) ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  for (const e of sorted) {
+    if (e.from === e.to || reaches(e.to, e.from)) cycle.add(e.id);
+    else next.set(e.from, [...(next.get(e.from) || []), e.to]);
+  }
+  return edges.map((e) => {
+    const { cycle: _old, ...rest } = e;
+    return cycle.has(e.id) ? { ...rest, cycle: true } : rest;
+  });
+}
+
+// Only the answer to the latest request counts: `const mine = latest(); … if (mine()) set(answer)`.
+export function takeLatest() {
+  let gen = 0;
+  return () => { const id = ++gen; return () => id === gen; };
+}
 
 // A record's state at week wi: its last state up to that week (null: not on the map then).
 function lastAt(states, wi) {
@@ -53,7 +92,7 @@ export function compare(a, b) {
   const eb = new Set(b.edges.map((e) => e.id));
   const shown = new Set([...nb.keys(), ...na.keys()]);
   const ghosts = (a?.edges || []).filter((e) => !eb.has(e.id) && shown.has(e.from) && shown.has(e.to)).map((e) => ({ ...e, gone: true }));
-  const view = { ...b, nodes: [...b.nodes, ...removed.map((r) => ({ ...na.get(r.id), gone: true }))], edges: [...b.edges, ...ghosts] };
+  const view = { ...b, nodes: [...b.nodes, ...removed.map((r) => ({ ...na.get(r.id), gone: true }))], edges: markCycles([...b.edges, ...ghosts]) };
   return { marks, view, changes: { added, removed, status, dropped, retitled } };
 }
 
@@ -68,7 +107,7 @@ export const WEEK_MS = 7 * 86400000;
 // The all-projects map (GET /api/rmap/overview) laid out as a metro map on one time axis: a lane per
 // project, its line from start to end, stations (with labels placed above or below so they don't collide,
 // else left to the tooltip) and interchanges joining the lanes of the projects that share an entity.
-export function metroLayout(ov, { weekW = 72, laneH = 92, left = 188, top = 64, right = 56, labelW = 112 } = {}) {
+export function metroLayout(ov, { weekW = 72, laneH = 92, left = 188, top = 64, right = 56, labelW = 112, minGap = 18 } = {}) {
   const t0 = ov.weeks.length ? dayMs(ov.weeks[0].start) : 0;
   const x = (ms) => left + ((ms - t0) / WEEK_MS) * weekW;
   const lanes = Object.fromEntries(ov.lines.map((ln, i) => [ln.slug, top + i * laneH]));
@@ -88,11 +127,23 @@ export function metroLayout(ov, { weekW = 72, laneH = 92, left = 188, top = 64, 
   const lines = ov.lines.map((ln, i) => {
     const y = lanes[ln.slug];
     const lastLabel = { up: -Infinity, down: -Infinity };
-    const stations = ln.stations.map((s) => {
+    // stations closer than a station's width (days apart on a narrow axis) become one, spanning their days
+    const groups = [];
+    for (const s of ln.stations) {
       const sx = Math.max(x(ln.start), Math.min(x(ln.end), x(s.ms)));
+      const g = groups[groups.length - 1];
+      if (g && sx - g.xs[g.xs.length - 1] < minGap) {
+        g.xs.push(sx);
+        g.items = [...g.items, ...s.items];
+        g.days.push(s.day);
+        if (s.kind === "decision") g.kind = "decision";
+      } else groups.push({ ...s, xs: [sx], days: [s.day] });
+    }
+    const stations = groups.map(({ xs, ...g }) => {
+      const sx = xs.reduce((a, b) => a + b, 0) / xs.length;
       const side = ["up", "down"].find((sd) => sx - lastLabel[sd] >= labelW && !crosses(sx, y, sd)) || null;
       if (side) lastLabel[side] = sx;
-      return { ...s, x: sx, y, side };
+      return { ...g, x: sx, y, side, dayEnd: g.days[g.days.length - 1] };
     });
     return { ...ln, color: i, y, x1: x(ln.start), x2: Math.max(x(ln.end), x(ln.start) + 4), stations };
   });

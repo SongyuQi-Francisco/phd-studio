@@ -2,6 +2,7 @@
 the all-projects map and the changes since the last advisor packet."""
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from datetime import date, datetime, timedelta
@@ -19,6 +20,12 @@ TODAY = date.today()
 
 def day(off: int) -> str:
     return (TODAY + timedelta(days=off)).isoformat()
+
+
+@pytest.fixture(autouse=True)
+def fresh_caches():
+    for c in (history._cache, history._lines, history._frames):
+        c.clear()
 
 
 @pytest.fixture
@@ -132,6 +139,106 @@ def test_records_the_log_does_not_know_appear_at_their_creation(atlas):
     assert "Written by hand" in titles(history.map_at(slug))
 
 
+def other_mac_edit(slug: str, node: str, title: str) -> None:
+    """The other Mac renames a node it had not seen deleted: an update event stamped after everything here."""
+    p = project.get(slug)
+    evs = p.events(limit=1000)["events"]
+    later = clock.make(clock.parse(evs[0]["hlc"])[0] + 60_000, 0, "othermac")
+    with p.event_store(evs[0]["at"][:7]).editing() as data:
+        data["events"].append({"id": "ev" + node[-8:] + "0x", "hlc": later, "at": evs[0]["at"], "who": "user", "device": "othermac",
+                               "kind": "node", "action": "update", "target": node, "nodes": [node], "changes": {"title": ["?", title]}})
+
+
+def test_an_edge_deleted_on_its_own_stays_deleted_when_its_node_comes_back(backdate):
+    backdate(-10, 9)
+    slug = ops.create_project("Project Cobalt")["slug"]
+    backdate(-10)
+    r = ops.apply(slug, [
+        {"op": "node.add", "ref": "$q", "set": {"type": "question", "title": "Q"}},
+        {"op": "node.add", "ref": "$a", "parent": "$q", "set": {"type": "hypothesis", "title": "A"}},
+        {"op": "node.add", "ref": "$b", "parent": "$q", "set": {"type": "hypothesis", "title": "B"}},
+        {"op": "node.add", "ref": "$c", "parent": "$q", "set": {"type": "hypothesis", "title": "C"}},
+        {"op": "edge.add", "ref": "$e1", "from": "$a", "to": "$b", "kind": "depends"},
+        {"op": "edge.add", "ref": "$e2", "from": "$b", "to": "$c", "kind": "depends"},
+    ])["refs"]
+    backdate(-5)  # all in the same second: two batches without a group, then one batch deleting a link and its node
+    ops.apply(slug, [{"op": "edge.delete", "id": r["$e1"]}])
+    ops.apply(slug, [{"op": "node.delete", "id": r["$a"]}])
+    ops.apply(slug, [{"op": "edge.delete", "id": r["$e2"]}, {"op": "node.delete", "id": r["$b"]}])
+    assert {e["id"] for e in history.map_at(slug)["edges"]} == {e["id"] for e in project.get(slug).read()["edges"]}
+    other_mac_edit(slug, r["$a"], "A again")
+    other_mac_edit(slug, r["$b"], "B again")
+    history._cache.clear()
+    m = history.map_at(slug)
+    assert {n["title"] for n in m["nodes"]} == {"Q", "A again", "B again", "C"}
+    ids = {e["id"] for e in m["edges"]}
+    assert r["$e1"] not in ids and r["$e2"] not in ids  # deleted by hand: they stay deleted
+    assert {(e["from"], e["to"]) for e in m["edges"]} == {(r["$q"], r["$a"]), (r["$q"], r["$b"]), (r["$q"], r["$c"])}  # cascaded: back
+
+
+def test_a_map_older_than_its_log_shows_the_project_as_it_was(atlas, backdate):
+    slug = atlas["slug"]
+    backdate(-1)
+    ops.apply(slug, [{"op": "project.update", "set": {"title": "Project Atlas II"}}])
+    p = project.get(slug)
+    for month in p.event_months():  # as for a map made before the log: no event for the project's creation
+        with p.event_store(month).editing() as data:
+            data["events"] = [e for e in data["events"] if not (e["kind"] == "project" and e["action"] == "add")]
+    history._cache.clear()
+    assert history.map_at(slug, day(-5))["project"]["title"] == "Project Atlas"
+    assert history.map_at(slug, day(-40))["project"]["title"] == "Project Atlas"  # before anything: the first title
+    assert history.map_at(slug)["project"]["title"] == "Project Atlas II"
+
+
+def test_a_reversed_link_is_marked_once_in_the_order_the_links_were_made(backdate):
+    backdate(-10, 9)
+    slug = ops.create_project("Project Delta")["slug"]
+    backdate(-10)
+    r = ops.apply(slug, [
+        {"op": "node.add", "ref": "$q", "set": {"type": "question", "title": "Q"}},
+        {"op": "node.add", "ref": "$a", "parent": "$q", "set": {"type": "hypothesis", "title": "A"}},
+        {"op": "node.add", "ref": "$b", "parent": "$q", "set": {"type": "hypothesis", "title": "B"}},
+        {"op": "edge.add", "ref": "$ab", "from": "$a", "to": "$b", "kind": "depends"},
+    ])["refs"]
+    backdate(-5)
+    ba = ops.apply(slug, [{"op": "edge.delete", "id": r["$ab"]},
+                          {"op": "edge.add", "ref": "$ba", "from": r["$b"], "to": r["$a"], "kind": "depends"}])["refs"]["$ba"]
+    d = history.diff(slug, day(-7), None)
+    dep = {e["id"]: e for e in d["map"]["edges"] if e["kind"] == "depends"}
+    assert dep[r["$ab"]].get("gone") and not dep[r["$ab"]].get("cycle")  # the older link (now a ghost) stays
+    assert dep[ba].get("cycle") and not dep[ba].get("gone")
+    live = next(e for e in project.get(slug).read()["edges"] if e["id"] == ba)
+    assert dep[ba]["clock"]["from"] == live["clock"]["from"]  # ordered by the link's own clock, as on the live map
+
+
+def test_a_decision_is_one_station_when_it_is_taken(backdate):
+    backdate(-12, 9)
+    slug = ops.create_project("Project Echo")["slug"]
+    backdate(-12)
+    r = ops.apply(slug, [{"op": "node.add", "ref": "$q", "set": {"type": "question", "title": "Q"}},
+                         {"op": "node.add", "ref": "$d", "parent": "$q", "set": {"type": "decision", "title": "Go", "status": "todo"}}])["refs"]
+    for off, st in ((-8, "verified"), (-6, "active"), (-4, "verified")):
+        backdate(off)
+        ops.apply(slug, [{"op": "node.update", "id": r["$d"], "set": {"status": st}}])
+    found = [(s["day"], x["what"]) for s in history.stations(history.timeline(slug)) for x in s["items"]]
+    assert found == [(day(-8), "decision")]
+
+
+def test_the_overview_works_out_again_only_the_map_that_changed(atlas, monkeypatch):
+    other = ops.create_project("Project Beacon")["slug"]
+    ops.apply(other, [{"op": "node.add", "set": {"type": "question", "title": "Q"}}])
+    history.overview()
+    fr = history.frames(atlas["slug"])
+    built = []
+    real = history.Timeline
+    monkeypatch.setattr(history, "Timeline", lambda slug: built.append(slug) or real(slug))
+    history.overview()
+    assert built == [] and history.frames(atlas["slug"]) is fr
+    ops.apply(other, [{"op": "node.add", "set": {"type": "question", "title": "Q2"}}])
+    history.overview()
+    assert built == [other] and history.frames(atlas["slug"]) is fr
+
+
 # ---------- the time scrubber ----------
 
 
@@ -235,14 +342,28 @@ def test_overview_has_a_line_per_project_with_stations_and_interchanges(atlas, b
 
 def test_the_advisor_packet_prompt_lists_map_changes_since_the_last_packet(atlas, write_vault_file):
     write_vault_file(f"08 Review Packets/Advisor Packet - Project A {day(-7)}.md",
-                     f"---\ntype: review-packet\npacket: advisor\nline: Project A\ncreated: {day(-7)}\n---\n")
+                     f"---\ntype: review-packet\npacket: advisor\nline: Project A\ncreated: {day(-7)}T09:30\n---\n")
     out = line_chat.packet_prompt({"name": "Project A", "line": "Project A"})
-    assert out["map"]["slug"] == atlas["slug"] and out["map"]["since"] == day(-7)
+    assert out["map"]["slug"] == atlas["slug"] and out["map"]["since"] == f"{day(-7)}T09:30"
     prompt = out["prompt"]
-    assert "研究地图「Project Atlas」自上次汇报" in prompt
+    assert f"研究地图「Project Atlas」自上次汇报（{day(-7)} 09:30）以来" in prompt
     assert "「Annotate 300 answers」进行中 → 已验证" in prompt and "删除「RL reward」" in prompt
-    assert "drop RL" not in prompt and "annotation done" in prompt  # only what came after the packet's day began
-    assert history.last_packet(atlas["slug"])["date"] == day(-7)
+    assert "「Annotate 300」改名为「Annotate 300 answers」" in prompt
+    assert "drop RL" not in prompt and "annotation done" in prompt  # written at 10:00 that day, after the packet
+    assert history.last_packet(atlas["slug"])["since"] == f"{day(-7)}T09:30"
+
+
+def test_a_packet_without_a_time_counts_by_its_file_time_or_to_the_end_of_its_day(atlas, write_vault_file):
+    path = write_vault_file(f"08 Review Packets/Advisor Packet - Project A {day(-7)}.md",
+                            f"---\ntype: review-packet\npacket: advisor\nline: Project A\ncreated: {day(-7)}\n---\n")
+    out = line_chat.packet_prompt({"name": "Project A", "line": "Project A"})  # the file was written today: not that day
+    assert out["map"]["since"] == f"{day(-6)}T00:00:00"
+    assert "annotation done" not in out["prompt"] and "删除「RL reward」" in out["prompt"]
+    written = datetime.combine(TODAY + timedelta(days=-7), datetime.min.time()).replace(hour=9).timestamp()
+    os.utime(path, (written, written))
+    line_chat._cache.clear()
+    out = line_chat.packet_prompt({"name": "Project A", "line": "Project A"})
+    assert out["map"]["since"] == f"{day(-7)}T09:00:00" and "annotation done" in out["prompt"]
 
 
 def test_no_map_leaves_the_packet_prompt_alone():
@@ -285,7 +406,11 @@ def test_timeline_helpers_in_a_javascript_engine(engine, tmp_path):
     exe = shutil.which("node") if engine == "node" else (str(JSC) if JSC.exists() else None)
     if not exe:
         pytest.skip(f"{engine} is not installed")
-    shutil.copy(PROJECT / "web" / "rmap" / "timeline.js", tmp_path / "timeline.mjs")
+    rmap = PROJECT / "web" / "rmap"
+    shutil.copy(rmap / "timeline.js", tmp_path / "timeline.mjs")
+    (tmp_path / "layout.mjs").write_text((rmap / "layout.js").read_text(encoding="utf-8").replace('from "./util.js"', 'from "./util.mjs"'),
+                                         encoding="utf-8")
+    shutil.copy(rmap / "util.js", tmp_path / "util.mjs")
     shutil.copy(PROJECT / "tests" / "js" / "rmap_history.test.mjs", tmp_path / "test.mjs")
     args = [exe, "-m", "test.mjs"] if engine == "jsc" else [exe, "test.mjs"]
     r = subprocess.run(args, cwd=tmp_path, capture_output=True, text=True, timeout=60)

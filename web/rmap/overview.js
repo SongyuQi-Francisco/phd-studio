@@ -10,7 +10,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/ho
 import { html } from "/lib.js";
 import { t } from "/i18n.js";
 import { Empty } from "/ui.js";
-import { metroLayout } from "/rmap/timeline.js";
+import { metroLayout, takeLatest } from "/rmap/timeline.js";
 
 const LANE = 92, TOP = 64, NAMES = 184; // NAMES: the project column, as in history.css
 const short = (day) => (day || "").slice(5);
@@ -39,7 +39,8 @@ function Pop({ pick, onOpen, onClose }) {
   if (pick.type === "station") {
     const { s, line } = pick;
     return html`<div class="mp-ov-pop" ref=${ref} style=${style}>
-      <div class="mp-ov-pop-h"><i class=${"ln-" + (line.color % 6)} /><b>${line.title}</b><span class="mp-num">${s.day}</span></div>
+      <div class="mp-ov-pop-h"><i class=${"ln-" + (line.color % 6)} /><b>${line.title}</b>
+        <span class="mp-num">${s.day}${s.dayEnd && s.dayEnd !== s.day ? " – " + short(s.dayEnd) : ""}</span></div>
       <ul>${s.items.map((x, k) => html`<li key=${k}><span class=${"mp-ov-what " + x.what}>${t("rmap_history.ov.what." + x.what)}</span>
         ${onOpen && x.node ? html`<button class="mp-ov-ti mp-ov-node" title=${t("rmap_history.ov.open_node")} onClick=${() => onOpen(line.slug, x.node)}>${x.title}</button>`
           : html`<span class="mp-ov-ti">${x.title}</span>`}<span class="mp-ov-ty">${t("rmap.type." + x.type)}</span></li>`)}</ul>
@@ -66,7 +67,12 @@ export function Overview({ ctx }) {
   const wrap = useRef();
   useEffect(() => {
     let live = true;
-    const load = () => ctx.api.call("/api/rmap/overview").then((r) => { if (live) { setOv(r); setError(""); } }).catch((e) => live && setError(e.message));
+    const latest = takeLatest(); // reloads may overlap: the last one asked for wins
+    const load = () => {
+      const mine = latest();
+      return ctx.api.call("/api/rmap/overview").then((r) => { if (live && mine()) { setOv(r); setError(""); } })
+        .catch((e) => live && mine() && setError(e.message));
+    };
     load();
     // the maps change underneath (an edit, the CLI, the other Mac): poll the cheap stamp while visible
     let stamp = null;

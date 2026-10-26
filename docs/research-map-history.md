@@ -13,14 +13,20 @@ The map at a time is rebuilt from the log, never stored:
 
 - **Order.** Events are applied in log order, `(hlc, id)`, with the merge rules of `records.py`: a field
   holds its latest write, a delete is a write, a record written after its delete is live again, and the
-  edges and attachments a node delete took along come back with the node (the cascade is told from the
-  batch: same device, same `at`, same `group`).
+  edges and attachments a node delete took along come back with the node. Which delete was a cascade comes
+  from the record's tombstone (`deleted_by`, stamped with that delete's clock); for a delete undone since,
+  from where the core logs cascades: on the next ticks of the same Mac, right before the node's own delete,
+  in the same batch. An edge deleted on its own (even in the batch that deletes its node) stays deleted.
 - **Time.** "The map on 10-05" is every change *made* by the end of that day, by the event's `at` (the
   wall clock of the Mac that made it), merged in log order. A clock stamp can run ahead of the wall
   clock (it never goes back on a Mac), so stamps decide the order, not the day.
-- **What the log does not know.** A record with no `add` event (a hand edit, a map older than the log)
-  appears at its `created_at` with the values it had before its logged updates; a delete with no event
-  happens at its `deleted` stamp. Attachment kinds logged per batch take their records' current fields.
+- **What the log does not know.** A record with no `add` event (a hand edit, a map older than the log;
+  the project record too) appears at its `created_at` with the values it had before its logged updates; a
+  delete with no event happens at its `deleted` stamp. Attachment kinds logged per batch take their
+  records' current fields. Before a map's first event, its project shows the first title it had.
+- **Cycles.** Replayed edges carry `clock: {from}` (when they were made), so cycles are marked in the same
+  order as on the live map; the change view and the week marks re-mark them on the map plus its ghosts
+  (`markCycles` in `timeline.js`), since a link reversed within the period would otherwise loop.
 - Bounds: a date (`2026-10-05`: its end for "at" and "until", its start for "since"), a local time
   (`2026-10-05T09:00`), or an event cursor (`<hlc>|<id>`: up to and including that event).
 
@@ -34,7 +40,8 @@ The map at a time is rebuilt from the log, never stored:
 | `GET /api/rmap/projects/{slug}/history/packet` | the last advisor packet of the map's research line (by `line` / `note`), for the change view's preset |
 | `GET /api/rmap/overview` | every map on one axis: `weeks`, `now`, `lines` (per project: `start`, `end`, counts, `stations`) and `interchanges` |
 
-Timelines are cached per map by its change stamp.
+Timelines, frames and each project's part of the overview are cached per map by its change stamp, so a
+change in one map works out only that map again.
 
 ## The page
 
@@ -42,15 +49,16 @@ Timelines are cached per map by its change stamp.
   line from its first change to now (or to its archiving); its stations are key validations (a
   hypothesis, sub-line, experiment or result validated) and decisions (a decision node, a node falsified
   or abandoned, a Kill criterion partly triggered or triggered: status `active` / `blocked`), one station
-  per day. An entity that several projects carry (`entity` on a node or an attachment, #53) is an
+  per day (a decision counts once, when it is taken; stations closer than their width on a narrow axis
+  merge into one spanning their days). An entity that several projects carry (`entity` on a node or an attachment, #53) is an
   interchange joining their lines at the time it became shared, i.e. when the last of them took it up.
   Click a station or an interchange for the details. It polls `/api/rmap/stamp` to follow edits.
 - **回放 / Replay** (project view `history`): the time scrubber, mono week ticks with the week's activity
   above them, a play button (one week per 0.9 s), and the map of that week drawn by the core map view,
   read-only (no menu, rename or add keys; a write is refused with a toast). The changes of that week are
   marked and listed under the map (with that week's change log).
-- **对比 / Compare**: two dates (presets: the last 7 days, the last 4 weeks, since the last advisor packet,
-  everything). Added nodes glow aqua, abandoned, falsified and deleted ones are red (deleted ones as dashed
+- **对比 / Compare**: two dates (presets: the last 7 days, the last 4 weeks, since the last advisor packet
+  was written, everything). Added nodes glow aqua, abandoned, falsified and deleted ones are red (deleted ones as dashed
   ghosts, with their links), status changes are outlined in blue with a `from → to` pill, renames get a
   pill; the list below groups them and shows the change log of the period.
 - The marks are a layer, `history`, registered only while the replay or the change view is open.
@@ -62,8 +70,9 @@ Timelines are cached per map by its change stamp.
 
 ## Advisor packets
 
-`line_chat.packet_prompt` (起草导师汇报包) adds the map changes since the line's last advisor packet (its
-date included; since the map began when there is none): new nodes, status changes, deletions, renames,
+`line_chat.packet_prompt` (起草导师汇报包) adds the map changes since the line's last advisor packet was
+written (`line_chat.packet_time`: a time in its frontmatter, else the note's file time when it falls on the
+packet's date, else the end of that date; since the map began when there is none): new nodes, status changes, deletions, renames,
 new evidence and the log lines of the period (`history.packet_changes`). The answer carries
 `map: {slug, since, total}`. A line without a map, or a map that cannot be read, leaves the prompt as it
 was.
