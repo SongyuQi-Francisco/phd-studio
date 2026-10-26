@@ -322,7 +322,7 @@ def candidates(today: date | None = None) -> list[dict[str, Any]]:
         except (OSError, ValueError):
             continue
         for p in run["papers"]:
-            out.append(_cand("tracker", run["run"], title=p.get("title") or "", arxiv=p.get("arxiv"), authors=p.get("authors"),
+            out.append(_cand("tracker", None, title=p.get("title") or "", arxiv=p.get("arxiv"), authors=p.get("authors"),
                              date_=p.get("published"), abstract=p.get("abstract") or "", paper=p.get("note")))
     feed_cut = (today - timedelta(days=FEED_DAYS)).isoformat()
     for f in tracking.follows():
@@ -350,7 +350,7 @@ def candidates(today: date | None = None) -> list[dict[str, Any]]:
         if it.get("status") not in ("inbox", "queued", "reading"):
             continue
         title = it.get("title") or it.get("paper") or ""
-        out.append(_cand("reading", it.get("status"), title=title, arxiv=it.get("arxiv"), ext=it.get("ext"), url=it.get("url"),
+        out.append(_cand("reading", None, title=title, arxiv=it.get("arxiv"), ext=it.get("ext"), url=it.get("url"),
                          date_=(it.get("pushed_at") or "")[:10], abstract=it.get("reason") or "", paper=it.get("paper")))
     merged: dict[str, dict[str, Any]] = {}
     by_title: dict[str, str] = {}
