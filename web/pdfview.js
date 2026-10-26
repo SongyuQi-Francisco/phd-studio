@@ -1,3 +1,4 @@
+// i18n: done
 // Thin wrapper around pdf.js's own PDFViewer: continuous scroll, text layer,
 // internal links, find, outline. Adds rectangle capture for figures/formulas.
 import * as pdfjsLib from "/vendor/pdfjs/pdf.min.mjs";

@@ -1,0 +1,7 @@
+{
+  "open_obsidian": "Open in Obsidian",
+  "panel.empty_title": "No note yet",
+  "panel.empty_body": "This paper only has an arXiv link and no Obsidian note yet.",
+  "panel.ask_create": "Ask Claude to create the note",
+  "panel.ask_update": "Ask Claude to update"
+}

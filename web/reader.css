@@ -15,3 +15,10 @@
 
 .toast { display: flex; align-items: center; gap: 12px; }
 .toast button { color: var(--accent); font-size: 13px; font-weight: 600; padding: 0; background: none; }
+
+/* English labels run longer than the Chinese ones the toolbar and chip row were tuned for. */
+.tb-title { flex: 0 1 auto; }
+@container (max-width: 930px) { :lang(en) .zoomval { display: none; } }
+@container (max-width: 880px) { :lang(en) .tb-title { display: none; } }
+.composer .chips { flex-wrap: wrap; row-gap: 6px; }
+.composer .chip { padding: 4px 9px; } /* the five co-reader chips fit one row of the 420px panel in Chinese */

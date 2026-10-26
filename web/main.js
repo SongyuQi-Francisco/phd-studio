@@ -1,3 +1,4 @@
+// i18n: done
 import { render } from "preact";
 import { useEffect, useMemo, useRef, useState, useCallback } from "preact/hooks";
 import { html, Icon, api, prefs, copyText, composing } from "/lib.js";
@@ -42,15 +43,15 @@ function Library({ papers, current, open, onPick, onClose }) {
   // A closed drawer must not keep keyboard focus (or every shortcut would land in its hidden search box).
   return html`<div class=${"drawer" + (open ? " open" : "")} inert=${!open}>
     <div class="drawer-head">
-      <h2>论文<small>${papers.length}</small></h2>
-      <label class="search"><${Icon} name="search" sm /><input ref=${inputRef} placeholder="搜索标题、标签" value=${q} onInput=${(e) => setQ(e.target.value)} onKeyDown=${onKey} /></label>
+      <h2>${t("common.nav.library")}<small>${papers.length}</small></h2>
+      <label class="search"><${Icon} name="search" sm /><input ref=${inputRef} placeholder=${t("library.search_placeholder")} value=${q} onInput=${(e) => setQ(e.target.value)} onKeyDown=${onKey} /></label>
       <div class="seg">
-        ${[["queue", "待读"], ["all", "最近"], ["pdf", "本地 PDF"]].map(([k, l]) => html`<button class=${filter === k && !q ? "on" : ""} onClick=${() => { setFilter(k); setQ(""); }}>${l}</button>`)}
+        ${[["queue", t("common.status.queued")], ["all", t("library.recent")], ["pdf", t("library.local_pdf")]].map(([k, l]) => html`<button class=${filter === k && !q ? "on" : ""} onClick=${() => { setFilter(k); setQ(""); }}>${l}</button>`)}
       </div>
     </div>
     <div class="list">
       ${shown.map((p) => html`<button class=${"row" + (p.stem === current ? " on" : "") + (p.pdf === "none" ? " disabled" : "")}
-          title=${p.pdf === "none" ? "笔记里没有 PDF 链接" : p.title} onClick=${() => p.pdf !== "none" && onPick(p.stem)}>
+          title=${p.pdf === "none" ? t("library.no_pdf") : p.title} onClick=${() => p.pdf !== "none" && onPick(p.stem)}>
         <span class=${"dot" + (p.pdf === "local" ? " ok" : "")} />
         <span style="min-width:0"><b>${p.stem}</b><span class="t">${p.title}</span></span>
       </button>`)}
@@ -67,6 +68,7 @@ function excerptLine(text, page, comment) {
   return `- "${q}"` + (page ? ` [p.${page}]` : "") + (c ? ` — ${c}` : "");
 }
 
+// i18n-keys: common.status.{inbox,reading,done,snoozed,dismissed}
 function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef, jumpRef, toast, onDone, onAddToList, onExcerpted, onNoteChanged }) {
   const containerRef = useRef();
   const wrapRef = useRef();
@@ -98,14 +100,14 @@ function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef
   const load = useCallback(async (which, keepPage) => {
     const v = viewRef.current;
     const startPage = keepPage ?? prefs.get("page:" + stem, 1);
-    setLoading(which === "original" ? "正在打开…" : "正在打开双语版…");
+    setLoading(which === "original" ? t("reader.opening") : t("reader.opening_bilingual"));
     setPop(null);
     try {
       await v.open(`/api/pdf/${encodeURIComponent(stem)}${which === "original" ? "" : "?variant=" + which}`, { page: startPage });
       setLoading("");
       v.outline().then(setOutline);
     } catch (e) {
-      setLoading(which === "original" ? "打不开这篇的 PDF：" + (e.message || "下载失败") : "双语版打开失败");
+      setLoading(which === "original" ? t("reader.open_failed", { error: e.message || t("reader.download_failed") }) : t("reader.bi_open_failed"));
     }
   }, [stem]);
 
@@ -115,7 +117,7 @@ function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef
     const jump = jumpRef.current?.stem === stem ? jumpRef.current : null;
     jumpRef.current = null;
     load("original", jump?.page).then(async () => {
-      if (jump?.sec && (await viewRef.current.goToSection(jump.sec)) === false) toast(`PDF 里找不到 §${jump.sec}`);
+      if (jump?.sec && (await viewRef.current.goToSection(jump.sec)) === false) toast(t("reader.section_missing", { sec: jump.sec }));
     });
   }, [stem]);
 
@@ -128,8 +130,8 @@ function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef
     const timer = setInterval(async () => {
       const s = await api(`/api/bilingual/${encodeURIComponent(stem)}`);
       setBi(s);
-      if (s.state === "done") toast("双语版已生成");
-      if (s.state === "error") toast("双语生成失败");
+      if (s.state === "done") toast(t("reader.bi_done"));
+      if (s.state === "error") toast(t("reader.bi_failed"));
     }, bi.state === "queued" ? 5000 : 3000);
     return () => clearInterval(timer);
   }, [bi.state, stem]);
@@ -200,7 +202,7 @@ function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef
     try {
       const r = await api("/api/translate", { json: { text: pop.text } });
       setPop((p) => p && { ...p, trans: r });
-    } catch (e) { setPop((p) => p && { ...p, trans: { text: e.message, engine: "错误" } }); }
+    } catch (e) { setPop((p) => p && { ...p, trans: { text: e.message, engine: t("reader.engine_error") } }); }
   };
 
   // ---- excerpt: append the selection with its page to a section of the note ----
@@ -223,7 +225,7 @@ function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef
       prefs.set("excerptSection", x.section);
       setPop(null);
       window.getSelection()?.removeAllRanges();
-      if (r.duplicate) toast("这段已经摘录过");
+      if (r.duplicate) toast(t("reader.excerpt_duplicate"));
       else onExcerpted({ ...r, page: pg, stem });
     } catch (e) { setEx({ saving: false }); toast(e.message); }
   };
@@ -249,85 +251,84 @@ function Reader({ stem, paper, onSelectionAction, onCropAction, pageRef, viewRef
       ${paper && (paper.reading
         ? html`<span class="rchip">
             <span class=${"tier " + (paper.reading.status === "queued" ? paper.reading.tier : paper.reading.status === "reading" ? "R" : "D")}>
-              ${{ queued: paper.reading.tier, reading: "在读", done: "读完", inbox: "收件箱", snoozed: "稍后", dismissed: "不读" }[paper.reading.status]}</span>
-            ${paper.reading.status !== "done" && html`<button class="tb-btn" title="记为读完" onClick=${onDone}><${Icon} name="check" sm />读完</button>`}
+              ${paper.reading.status === "queued" ? paper.reading.tier : t("common.status." + paper.reading.status)}</span>
+            ${paper.reading.status !== "done" && html`<button class="tb-btn" title=${t("reader.mark_done")} onClick=${onDone}><${Icon} name="check" sm />${t("common.status.done")}</button>`}
           </span>`
-        : html`<button class="tb-btn" title="加入阅读清单 (T2)" onClick=${onAddToList}><${Icon} name="plus" sm />清单</button>`)}
+        : html`<button class="tb-btn" title=${t("reader.add_to_list_title")} onClick=${onAddToList}><${Icon} name="plus" sm />${t("reader.add_to_list")}</button>`)}
       ${paper && html`<${ZoteroButton} stem=${stem} toast=${toast} onNoteChanged=${onNoteChanged} />`}
       <span class="grow" />
       <span class="pageinput"><input value=${page} onKeyDown=${(e) => e.key === "Enter" && v.goTo(Number(e.target.value))} />/ ${pages || "–"}</span>
       <div class="tb-sep" />
-      <button class="tb-btn" title="缩小" onClick=${() => v.zoom(1 / 1.15)}><${Icon} name="minus" sm /></button>
+      <button class="tb-btn" title=${t("reader.zoom_out")} onClick=${() => v.zoom(1 / 1.15)}><${Icon} name="minus" sm /></button>
       <span class="zoomval">${Math.round(scale * 100)}%</span>
-      <button class="tb-btn" title="放大" onClick=${() => v.zoom(1.15)}><${Icon} name="plus" sm /></button>
-      <button class="tb-btn" title="适合宽度" onClick=${() => v.fitWidth()}><${Icon} name="fit" sm /></button>
+      <button class="tb-btn" title=${t("reader.zoom_in")} onClick=${() => v.zoom(1.15)}><${Icon} name="plus" sm /></button>
+      <button class="tb-btn" title=${t("reader.fit_width")} onClick=${() => v.fitWidth()}><${Icon} name="fit" sm /></button>
       <div class="tb-sep" />
       <div class="seg">
-        <button class=${variant === "original" ? "on" : ""} onClick=${() => switchVariant("original")}>原文</button>
-        <button class=${variant === "dual" ? "on" : ""} onClick=${() => switchVariant("dual")}>${bi.state === "running" ? `生成中 ${elapsed(bi.started)}` : bi.state === "queued" ? (bi.paused ? "双语 · 暂停" : `排队第 ${bi.position}`) : "双语"}</button>
-        <button class=${variant === "mono" ? "on" : ""} onClick=${() => switchVariant("mono")}>中文</button>
+        <button class=${variant === "original" ? "on" : ""} onClick=${() => switchVariant("original")}>${t("reader.original")}</button>
+        <button class=${variant === "dual" ? "on" : ""} onClick=${() => switchVariant("dual")}>${bi.state === "running" ? t("reader.bi_running", { time: elapsed(bi.started) }) : bi.state === "queued" ? t(bi.paused ? "reader.bi_paused" : "reader.bi_position", { n: bi.position }) : t("reader.bilingual")}</button>
+        <button class=${variant === "mono" ? "on" : ""} onClick=${() => switchVariant("mono")}>${t("reader.translation")}</button>
       </div>
       <div class="tb-sep" />
-      <button class=${"tb-btn" + (cropMode ? " on" : "")} title="框选图表 / 公式（或按住 ⌥ 拖动）" onClick=${() => setCropMode(!cropMode)}><${Icon} name="crop" sm /></button>
-      <button class=${"tb-btn" + (showOutline ? " on" : "")} title="目录" onClick=${() => setShowOutline(!showOutline)}><${Icon} name="outline" sm /></button>
+      <button class=${"tb-btn" + (cropMode ? " on" : "")} title=${t("reader.crop_title")} onClick=${() => setCropMode(!cropMode)}><${Icon} name="crop" sm /></button>
+      <button class=${"tb-btn" + (showOutline ? " on" : "")} title=${t("reader.outline")} onClick=${() => setShowOutline(!showOutline)}><${Icon} name="outline" sm /></button>
       ${findOpen
-        ? html`<span class="findbox"><input autofocus placeholder="查找" value=${findQ} onInput=${(e) => { setFindQ(e.target.value); v.find(e.target.value); }}
+        ? html`<span class="findbox"><input autofocus placeholder=${t("reader.find")} value=${findQ} onInput=${(e) => { setFindQ(e.target.value); v.find(e.target.value); }}
             onKeyDown=${(e) => { if (e.key === "Enter") v.find(findQ, e.shiftKey); if (e.key === "Escape") { setFindOpen(false); v.find(""); } }} />
             <button class="tb-btn" onClick=${() => { setFindOpen(false); v.find(""); }}><${Icon} name="x" sm /></button></span>`
-        : html`<button class="tb-btn" title="查找 (⌘F)" onClick=${() => setFindOpen(true)}><${Icon} name="search" sm /></button>`}
+        : html`<button class="tb-btn" title=${t("reader.find_title")} onClick=${() => setFindOpen(true)}><${Icon} name="search" sm /></button>`}
       <span class="grow" />
     </div>
 
     <div id="viewerContainer" ref=${containerRef}><div class="pdfViewer" /></div>
     ${loading && html`<div class="loading">${loading}</div>`}
-    ${cropMode && html`<div class="crop-layer" /><div class="croptip">拖动框选图表或公式 · Esc 取消</div>`}
+    ${cropMode && html`<div class="crop-layer" /><div class="croptip">${t("reader.croptip")}</div>`}
     ${drag && html`<div class="crop-rect" style=${{
       left: Math.min(drag.x0, drag.x1) - drag.box.left + "px", top: Math.min(drag.y0, drag.y1) - drag.box.top + "px",
       width: Math.abs(drag.x1 - drag.x0) + "px", height: Math.abs(drag.y1 - drag.y0) + "px" }} />`}
 
     ${showOutline && html`<div class="pop outline">
       ${outline.length ? flatten(outline).map(([o, depth]) => html`<button style=${{ paddingLeft: 10 + depth * 14 + "px" }} onClick=${() => { v.goToDest(o.dest); setShowOutline(false); }}>${o.title}</button>`)
-        : html`<div style="padding:10px;color:var(--text-3);font-size:13px">这份 PDF 没有目录</div>`}
+        : html`<div style="padding:10px;color:var(--text-3);font-size:13px">${t("reader.no_outline")}</div>`}
     </div>`}
 
     ${confirmBi && html`<div class="pop confirm">
-      <h3>${bi.state === "queued" ? "已在预生成队列" : "生成整篇双语 PDF"}</h3>
-      <p>${bi.state === "queued" ? `排在第 ${bi.position} 位${bi.paused ? "（队列已暂停）" : ""}，轮到时在后台生成。也可以现在就开始。`
-        : "用 pdf2zh 翻译全文，保留公式、图表和版式，左右对照。一般 3–8 分钟，后台进行，期间可以继续阅读。"}</p>
-      <div class="row-end"><button class="btn ghost" onClick=${() => setConfirmBi(false)}>取消</button><button class="btn primary" onClick=${startBi}>${bi.state === "queued" ? "现在就生成" : "开始生成"}</button></div>
+      <h3>${t(bi.state === "queued" ? "reader.confirm.queued_title" : "reader.confirm.title")}</h3>
+      <p>${bi.state === "queued" ? t(bi.paused ? "reader.confirm.queued_paused" : "reader.confirm.queued", { n: bi.position }) : t("reader.confirm.body")}</p>
+      <div class="row-end"><button class="btn ghost" onClick=${() => setConfirmBi(false)}>${t("common.cancel")}</button><button class="btn primary" onClick=${startBi}>${t(bi.state === "queued" ? "reader.confirm.start_now" : "reader.confirm.start")}</button></div>
     </div>`}
 
     ${pop && pop.kind === "sel" && html`<div class="pop" style=${transStyle || popStyle}>
       <div class="pop-actions">
-        <button class="primary" onClick=${doTranslate}><${Icon} name="translate" sm />翻译</button>
-        <button onClick=${() => { onSelectionAction("explain", pop); setPop(null); }}><${Icon} name="sparkle" sm />讲解</button>
-        <button onClick=${() => { onSelectionAction("ask", pop); setPop(null); }}><${Icon} name="chat" sm />问 Claude</button>
-        <button class=${pop.excerpt ? "on" : ""} disabled=${!paper?.note_rel} title=${paper?.note_rel ? "摘录到笔记（带页码）" : "先建笔记"}
-          onClick=${() => (pop.excerpt ? setPop({ ...pop, excerpt: null }) : openExcerpt())}><${Icon} name="quote" sm />摘录</button>
+        <button class="primary" onClick=${doTranslate}><${Icon} name="translate" sm />${t("reader.translate")}</button>
+        <button onClick=${() => { onSelectionAction("explain", pop); setPop(null); }}><${Icon} name="sparkle" sm />${t("chat.explain")}</button>
+        <button onClick=${() => { onSelectionAction("ask", pop); setPop(null); }}><${Icon} name="chat" sm />${t("chat.ask_claude")}</button>
+        <button class=${pop.excerpt ? "on" : ""} disabled=${!paper?.note_rel} title=${t(paper?.note_rel ? "reader.excerpt_title" : "reader.need_note")}
+          onClick=${() => (pop.excerpt ? setPop({ ...pop, excerpt: null }) : openExcerpt())}><${Icon} name="quote" sm />${t("common.term.excerpt")}</button>
       </div>
       ${pop.excerpt && html`<div class="excerpt">
-        <label class="ex-row"><span>小节</span>
+        <label class="ex-row"><span>${t("reader.section")}</span>
           <select value=${pop.excerpt.section} onChange=${(e) => setEx({ section: e.target.value })}>
-            ${pop.excerpt.sections.map((sec) => html`<option value=${sec}>${sec}${pop.excerpt.isNew && sec === "Excerpts" ? "（新建）" : ""}</option>`)}
+            ${pop.excerpt.sections.map((sec) => html`<option value=${sec}>${sec}${pop.excerpt.isNew && sec === "Excerpts" ? t("reader.section_new") : ""}</option>`)}
           </select></label>
-        <input class="ex-comment" placeholder="批注（可选）· Enter 摘录" value=${pop.excerpt.comment}
+        <input class="ex-comment" placeholder=${t("reader.comment_placeholder")} value=${pop.excerpt.comment}
           ref=${(el) => { if (el && !el.dataset.focused) { el.dataset.focused = "1"; el.focus(); } }}
           onInput=${(e) => setEx({ comment: e.target.value })}
           onKeyDown=${(e) => { if (e.key === "Enter" && !composing(e)) { e.preventDefault(); saveExcerpt(); } if (e.key === "Escape") setPop(null); }} />
-        <div class="ex-preview" title="将追加到笔记的这一行">${excerptLine(pop.text, pop.page, pop.excerpt.comment)}</div>
-        <div class="row-end"><button class="btn ghost" onClick=${() => setPop(null)}>取消</button>
-          <button class="btn primary" disabled=${pop.excerpt.saving} onClick=${saveExcerpt}>${pop.excerpt.saving ? "写入中…" : "摘录"}</button></div>
+        <div class="ex-preview" title=${t("reader.preview_title")}>${excerptLine(pop.text, pop.page, pop.excerpt.comment)}</div>
+        <div class="row-end"><button class="btn ghost" onClick=${() => setPop(null)}>${t("common.cancel")}</button>
+          <button class="btn primary" disabled=${pop.excerpt.saving} onClick=${saveExcerpt}>${pop.excerpt.saving ? t("common.writing") : t("common.term.excerpt")}</button></div>
       </div>`}
       ${pop.trans && html`<div class="trans">
         ${pop.trans.loading ? html`<div class="typing"><i /><i /><i /></div>` : html`<div>${pop.trans.text}</div>
-          <div class="meta"><span>${pop.trans.engine}</span><button onClick=${async () => toast((await copyText(pop.trans.text)) ? "已复制" : "复制失败，请手动选中")}>复制</button></div>`}
+          <div class="meta"><span>${pop.trans.engine}</span><button onClick=${async () => toast((await copyText(pop.trans.text)) ? t("common.copied") : t("common.copy_failed"))}>${t("common.copy")}</button></div>`}
       </div>`}
     </div>`}
 
     ${pop && pop.kind === "crop" && html`<div class="pop" style=${popStyle}>
       <div class="pop-actions">
-        <button class="primary" onClick=${() => { onCropAction("explain", pop.crop); setPop(null); }}><${Icon} name="sparkle" sm />讲解</button>
-        <button onClick=${() => { onCropAction("ask", pop.crop); setPop(null); }}><${Icon} name="chat" sm />问 Claude</button>
+        <button class="primary" onClick=${() => { onCropAction("explain", pop.crop); setPop(null); }}><${Icon} name="sparkle" sm />${t("chat.explain")}</button>
+        <button onClick=${() => { onCropAction("ask", pop.crop); setPop(null); }}><${Icon} name="chat" sm />${t("chat.ask_claude")}</button>
         <button onClick=${() => setPop(null)}><${Icon} name="x" sm /></button>
       </div>
     </div>`}
@@ -395,10 +396,10 @@ function Settings({ status, onClose, onSaved }) {
 // ---------------- app ----------------
 
 const STUDIO_CHIPS = [
-  { label: "今天该做什么", prompt: "看看我的时间线、阅读清单和想法，告诉我今天最该做的 3 件事（按截止紧迫度排）。" },
-  { label: "最近截稿", prompt: "未来 60 天我关注的会议有哪些截稿？按时间列出，标出和我投稿目标相关的。" },
-  { label: "加里程碑", prompt: "帮我加一个里程碑：", fill: true, write: true },
-  { label: "记想法", prompt: "记一个想法：", fill: true, write: true },
+  { get label() { return t("shell.chip.today"); }, prompt: "看看我的时间线、阅读清单和想法，告诉我今天最该做的 3 件事（按截止紧迫度排）。" }, // i18n-ignore
+  { get label() { return t("shell.chip.deadlines"); }, prompt: "未来 60 天我关注的会议有哪些截稿？按时间列出，标出和我投稿目标相关的。" }, // i18n-ignore
+  { get label() { return t("shell.chip.milestone"); }, get prompt() { return t("shell.chip.milestone_prompt"); }, fill: true, write: true },
+  { get label() { return t("shell.chip.idea"); }, get prompt() { return t("shell.chip.idea_prompt"); }, fill: true, write: true },
   { get label() { return t("rmap.chip.update"); }, get prompt() { return t("rmap.chip.update_prompt"); }, fill: true, write: true },
 ];
 
@@ -498,7 +499,7 @@ function App() {
   const addToList = async () => {
     try {
       await api("/api/reading", { json: paper.external ? (paper.arxiv ? { arxiv: paper.arxiv, tier: "T2" } : { ext: stem, tier: "T2" }) : { paper: stem, tier: "T2" } });
-      toast("已加入阅读清单 · T2");
+      toast(t("shell.added_to_list"));
       loadPaper(stem);
     } catch (e) { toast(e.message); }
   };
@@ -506,22 +507,22 @@ function App() {
   const toChat = () => { setTab("claude"); setTimeout(() => chatRef.current?.focus(), 50); };
   const onSelectionAction = (kind, pop) => {
     const sel = { text: pop.text, page: pop.page };
-    if (kind === "explain") { setTab("claude"); chatRef.current?.send(PROMPTS.explainSel, { selection: sel, images: [], label: "讲解" }); }
+    if (kind === "explain") { setTab("claude"); chatRef.current?.send(PROMPTS.explainSel, { selection: sel, images: [], label: t("chat.explain") }); }
     else { setAttachments((a) => ({ ...a, selection: sel })); toChat(); }
   };
   const onCropAction = (kind, crop) => {
-    if (kind === "explain") { setTab("claude"); chatRef.current?.send(PROMPTS.explainImg, { images: [crop], selection: null, label: "讲解" }); }
+    if (kind === "explain") { setTab("claude"); chatRef.current?.send(PROMPTS.explainImg, { images: [crop], selection: null, label: t("chat.explain") }); }
     else { setAttachments((a) => ({ ...a, images: [...a.images, crop] })); toChat(); }
   };
   const goPage = (n) => {
     const v = viewRef.current;
-    if (v?.doc && (n < 1 || n > v.doc.numPages)) toast(`这篇只有 ${v.doc.numPages} 页`);
+    if (v?.doc && (n < 1 || n > v.doc.numPages)) toast(t("shell.only_pages", { n: v.doc.numPages }));
     else v?.goTo(n);
   };
   const goSection = async (sec) => {
     const ok = await viewRef.current?.goToSection(sec);
-    if (ok === false) toast(`PDF 里找不到 §${sec}`);
-    else if (!ok) toast("PDF 还没打开，没法跳转");
+    if (ok === false) toast(t("reader.section_missing", { sec }));
+    else if (!ok) toast(t("shell.pdf_not_open"));
   };
   // r.stem is the paper the excerpt went into; you may have switched papers before pressing 撤销.
   const onExcerpted = (r) => {
@@ -532,10 +533,10 @@ function App() {
         const u = await api(`/api/excerpt/${encodeURIComponent(r.stem)}/undo`,
           { json: { line: r.line, inserted: r.inserted, section: r.section, created: r.created, mtime_ns: r.mtime_ns } });
         refresh();
-        toast(u.ok ? "已撤销摘录" : "撤销失败：笔记里已找不到这一行");
+        toast(t(u.ok ? "shell.undone" : "shell.undo_failed"));
       } catch (e) { toast(e.message); }
     };
-    toast(`已摘录到 ${r.section}${r.page ? " · p." + r.page : ""}`, { action: { label: "撤销", run: undo } });
+    toast(t(r.page ? "shell.excerpted_page" : "shell.excerpted", { section: r.section, page: r.page }), { action: { label: t("common.undo"), run: undo } });
   };
   // Hand a task to the workbench assistant (opens its panel if needed).
   const ask = (prompt, label) => {
@@ -588,7 +589,7 @@ function App() {
   const claudeOk = status?.claude?.ok;
   const reading = view === "reader" && stem;
   const studioSide = !reading && assistant;
-  const nav = (v, icon, label) => html`<button class=${"rail-btn" + (view === v && !drawer ? " on" : "")} title=${label}
+  const nav = (v, icon, label) => html`<button class=${"rail-btn" + (view === v && !drawer ? " on" : "")} title=${label} data-view=${v}
     onClick=${() => go(v)}><${Icon} name=${icon} /></button>`;
 
   let page;
@@ -611,22 +612,22 @@ function App() {
   return html`<div class=${"shell" + (reading || studioSide ? "" : " no-side")}>
     <nav class="rail">
       <img class="logo-img" src="/icon.svg" alt="PhD Studio" title="PhD Studio" />
-      ${nav("overview", "home", "总览")}
-      ${nav("list", "inbox", "阅读清单")}
-      ${nav("timeline", "calendar", "时间线 · 会议与规划")}
-      ${nav("ideas", "bulb", "想法 (⌘I 随手记)")}
-      ${nav("direction", "compass", "方向 · 研究线与路线图")}
+      ${nav("overview", "home", t("common.nav.overview"))}
+      ${nav("list", "inbox", t("common.nav.reading"))}
+      ${nav("timeline", "calendar", t("shell.rail.timeline"))}
+      ${nav("ideas", "bulb", t("shell.rail.ideas", { page: t("common.nav.ideas") }))}
+      ${nav("direction", "compass", t("shell.rail.direction"))}
       ${nav("rmap", "topology", t("rmap.rail"))}
-      ${nav("track", "radar", "追踪 · 同行动态与捕捉")}
-      <button class=${"rail-btn" + (drawer ? " on" : "")} title="论文库 (⌘K)" onClick=${() => setDrawer(!drawer)}><${Icon} name="library" /></button>
-      ${stem && !reading && html`<button class="rail-btn" title="回到正在读的论文" onClick=${() => setView("reader")}><${Icon} name="book" /></button>`}
+      ${nav("track", "radar", t("shell.rail.track"))}
+      <button class=${"rail-btn" + (drawer ? " on" : "")} title=${t("shell.rail.library")} onClick=${() => setDrawer(!drawer)}><${Icon} name="library" /></button>
+      ${stem && !reading && html`<button class="rail-btn" title=${t("shell.rail.back_to_paper")} onClick=${() => setView("reader")}><${Icon} name="book" /></button>`}
       ${reading && html`<div class="rail-sep" />
-        <button class=${"rail-btn" + (tab === "claude" ? " on" : "")} title="Claude 伴读" onClick=${() => setTab("claude")}><${Icon} name="chat" /></button>
-        <button class=${"rail-btn" + (tab === "note" ? " on" : "")} title="笔记" onClick=${() => setTab("note")}><${Icon} name="note" /></button>`}
+        <button class=${"rail-btn" + (tab === "claude" ? " on" : "")} title=${t("shell.rail.co_reader")} onClick=${() => setTab("claude")}><${Icon} name="chat" /></button>
+        <button class=${"rail-btn" + (tab === "note" ? " on" : "")} title=${t("common.term.note")} onClick=${() => setTab("note")}><${Icon} name="note" /></button>`}
       <div class="spacer" />
-      ${!reading && html`<button class=${"rail-btn" + (assistant ? " on" : "")} title="工作台助手 (⌘J)" onClick=${() => setAssistant(!assistant)}><${Icon} name="sparkle" /></button>`}
-      <button class="rail-btn" title="关闭工作台" onClick=${() => setQuitState("confirm")}><${Icon} name="power" /></button>
-      <button class="rail-btn" title="设置" onClick=${() => { refreshStatus(); setSettingsOpen(true); }}>
+      ${!reading && html`<button class=${"rail-btn" + (assistant ? " on" : "")} title=${t("shell.rail.assistant")} onClick=${() => setAssistant(!assistant)}><${Icon} name="sparkle" /></button>`}
+      <button class="rail-btn" title=${t("shell.rail.quit")} onClick=${() => setQuitState("confirm")}><${Icon} name="power" /></button>
+      <button class="rail-btn" title=${t("common.nav.settings")} onClick=${() => { refreshStatus(); setSettingsOpen(true); }}>
         <${Icon} name="settings" />${status && html`<span class=${"dot " + (claudeOk ? "ok" : "bad")} />`}
       </button>
     </nav>
@@ -644,16 +645,16 @@ function App() {
           onNoteChanged=${() => setNoteVersion((n) => n + 1)} />
       </div>
       ${tab === "note" && html`<${NotePanel} paper=${paper} version=${noteVersion} onPage=${goPage} onSection=${goSection}
-        onAskUpdate=${() => { setTab("claude"); chatRef.current?.send(PROMPTS.note(paper.note_rel), { selection: null, images: [], label: "更新笔记", write: true }); }}
-        onAskIntake=${() => { setTab("claude"); chatRef.current?.send(PROMPTS.intake, { selection: null, images: [], label: "建笔记", write: true }); }} />`}
+        onAskUpdate=${() => { setTab("claude"); chatRef.current?.send(PROMPTS.note(paper.note_rel), { selection: null, images: [], label: t("chat.update_note"), write: true }); }}
+        onAskIntake=${() => { setTab("claude"); chatRef.current?.send(PROMPTS.intake, { selection: null, images: [], label: t("chat.create_note"), write: true }); }} />`}
     </aside>`}
     ${studioSide && html`<div class="resizer" onMouseDown=${startResize} />
     <aside class="side">
       <div style=${{ display: sideLine ? "none" : "contents" }}>
         <${ChatPanel} stem="studio" paper=${null} attachments=${studioAtt} setAttachments=${setStudioAtt}
-          registerSend=${(api_) => (studioRef.current = api_)} claudeOk=${claudeOk} title="工作台助手"
-          chips=${STUDIO_CHIPS} emptyHint="跟我说要做的事：加里程碑、设投稿目标、记想法、把论文推进清单、查会议截稿……"
-          onStudioChanged=${(area) => { bump(); if (area === "venues") toast("助手提交了会议核对结果，等你确认", { action: { label: "去看看", run: () => go("timeline") } });
+          registerSend=${(api_) => (studioRef.current = api_)} claudeOk=${claudeOk} title=${t("common.nav.assistant")}
+          chips=${STUDIO_CHIPS} emptyHint=${t("shell.assistant_hint")}
+          onStudioChanged=${(area) => { bump(); if (area === "venues") toast(t("shell.venue_check_submitted"), { action: { label: t("shell.take_a_look"), run: () => go("timeline") } });
             if (area === "rmap") toast(t("rmap.prop.toast"), { action: { label: t("rmap.prop.go"), run: () => go("rmap") } }); }} />
       </div>
       ${lineChats.map((l) => html`<div key=${l.key} style=${{ display: sideLine === l.key ? "contents" : "none" }}>
@@ -663,23 +664,23 @@ function App() {
     </aside>`}
 
     ${notePath && html`<${NoteSheet} path=${notePath} onClose=${() => setNotePath(null)} onOpenPaper=${openPaper}
-      actions=${[{ label: "和助手讨论", run: (n) => { setNotePath(null); ask(`我们来讨论这篇笔记：${n.path}。先读它，然后告诉我要点、和我当前课题的关系、以及值得跟进的下一步。`, `讨论 ${n.name}`); } }]} />`}
+      actions=${[{ label: t("shell.discuss_with_assistant"), run: (n) => { setNotePath(null); ask(PROMPTS.discussNote(n.path), t("shell.discuss", { name: n.name })); } }]} />`}
     ${venueKey && html`<${VenueSheet} vkey=${venueKey} onClose=${() => setVenueKey(null)} toast=${toast} onChanged=${bump} onAsk=${ask} />`}
     ${ideaOpen && html`<${IdeaCapture} lines=${status?.lines || []} context=${reading ? { paper: stem, page: pageRef.current } : null}
-      onClose=${() => setIdeaOpen(false)} onSaved=${() => { setIdeaOpen(false); toast("想法已记下"); bump(); }} />`}
+      onClose=${() => setIdeaOpen(false)} onSaved=${() => { setIdeaOpen(false); toast(t("shell.idea_saved")); bump(); }} />`}
     ${doneOpen && paper?.reading && html`<${DoneDialog} item=${{ ...paper.reading, key: stem, title: paper.title }}
-      onClose=${() => setDoneOpen(false)} onSaved=${() => { setDoneOpen(false); toast("已记为读完"); loadPaper(stem); }} />`}
+      onClose=${() => setDoneOpen(false)} onSaved=${() => { setDoneOpen(false); toast(t("shell.marked_done")); loadPaper(stem); }} />`}
     ${settingsOpen && status && html`<${Settings} status=${status} onClose=${() => setSettingsOpen(false)} onSaved=${refreshStatus} />`}
     ${toastMsg && html`<div class="toast"><span>${toastMsg.text}</span>
       ${toastMsg.action && html`<button onClick=${() => { const a = toastMsg.action; setToastMsg(null); a.run(); }}>${toastMsg.action.label}</button>`}</div>`}
     ${quitState === "confirm" && html`<div class="modal-bg" onClick=${(e) => e.target === e.currentTarget && setQuitState("")}>
       <div class="modal">
-        <h2>关闭工作台？</h2>
-        <p class="muted-p">正在进行的 Claude 回答和双语生成会停止。对话、阅读清单都已保存，下次从桌面图标打开即可。</p>
-        <div class="row-end"><button class="btn ghost" onClick=${() => setQuitState("")}>取消</button>
-          <button class="btn danger" onClick=${async () => { let r = {}; try { r = await api("/api/shutdown", { method: "POST" }); } catch {} if (!r.window) { setQuitState("done"); setTimeout(() => window.close(), 600); } }}>关闭</button></div>
+        <h2>${t("shell.quit.title")}</h2>
+        <p class="muted-p">${t("shell.quit.body")}</p>
+        <div class="row-end"><button class="btn ghost" onClick=${() => setQuitState("")}>${t("common.cancel")}</button>
+          <button class="btn danger" onClick=${async () => { let r = {}; try { r = await api("/api/shutdown", { method: "POST" }); } catch {} if (!r.window) { setQuitState("done"); setTimeout(() => window.close(), 600); } }}>${t("shell.quit.confirm")}</button></div>
       </div></div>`}
-    ${quitState === "done" && html`<div class="quit-screen"><div><img class="logo-img big" src="/icon.svg" alt="" /><h2>工作台已关闭</h2><p>可以关掉这个窗口了。下次双击桌面上的 PhD Studio 图标启动。</p></div></div>`}
+    ${quitState === "done" && html`<div class="quit-screen"><div><img class="logo-img big" src="/icon.svg" alt="" /><h2>${t("shell.quit.done_title")}</h2><p>${t("shell.quit.done_body")}</p></div></div>`}
   </div>`;
 }
 

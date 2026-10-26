@@ -1,3 +1,4 @@
+// i18n: done
 // Shared helpers: htm binding, icons, markdown + math rendering, fetch, local prefs.
 import { h } from "preact";
 import htm from "htm";
@@ -96,7 +97,7 @@ export function renderMarkdown(src, { loose = false } = {}) {
     try { return katex.renderToString(m.tex, { displayMode: m.display, throwOnError: false }); }
     catch { return esc(m.tex); }
   });
-  out = out.replace(/\[(?:p\.|P\.|第)\s?(\d+)(?:\s?页)?\]/g, '<a class="pagelink" data-page="$1">p.$1</a>');
+  out = out.replace(/\[(?:p\.|P\.|第)\s?(\d+)(?:\s?页)?\]/g, '<a class="pagelink" data-page="$1">p.$1</a>'); // i18n-ignore: matches "[第5页]" in notes
   out = out.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, t, a) =>
     `<span class="wikilink" data-target="${esc(t.split("#")[0].trim())}">${a || t}</span>`);
   return sanitize(loose ? linkLoose(out) : out);

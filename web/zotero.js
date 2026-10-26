@@ -1,3 +1,4 @@
+// i18n: done
 // Zotero: one-click push from the reader, the item link written into the note only after you
 // confirm the exact line, and the Settings rows (status, auto mode, collection, API key help).
 import { useEffect, useRef, useState } from "preact/hooks";
@@ -56,11 +57,11 @@ export function ZoteroButton({ stem, toast, onNoteChanged }) {
     try {
       const r = await api(`/api/zotero/paper/${enc(stem)}`, { method: "POST" });
       const s = (await load()) || st;
-      const warn = r.warnings?.length ? `（${r.warnings[0]}）` : "";
+      const warn = r.warnings?.[0];
       setFresh(r.state === "added");
-      if (s?.linkback) { setOpen(true); if (warn) toast(warn.slice(1, -1)); }
+      if (s?.linkback) { setOpen(true); if (warn) toast(warn); }
       else if (r.state === "pending") toast(r.warnings[0]);
-      else toast((r.state === "exists" ? "Zotero 里已经有这篇" : "已加入 Zotero") + warn);
+      else toast(t(r.state === "exists" ? (warn ? "zotero.exists_warn" : "zotero.exists") : (warn ? "zotero.added_warn" : "zotero.added"), { warning: warn }));
     } catch (e) { setErr(e.message); setOpen(true); }
     setBusy("");
   };
@@ -68,7 +69,7 @@ export function ZoteroButton({ stem, toast, onNoteChanged }) {
     setBusy("link"); setErr("");
     try {
       await writeLink(st.linkback);
-      toast("Zotero 链接已写进笔记");
+      toast(t("zotero.link_written"));
       setOpen(false);
       onNoteChanged?.();
     } catch (e) { setErr(e.message); }
@@ -79,23 +80,23 @@ export function ZoteroButton({ stem, toast, onNoteChanged }) {
   if (!st) return null;
   const linked = st.state === "linked";
   const inLib = st.state === "in_library";
-  const title = linked ? "已在 Zotero，笔记里有链接" : inLib ? (st.linkback ? "Zotero 里已有，笔记还没有链接" : "已在 Zotero") : "加入 Zotero";
+  const title = t(linked ? "zotero.title_linked" : inLib ? (st.linkback ? "zotero.title_no_link" : "zotero.title_in") : "zotero.title_add");
   const click = () => (linked || inLib || err ? setOpen(!open) : push());
 
   return html`<span class="zwrap" ref=${wrap}>
     <button class=${"tb-btn" + (open ? " on" : "")} title=${title} disabled=${busy === "push"} onClick=${click}>
       ${linked || inLib ? html`<span class=${"zb" + (linked ? " on" : "")}>Z</span>` : html`<${Icon} name="plus" sm />`}
-      ${busy === "push" ? "入库中…" : "Zotero"}${inLib && st.linkback ? html`<i class="zdot" />` : null}
+      ${busy === "push" ? t("zotero.adding") : "Zotero"}${inLib && st.linkback ? html`<i class="zdot" />` : null}
     </button>
     ${open && at && html`<div class="pop zpop" style=${at}>
       ${err && html`<div class="err">${err}</div>`}
-      ${err && !st.desktop && !st.web && html`<p class="zhint">打开 Zotero 桌面端后再点一次；或在「设置 → Zotero」里按说明建一个网络密钥。</p>`}
-      ${linked && html`<p class="zline">已在 Zotero，笔记里有链接。</p>`}
-      ${inLib && !st.linkback && html`<p class="zline">${st.key ? "已在 Zotero。" : "已存进 Zotero，还在等它写入数据库。"}${!st.note ? "建笔记后可以把链接写回笔记。" : ""}</p>`}
-      ${inLib && st.linkback && html`<p class="zline">${fresh ? "已加入 Zotero。" : "Zotero 里有这篇。"}把条目链接写进笔记？</p>
+      ${err && !st.desktop && !st.web && html`<p class="zhint">${t("zotero.hint_start")}</p>`}
+      ${linked && html`<p class="zline">${t("zotero.linked")}</p>`}
+      ${inLib && !st.linkback && html`<p class="zline">${t(st.key ? (st.note ? "zotero.in_lib" : "zotero.in_lib_no_note") : (st.note ? "zotero.saved_pending" : "zotero.saved_pending_no_note"))}</p>`}
+      ${inLib && st.linkback && html`<p class="zline">${t(fresh ? "zotero.ask_link_fresh" : "zotero.ask_link")}</p>
         <${LinkChange} lb=${st.linkback} busy=${busy === "link"} onWrite=${confirmLink} onSkip=${() => setOpen(false)} />`}
-      ${st.key && html`<div class="row-end"><button class="btn ghost" onClick=${() => openInZotero(st.key, toast)}>在 Zotero 中打开</button></div>`}
-      ${err && !linked && !inLib && html`<div class="row-end"><button class="btn primary" onClick=${push}>再试一次</button></div>`}
+      ${st.key && html`<div class="row-end"><button class="btn ghost" onClick=${() => openInZotero(st.key, toast)}>${t("zotero.open_in")}</button></div>`}
+      ${err && !linked && !inLib && html`<div class="row-end"><button class="btn primary" onClick=${push}>${t("common.retry")}</button></div>`}
     </div>`}
   </span>`;
 }
