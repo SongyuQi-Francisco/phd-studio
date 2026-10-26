@@ -1,7 +1,7 @@
 {
-  "title": "截稿提醒",
-  "intro": "截稿、投稿目标和里程碑临近时发 macOS 通知；工作台关着也会提醒。",
-  "row_off": "截稿、里程碑临近时发 macOS 通知",
+  "title": "Deadline 提醒",
+  "intro": "会议 Deadline、投稿目标和里程碑临近时发 macOS 通知；工作台关着也会提醒。",
+  "row_off": "Deadline、里程碑临近时发 macOS 通知",
   "row_other": "由 {device} 发提醒，这台不发",
   "row_upcoming": "30 天内 {n} 条",
   "same_day": "当天",
