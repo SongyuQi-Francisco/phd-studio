@@ -23,7 +23,7 @@
   "coming_empty_hint": "去时间线关注会议，或加一个里程碑",
   "ed.auto": "自动（{year}）",
   "ed.auto_next": "自动（下一届）",
-  "ed.closed": "已截稿",
+  "ed.closed": "Deadline 已过",
   "ed.latest": "最近一届",
   "ed.passed": "已过",
   "ed.round_title": "只看其中一轮的 Deadline",
@@ -98,7 +98,7 @@
   "sheet.full_deadline": "{year} Full paper deadline",
   "sheet.checked": "核对于 {at}",
   "sheet.from_last": "沿用上一届",
-  "sheet.last_edition": "上一届（新一届未公布）",
+  "sheet.last_edition": "上一届（下一届未公布）",
   "sheet.line_hint": "研究线（可选）",
   "sheet.no_deadline": "暂无 Deadline 数据",
   "sheet.paper_hint": "论文名，如 Paper 1 · 题目",
@@ -129,7 +129,7 @@
   "target.edition_set_hint": "选「自动」让它按状态和日历推断",
   "target.edition_unset": "届次未定",
   "target.round": "{date} 这一轮",
-  "target.sent_note": "这一届其余 Deadline 不再为这篇论文提醒；其他论文和之后的届次照常。",
+  "target.sent_note": "本届其余 Deadline 不再为这篇论文提醒；其他论文和之后的届次照常。",
   "target.sent_note_edition": "{edition} 届其余 Deadline 不再为这篇论文提醒；其他论文和之后的届次照常。",
   "target.set_status": "设为 {status}",
   "targets.empty": "还没有投稿目标",
@@ -161,5 +161,6 @@
   "lines.title": "研究线",
   "activity_unit": "{n} 次",
   "ms.done_word": "完成",
-  "targets.title": "投稿目标"
+  "targets.title": "投稿目标",
+  "sheet.tz_official": "官网"
 }

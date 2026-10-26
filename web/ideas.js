@@ -19,12 +19,12 @@ const mergeable = (i) => i.status !== "merged" && i.status !== "promoted";
 // The line most of the ideas are on (what the backend picks when none is given).
 const commonLine = (items) => { const c = {}; items.forEach((i) => i.line && (c[i.line] = (c[i.line] || 0) + 1)); return Object.keys(c).sort((a, b) => c[b] - c[a])[0] || ""; };
 
-// What the "promote" button sends to the assistant, in the interface language.
-export const promotePrompt = (i) => t("ideas.promote.prompt", {
-  id: i.id, text: i.text,
-  line: i.line ? t("ideas.promote.line", { line: i.line }) : "",
-  paper: i.paper ? t("ideas.promote.paper", { paper: i.paper + (i.page ? " p." + i.page : "") }) : "",
-});
+// Sent to Claude: not UI text, so it stays in Chinese; the reply follows the answer-language setting (see PROMPTS in chat.js).
+export const promotePrompt = (i) => [
+  `把想法 ${i.id} 整理成正式 idea 笔记。原文：「${i.text}」${i.line ? `（研究线：${i.line}）` : ""}${i.paper ? `（来自论文 ${i.paper}${i.page ? " p." + i.page : ""}）` : ""}。`, // i18n-ignore
+  "要求：用 Idea Note Template 的结构，按 AGENTS.md 的 Idea Maintenance 写清 问题 / 为什么是现在 / 技术核心 / 第一个实验 / Kill criteria / 下一步要找的证据；先查 vault 里已有的相关 idea 和论文笔记，避免重复，并链接相关论文。", // i18n-ignore
+  "先用三四句话告诉我笔记文件名和要点，再写入 idea 笔记文件夹；写完用 idea_update 把这条想法标为 promoted，note 填笔记路径。", // i18n-ignore
+].join("\n");
 
 function Tags({ i, active, onToggle, onChange, readOnly }) {
   const [adding, setAdding] = useState(false);

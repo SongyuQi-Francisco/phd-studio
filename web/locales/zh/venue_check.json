@@ -26,7 +26,7 @@
   "override_old": "你在 {date} 确认过的更新比内置数据旧，现在显示的是内置数据。",
   "clear": "清除旧的更新",
   "clear_done": "已清除旧的更新",
-  "card_count": "{count} · 超 {months} 个月没核对、有新一届或 Deadline 有变会提醒",
+  "card_count": "{count} · 超 {months} 个月没核对、有下一届或 Deadline 有变会提醒",
   "pending": "核对结果待确认",
   "sep": "、",
   "note": "关注的会议里有 {count} 个的投稿信息可能过期：{list}",

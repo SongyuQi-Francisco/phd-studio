@@ -36,11 +36,19 @@ const noDeadline = (target) => SENT.includes(target.status) ? t("plan.nodl.sent"
   : !target.edition ? t("plan.nodl.next_tba") : target.state === "past" ? t("plan.nodl.past", { edition: target.edition }) : t("plan.nodl.tba", { edition: target.edition });
 // days to the target's next deadline: its calendar event, else the date the target itself reports
 const daysOf = (target, ev) => ev ? daysTo(ev.at) : target.state === "upcoming" && target.next_at ? daysTo(target.next_at) : null;
+// Deadlines taken from the verified CFP carry the track as "<track>（官网）", with "主会" when none is named: these are
+// the backend's machine labels, so strip the tag and show the default track in the interface language.
+const trackName = (label) => {
+  const name = (label || "").replace("（官网）", "").trim(); // i18n-ignore: the data's own tag
+  return !name || name === "主会" ? t("plan.main_track") : name; // i18n-ignore: the data's own default track
+};
+const commentName = (comment) => (comment.includes("官网") ? trackName(comment) : comment); // i18n-ignore: the data's own tag
+const tzName = (tz) => (tz === "官网" ? t("plan.sheet.tz_official") : tz); // i18n-ignore: the backend's label for deadlines from the CFP
 // A venue deadline's title and its part after "ACME 2027", worded here: the server's own title is Chinese.
-const evStage = (e) => [e.comment?.includes("官网") && e.comment.replace("（官网）", "").trim(), // i18n-ignore: the data's own tag
+const evStage = (e) => [e.comment?.includes("官网") && trackName(e.comment), // i18n-ignore: the data's own tag
   t(e.stage === "abstract" ? "plan.stage.abstract" : "plan.stage.full")].filter(Boolean).join(" ");
 const evTitle = (e) => (e.stage ? `${e.acronym} ${e.edition} ${evStage(e)}` : e.title);
-const roundLabel = (r) => [r.comment ? r.comment.replace("（官网）", "") : t("plan.main_track"), // i18n-ignore: strips the data's own tag
+const roundLabel = (r) => [trackName(r.comment),
   r.abstract && t("plan.abstract_at", { at: md(r.abstract) }), r.deadline ? t("plan.full_at", { at: md(r.deadline) }) : t("plan.full_tba")].filter(Boolean).join(" · ");
 
 function Ranks({ core, ccf }) {
@@ -339,7 +347,7 @@ export function VenueSheet({ vkey, onClose, toast, onChanged, onAsk }) {
           <b class="v-when">${fmt(n.at)}</b>
           ${n.paper_at && n.kind === "abstract" && html`<span class="small">${t("plan.full_at", { at: fmt(n.paper_at) })} <${Days} d=${daysTo(n.paper_at)} /></span>`}
           <span class="muted small">${[n.date, n.place].filter(Boolean).join(" · ")}</span>
-          <span class="muted small">${t("plan.sheet.tz_source", { tz: n.timezone })}${n.comment ? " · " + n.comment : ""}</span>` : html`<span class="muted">${t("plan.sheet.no_deadline")}</span>`}
+          <span class="muted small">${t("plan.sheet.tz_source", { tz: tzName(n.timezone) })}${n.comment ? " · " + commentName(n.comment) : ""}</span>` : html`<span class="muted">${t("plan.sheet.no_deadline")}</span>`}
       </div>
       ${rates.length > 0 && html`<div class="v-rate"><b>${(rates[rates.length - 1].rate * 100).toFixed(1)}%</b><span class="muted small">${rates[rates.length - 1].year} ${t("common.term.acceptance_rate")}</span></div>`}
     </div>
@@ -361,7 +369,7 @@ export function VenueSheet({ vkey, onClose, toast, onChanged, onAsk }) {
       <div class="muted small">${rates.map((r) => `${r.year}: ${r.accepted}/${r.submitted}`).join(" · ")}</div>`}
 
     ${d && html`<h3>${t("plan.sheet.tracks")} <span class=${"tag " + (d.status === "confirmed" ? "ok" : "warn")}>${t(d.status === "confirmed" ? "plan.sheet.verified" : d.status === "previous-edition" ? "plan.sheet.from_last" : "plan.sheet.unverified")}</span> <span class="muted small">${[d.edition, d.verified_at && t("plan.sheet.checked", { at: d.verified_at })].filter(Boolean).join(" · ")}</span></h3>
-      ${(d.deadlines || []).length > 0 && html`<div class="mini-table">${d.deadlines.map((x) => html`<div><span>${x.track || t("plan.main_track")}</span><span>${[x.abstract && t("plan.abstract_at", { at: x.abstract }), x.paper && t("plan.full_at", { at: x.paper })].filter(Boolean).join(" · ")}</span></div>`)}</div>`}
+      ${(d.deadlines || []).length > 0 && html`<div class="mini-table">${d.deadlines.map((x) => html`<div><span>${trackName(x.track)}</span><span>${[x.abstract && t("plan.abstract_at", { at: x.abstract }), x.paper && t("plan.full_at", { at: x.paper })].filter(Boolean).join(" · ")}</span></div>`)}</div>`}
       ${(d.tracks || []).length > 0 && html`<div class="mini-table">${d.tracks.map((track) => html`<div><span><b>${track.name}</b></span><span>${track.page_limit || ""}${track.notes ? html`<em class="muted"> ${track.notes}</em>` : ""}</span></div>`)}</div>`}
       ${(d.location || d.dates) && html`<div class="muted small">${[d.dates, d.location].filter(Boolean).join(" · ")}</div>`}
       ${d.format && html`<div class="fmt">

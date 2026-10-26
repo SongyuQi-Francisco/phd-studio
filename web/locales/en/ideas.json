@@ -40,9 +40,6 @@
   "drop_title": "Drop (the record is kept)",
   "promote.button": "Promote to note",
   "promote.label": "Promote idea",
-  "promote.line": " (research line: {line})",
-  "promote.paper": " (from paper {paper})",
-  "promote.prompt": "Turn idea {id} into a proper Idea note. Original text: “{text}”{line}{paper}.\nRequirements: use the structure of the Idea Note Template and, following Idea Maintenance in AGENTS.md, spell out Problem / Why now / Technical core / First Experiment / Kill criteria / Evidence to look for next. First check the related ideas and paper notes already in the vault to avoid duplicates, and link the relevant papers.\nFirst tell me the note's file name and its key points in three or four sentences, then write it into the Idea notes folder. When done, mark this idea as promoted with idea_update and put the note's path in note.",
   "merge.title": {
     "one": "Merge {n} idea",
     "other": "Merge {n} ideas"
