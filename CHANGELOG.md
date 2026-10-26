@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Research maps, part 4: experiment results. Results records (config, dataset, metric, value, date, source) on experiment and result nodes; paste a CSV / TSV / JSON table or point at an output file inside a folder listed in `[paths] results_roots`, map the columns once (the app remembers the mapping for the file) and import it as one atomic batch, optionally watching the file for changes; a results panel with a comparison of configs against baselines and a trend per config, a results section and a latest-value chip on the map; `studio map` (list, show, status, note, `result add / list / import / sync`) for experiment scripts and other sessions, which works with the app stopped; and an assistant tool that proposes results for you to confirm ([#48](https://github.com/SongyuQi-Francisco/phd-studio/issues/48))
 
+### Fixed
+
+- The demo generator (`scripts/demo/make_demo.py`) failed on a Mac with its default output folder: results files under `~/Library/Application Support` were refused. Only credentials and the app's own folders are closed now, and a test builds a whole demo workspace offline ([#66](https://github.com/SongyuQi-Francisco/phd-studio/issues/66))
+
 ## [0.1.0] - 2026-10-25
 
 ### Added
