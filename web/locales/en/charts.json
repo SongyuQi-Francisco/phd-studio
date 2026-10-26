@@ -1,0 +1,6 @@
+{
+  "week_of": "Week of {date}",
+  "heat_total": "Last {weeks} weeks: {total}",
+  "heat_less": "Less",
+  "heat_more": "More"
+}

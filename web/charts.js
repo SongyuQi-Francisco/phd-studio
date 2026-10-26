@@ -1,8 +1,10 @@
 // Small SVG charts shared by the pages: Sparkline, Bars, Ring, Progress, Donut, HeatStrip, Funnel.
 // Colors are CSS variables (--series-*, --ord-*, --heat-*), so light / dark mode follow the theme.
 // Every chart has a hover tooltip and a visually hidden table, so no value is reachable by color alone.
+// i18n: done
 import { useEffect, useRef, useState } from "preact/hooks";
 import { html } from "/lib.js";
+import { t, tx, formatDate } from "/i18n.js";
 
 export const C = { blue: "var(--series-1)", orange: "var(--series-2)", aqua: "var(--series-3)", gray: "var(--series-0)" };
 const nice = (v) => (v >= 1000 ? (v / 1000).toFixed(v >= 10000 ? 0 : 1) + "K" : String(Math.round(v * 10) / 10));
@@ -48,7 +50,8 @@ export function Legend({ items, shape = "rect" }) {
 }
 
 // ---------- sparkline: one series, area wash, end dot, crosshair ----------
-export function Sparkline({ values, labels = [], height = 36, color = C.blue, format = nice, unit = "" }) {
+// `unit(n)` words a value for the tooltip (default: the number alone), e.g. (n) => t("common.unit.papers", { n }).
+export function Sparkline({ values, labels = [], height = 36, color = C.blue, format = nice, unit }) {
   const [ref, w] = useWidth(60);
   const [tip, show, hide] = useTip(ref);
   const [hi, setHi] = useState(null);
@@ -62,7 +65,7 @@ export function Sparkline({ values, labels = [], height = 36, color = C.blue, fo
     const r = ref.current.getBoundingClientRect();
     const i = Math.max(0, Math.min(n - 1, Math.round(((e.clientX - r.left - pad) / Math.max(1, w - 2 * pad)) * (n - 1))));
     setHi(i);
-    show(e, html`<${TipRow} color=${color} line value=${format(values[i]) + unit} label=${labels[i] || ""} />`);
+    show(e, html`<${TipRow} color=${color} line value=${unit ? unit(values[i]) : format(values[i])} label=${labels[i] || ""} />`);
   };
   return html`<div class="ch spark" ref=${ref} style=${{ height: height + "px" }} onMouseMove=${move} onMouseLeave=${() => { setHi(null); hide(); }}>
     ${w > 0 && n > 0 && html`<svg width=${w} height=${height} aria-hidden="true">
@@ -103,8 +106,8 @@ export function Bars({ labels, series, height = 132, format = nice, every, legen
     ${legend && k > 1 && html`<${Legend} items=${series.map((s) => ({ label: s.name, color: s.color }))} />`}
     <div class="ch-box" ref=${ref} onMouseLeave=${() => { setHi(null); hide(); }}>
       ${w > 0 && html`<svg width=${w} height=${height} aria-hidden="true">
-        ${ticks.map((t) => html`<line x1=${L} x2=${w} y1=${y(t)} y2=${y(t)} class="ch-grid" />
-          <text x=${L - 6} y=${y(t) + 3.5} text-anchor="end" class="ch-tick">${format(t)}</text>`)}
+        ${ticks.map((tick) => html`<line x1=${L} x2=${w} y1=${y(tick)} y2=${y(tick)} class="ch-grid" />
+          <text x=${L - 6} y=${y(tick) + 3.5} text-anchor="end" class="ch-tick">${format(tick)}</text>`)}
         ${labels.map((lb, i) => {
           const x0 = L + i * band, g0 = x0 + (band - (k * bw + (k - 1) * 2)) / 2;
           return html`<g key=${lb}>
@@ -127,7 +130,7 @@ export function Ring({ value, max = 1, size = 76, stroke = 7, color = C.blue, ch
   const r = (size - stroke) / 2, len = 2 * Math.PI * r;
   const frac = Math.max(0, Math.min(1, max ? value / max : 0));
   const [on, setOn] = useState(false);
-  useEffect(() => { const t = requestAnimationFrame(() => setOn(true)); return () => cancelAnimationFrame(t); }, []);
+  useEffect(() => { const raf = requestAnimationFrame(() => setOn(true)); return () => cancelAnimationFrame(raf); }, []);
   return html`<div class="ring" style=${{ width: size + "px", height: size + "px" }} title=${title || ""}>
     <svg width=${size} height=${size} viewBox=${`0 0 ${size} ${size}`} aria-hidden="true">
       <circle cx=${size / 2} cy=${size / 2} r=${r} class="ring-track" style=${{ stroke: color, strokeWidth: stroke }} />
@@ -157,7 +160,7 @@ export function Donut({ data, size = 128, thickness = 14, children, onPick }) {
   const gap = segs.length > 1 ? 2 / r : 0;
   let a0 = -Math.PI / 2;
   const arc = (a, b) => {
-    const p = (t) => `${cx + r * Math.cos(t)} ${cx + r * Math.sin(t)}`;
+    const p = (ang) => `${cx + r * Math.cos(ang)} ${cx + r * Math.sin(ang)}`;
     return `M${p(a)} A${r} ${r} 0 ${b - a > Math.PI ? 1 : 0} 1 ${p(b)}`;
   };
   return html`<div class="ch donut" ref=${boxRef} style=${{ width: size + "px", height: size + "px" }} onMouseLeave=${() => { setHi(null); hide(); }}>
@@ -182,7 +185,8 @@ export function Donut({ data, size = 128, thickness = 14, children, onPick }) {
 
 // ---------- heat strip: days x weeks, one hue light -> dark ----------
 const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-export function HeatStrip({ counts, weeks: fixed, unit = "件", cell = 11 }) {
+// `unit(n)` words a count, e.g. (n) => t("common.unit.times", { n }); the default counts items.
+export function HeatStrip({ counts, weeks: fixed, unit = (n) => t("common.unit.items", { n }), cell = 11 }) {
   const [boxRef, w] = useWidth(120);
   const [tip, show, hide] = useTip(boxRef);
   const weeks = fixed || Math.max(8, Math.min(53, Math.floor((w + 3) / (cell + 3))));
@@ -194,12 +198,13 @@ export function HeatStrip({ counts, weeks: fixed, unit = "件", cell = 11 }) {
   for (let wk = 0; wk < weeks; wk++) {
     const days = [];
     for (let d = 0; d < 7; d++) {
-      const t = new Date(start); t.setDate(start.getDate() + wk * 7 + d);
-      days.push(t > today ? null : { key: iso(t), date: t, v: counts[iso(t)] || 0 });
+      const day = new Date(start); day.setDate(start.getDate() + wk * 7 + d);
+      days.push(day > today ? null : { key: iso(day), date: day, v: counts[iso(day)] || 0 });
     }
     cols.push(days);
   }
-  const months = cols.map((c, i) => (c[0] && (i === 0 || c[0].date.getDate() <= 7) ? `${c[0].date.getMonth() + 1}月` : ""));
+  const startsMonth = (c) => !!c && !!c[0] && c[0].date.getDate() <= 7;
+  const months = cols.map((c, i) => (c[0] && (startsMonth(c) || (i === 0 && !startsMonth(cols[1]))) ? formatDate(c[0].date, { month: "short" }) : ""));
   const W = weeks * (cell + g), H = 7 * (cell + g) + 14;
   const total = Object.entries(counts).filter(([k]) => k >= iso(start)).reduce((a, [, v]) => a + v, 0);
   return html`<div class="ch heat" ref=${boxRef} onMouseLeave=${hide}>
@@ -207,10 +212,10 @@ export function HeatStrip({ counts, weeks: fixed, unit = "件", cell = 11 }) {
       ${months.map((m, i) => m && html`<text x=${i * (cell + g)} y="9" class="ch-tick">${m}</text>`)}
       ${cols.map((c, i) => c.map((d, j) => d && html`<rect x=${i * (cell + g)} y=${14 + j * (cell + g)} width=${cell} height=${cell} rx="2.5"
         class=${"heat-" + level(d.v) + (d.key === iso(today) ? " today" : "")}
-        onMouseMove=${(e) => show(e, html`<${TipRow} value=${`${d.v} ${unit}`} label=${d.date.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric", weekday: "short" })} />`)} />`))}
+        onMouseMove=${(e) => show(e, html`<${TipRow} value=${unit(d.v)} label=${formatDate(d.date, { month: "short", day: "numeric", weekday: "short" })} />`)} />`))}
     </svg>`}
-    <div class="heat-foot"><span>${weeks} 周共 <b>${total}</b> ${unit}</span>
-      <span class="heat-scale">少${[0, 1, 2, 3, 4].map((l) => html`<i class=${"heat-" + l} />`)}多</span></div>
+    <div class="heat-foot"><span>${tx("charts.heat_total", { weeks, total: html`<b>${unit(total)}</b>` })}</span>
+      <span class="heat-scale">${t("charts.heat_less")}${[0, 1, 2, 3, 4].map((l) => html`<i class=${"heat-" + l} />`)}${t("charts.heat_more")}</span></div>
     ${tip}
   </div>`;
 }
@@ -234,7 +239,7 @@ export function weekStarts(n = 12) {
   const d = new Date(); d.setHours(0, 0, 0, 0);
   d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); // Monday of this week
   const out = [];
-  for (let i = n - 1; i >= 0; i--) { const t = new Date(d); t.setDate(d.getDate() - i * 7); out.push(t); }
+  for (let i = n - 1; i >= 0; i--) { const start = new Date(d); start.setDate(d.getDate() - i * 7); out.push(start); }
   return out;
 }
 export function perWeek(dates, n = 12) {
@@ -243,10 +248,12 @@ export function perWeek(dates, n = 12) {
   const end = new Date(); end.setHours(23, 59, 59, 999);
   for (const s of dates) {
     if (!s) continue;
-    const t = new Date(s.length <= 10 ? s + "T12:00:00" : s);
-    if (t > end) continue;
-    for (let i = n - 1; i >= 0; i--) if (t >= starts[i]) { counts[i]++; break; }
+    const at = new Date(s.length <= 10 ? s + "T12:00:00" : s);
+    if (at > end) continue;
+    for (let i = n - 1; i >= 0; i--) if (at >= starts[i]) { counts[i]++; break; }
   }
-  return { labels: starts.map((t) => `${t.getMonth() + 1}/${t.getDate()}`), counts };
+  return { labels: starts.map((start) => formatDate(start, { month: "numeric", day: "numeric" })), counts };
 }
+// The tooltip label for one of perWeek's labels ("10/6" -> "10/6 那周" | "Week of 10/6").
+export const weekLabel = (label) => t("charts.week_of", { date: label });
 export const dayKey = (s) => (s || "").slice(0, 10);
