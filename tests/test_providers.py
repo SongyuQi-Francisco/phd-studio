@@ -360,7 +360,8 @@ def test_file_tools_stay_inside_the_readable_folders(write_vault_file, tmp_path)
 def test_studio_queries_for_api_models_are_read_only():
     names = [t.name for t in ro_tools.for_chat(studio=True)]
     assert names[:3] == ["read_file", "list_dir", "search_text"]
-    assert set(names[3:]) == {"reading_list", "idea_list", "timeline", "venue_search", "tracker_latest", "map_read"}
+    assert set(names[3:]) == {"reading_list", "idea_list", "timeline", "venue_search", "tracker_latest", "map_read",
+                              "map_gaps", "map_peer_suggest"}
     assert [t.name for t in ro_tools.for_chat(studio=False)] == ["read_file", "list_dir", "search_text"]
     out = asyncio.run(next(t for t in ro_tools.studio_tools() if t.name == "reading_list").call({}))
     assert json.loads(out) == []

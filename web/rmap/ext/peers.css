@@ -1,0 +1,120 @@
+/* Peer layer (同行层, #47): orange pills with the peer count, the aqua dashed 空白 outline, the 撞车风险 tag,
+   the peer section of the detail panel, the suggestions and the 同行分析 view. Tokens from rmap.css. */
+
+/* ---- on the map ---- */
+.rmap .mp-node.mpp-gap .mp-n-bg { stroke: var(--mp-verified); stroke-dasharray: 4 3; stroke-width: 1.2; }
+.rmap .mp-node.mpp-risk .mp-n-bg { stroke: color-mix(in srgb, var(--mp-peer) 75%, var(--mp-node-line)); }
+.rmap .mp-node.sel.mpp-gap .mp-n-bg, .rmap .mp-node.sel.mpp-risk .mp-n-bg { stroke: var(--mp-active); stroke-dasharray: none; stroke-width: 1.5; }
+.mp-layer-g.peers { pointer-events: none; }
+.mpp-pill rect { fill: var(--mp-peer-bg); stroke: color-mix(in srgb, var(--mp-peer) 55%, transparent); stroke-width: 1; }
+.mpp-pill text { font: 600 10px var(--mp-mono); fill: var(--mp-peer); }
+.mpp-pill.risk rect { fill: var(--mp-peer); stroke: none; }
+.mpp-pill.risk text { fill: #fff; }
+.mpp-tag rect { stroke-width: 1; }
+.mpp-tag text { font: 600 9.5px -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; }
+.mpp-tag.gap rect { fill: color-mix(in srgb, var(--mp-verified) 14%, var(--mp-canvas)); stroke: color-mix(in srgb, var(--mp-verified) 60%, transparent); stroke-dasharray: 3 2; }
+.mpp-tag.gap text { fill: var(--mp-verified); }
+.mpp-tag.risk rect { fill: color-mix(in srgb, var(--mp-peer) 16%, var(--mp-canvas)); stroke: var(--mp-peer); }
+.mpp-tag.risk text { fill: var(--mp-peer); }
+.mp-legend .mpp-lg { display: inline-flex; align-items: center; gap: 5px; }
+.mp-legend .mpp-lg + .mpp-lg { margin-left: 12px; }
+.mpp-lg i { display: inline-grid; place-items: center; font: 600 9px var(--mp-mono); font-style: normal; }
+.mpp-lg i.pill { min-width: 16px; height: 12px; border-radius: 6px; padding: 0 3px; color: var(--mp-peer); background: var(--mp-peer-bg);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mp-peer) 55%, transparent); }
+.mpp-lg i.gap { width: 14px; height: 10px; border-radius: 3px; border: 1px dashed var(--mp-verified); }
+.mpp-lg i.risk { width: 14px; height: 10px; border-radius: 5px; background: var(--mp-peer); }
+
+/* ---- KPI tile ---- */
+.mpp-aqua { color: var(--mp-verified); }
+.mpp-orange { color: var(--mp-peer); }
+.mpp-gapbar { display: flex; gap: 3px; height: 8px; }
+.mpp-gapbar i { flex: 1; max-width: 26px; border-radius: 2px; background: color-mix(in srgb, var(--mp-peer) 45%, transparent); }
+.mpp-gapbar i.gap { background: none; border: 1px dashed var(--mp-verified); }
+
+/* ---- detail panel ---- */
+.mpp-flag { font-size: 11.5px; line-height: 1.4; padding: 5px 8px; border-radius: 7px; margin-bottom: 6px; }
+.mpp-flag.risk { color: var(--mp-peer); background: color-mix(in srgb, var(--mp-peer) 10%, transparent); }
+.mpp-flag.gap { color: var(--mp-verified); border: 1px dashed color-mix(in srgb, var(--mp-verified) 55%, transparent); }
+.mpp-list { display: flex; flex-direction: column; gap: 6px; }
+.mpp-row { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; }
+.mpp-ring { flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font: 650 9.5px var(--mp-mono);
+  color: var(--mp-peer); box-shadow: inset 0 0 0 1.5px var(--mp-peer); background: var(--mp-peer-bg); letter-spacing: -.02em; }
+.mpp-ring.t-scholar { border-radius: 50%; }
+.mpp-ring.t-lab { border-radius: 6px; }
+.mpp-ring.sm { width: 18px; height: 18px; font-size: 8px; box-shadow: inset 0 0 0 1px var(--mp-peer); }
+.mpp-main { flex: 1; min-width: 0; }
+.mpp-t { display: block; max-width: 100%; text-align: left; font-weight: 550; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button.mpp-t:hover { color: var(--accent); }
+.mpp-meta { color: var(--text-3); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mpp-also { color: var(--mp-peer); }
+.mpp-note { color: var(--text-2); font-size: 11.5px; }
+.mpp-rel { flex: none; border: 0; background: none; font: 11px var(--mp-mono); color: var(--text-3); padding: 0; max-width: 84px; cursor: pointer; }
+.mpp-rel.r-same { color: var(--mp-peer); }
+.mpp-row:hover .mp-chip-x, .mpp-sug:hover .mpp-show { opacity: 1; }
+.mpp-node-sugs { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--line); display: flex; flex-direction: column; gap: 6px; }
+.mpp-sub-h { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--text-3); }
+
+/* ---- suggestions ---- */
+.mpp-tool { position: relative; }
+.mpp-count { font: 600 10px var(--mp-mono); font-style: normal; color: #fff; background: var(--mp-peer); border-radius: 99px; padding: 0 5px; margin-left: 2px; }
+.mpp-pop { position: absolute; z-index: 20; top: 34px; right: 0; width: min(440px, 86vw); max-height: 70vh; overflow-y: auto; padding: 10px;
+  border-radius: 12px; background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 8px; }
+.mpp-pop-h { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.mpp-ask { align-self: flex-start; }
+.mpp-sug { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: var(--surface); display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.mpp-sug-h { display: flex; align-items: flex-start; gap: 6px; }
+.mpp-sug-t { flex: 1; min-width: 0; text-align: left; font-size: 12.5px; font-weight: 550; color: var(--text); line-height: 1.35; }
+a.mpp-sug-t, button.mpp-sug-t { cursor: pointer; }
+a.mpp-sug-t:hover, button.mpp-sug-t:hover { color: var(--accent); }
+.mpp-sug-m { display: flex; flex-direction: column; gap: 4px; padding-top: 4px; border-top: 1px dashed var(--line); }
+.mpp-sug-to { display: flex; align-items: baseline; gap: 6px; font-size: 12px; min-width: 0; }
+.mpp-proj { font-size: 11px; color: var(--text-3); white-space: nowrap; }
+.mpp-node-link { min-width: 0; text-align: left; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mpp-node-link:hover { color: var(--accent); }
+.mpp-acts { display: flex; flex-wrap: wrap; gap: 4px; }
+.mpp-act { font-size: 11px; padding: 2px 8px; border-radius: 99px; border: 1px solid var(--line); color: var(--text-2); }
+.mpp-act:hover:not(:disabled) { color: var(--mp-peer); border-color: color-mix(in srgb, var(--mp-peer) 55%, transparent); background: color-mix(in srgb, var(--mp-peer) 8%, transparent); }
+.mpp-act.as-ev:hover:not(:disabled) { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, transparent); background: var(--accent-soft); }
+.mpp-act:disabled { opacity: .45; cursor: default; }
+
+/* ---- 同行分析 view ---- */
+.mpp-an { display: flex; flex-direction: column; gap: 12px; }
+.mpp-an .mp-kpis { margin-bottom: 0; }
+.mpp-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); box-shadow: var(--card-shadow); min-width: 0; }
+.mpp-card-h { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; padding: 12px 14px 8px; }
+.mpp-card-h h3 { margin: 0; font-size: 13.5px; font-weight: 650; display: inline-flex; align-items: baseline; gap: 6px; }
+.mpp-card-h h3 small { font: 11px var(--mp-mono); color: var(--text-3); }
+.mpp-pad { padding: 0 14px 14px; }
+.mpp-swatches { margin-left: auto; display: inline-flex; gap: 10px; font-size: 11px; color: var(--text-2); }
+.mpp-swatches span { display: inline-flex; align-items: center; gap: 4px; }
+.mpp-swatches i { width: 10px; height: 10px; border-radius: 2px; background: var(--mp-peer); }
+.mpp-heat-scroll { overflow-x: auto; padding: 0 6px 10px; }
+.mpp-heat { border-collapse: separate; border-spacing: 2px; font-size: 12px; }
+.mpp-heat th { font-weight: 500; }
+.mpp-colh { vertical-align: bottom; padding: 0 0 4px; height: 128px; }
+.mpp-colh span { display: inline-block; writing-mode: vertical-rl; transform: rotate(180deg); max-height: 124px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; font-size: 11px; color: var(--text-2); text-align: left; }
+.mpp-colh span.shared { color: var(--mp-peer); }
+.mpp-colh.sum span, .mpp-colh.more span { font-family: var(--mp-mono); color: var(--text-3); }
+.mpp-rowh { text-align: left; min-width: 220px; max-width: 320px; padding: 2px 8px; }
+.mpp-rowt { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.mpp-rowt button, .mpp-rowt > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; color: var(--text); }
+.mpp-rowt button:hover { color: var(--accent); }
+.mpp-proj th { text-align: left; padding: 10px 8px 4px; font-size: 12.5px; font-weight: 650; color: var(--text); border-bottom: 1px solid var(--line); }
+.mpp-proj th button:hover { color: var(--accent); }
+.mpp-proj small { margin-left: 8px; font-size: 11px; font-weight: 400; color: var(--text-3); }
+.mpp-cell { width: 22px; height: 22px; padding: 0; text-align: center; background: color-mix(in srgb, var(--mp-grid) 70%, transparent); border-radius: 4px; }
+.mpp-cell i { display: block; width: 22px; height: 22px; border-radius: 4px; background: var(--mp-peer); }
+.mpp-cell.sum, .mpp-cell.more { background: none; font-size: 11px; color: var(--text-2); min-width: 28px; }
+.mpp-zero { color: var(--mp-verified); }
+.mpp-heat tr.gap .mpp-rowh { box-shadow: inset 2px 0 0 var(--mp-verified); }
+.mpp-heat tr.risk .mpp-rowh { box-shadow: inset 2px 0 0 var(--mp-peer); }
+.mpp-chip { flex: none; font-style: normal; font-size: 10px; padding: 0 6px; border-radius: 99px; line-height: 15px; }
+.mpp-chip.gap { color: var(--mp-verified); border: 1px dashed color-mix(in srgb, var(--mp-verified) 60%, transparent); }
+.mpp-chip.risk { color: var(--mp-peer); background: color-mix(in srgb, var(--mp-peer) 14%, transparent); }
+.mpp-lists { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.mpp-ul { list-style: none; margin: 0; padding: 0 14px 12px; display: flex; flex-direction: column; gap: 7px; font-size: 12.5px; }
+.mpp-ul li { display: grid; grid-template-columns: 10px minmax(0, 1fr); column-gap: 8px; align-items: center; }
+.mpp-ul .mpp-meta, .mpp-ul .mpp-peers { grid-column: 2; }
+.mpp-peers { display: flex; gap: 3px; margin-top: 2px; }
+.mpp-sug-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 8px; padding: 0 14px 14px; }

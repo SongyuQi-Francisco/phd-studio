@@ -1,8 +1,8 @@
 """In-process MCP tools that let the Studio assistant change the workbench itself:
 reading list, milestones, submission targets, watched venues, ideas.
 
-These write only the app's own YAML stores (direct, no approval card), except venue_details_propose and
-map_propose, which only record a proposal the user confirms (venue sheet, research map page). Every
+These write only the app's own YAML stores (direct, no approval card), except venue_details_propose,
+map_propose and map_peer_propose, which only record a proposal the user confirms (venue sheet, research map page). Every
 change is reported to the UI through `emit` so the pages refresh and the chat
 shows what was done.
 """
@@ -16,7 +16,7 @@ from typing import Any
 from claude_agent_sdk import SdkMcpTool, create_sdk_mcp_server, tool
 
 from . import idea_ops, plan, reading, tracking, venue_check, venues
-from .rmap import lines as rmap_lines, project as rmap_project, proposals as rmap_proposals
+from .rmap import lines as rmap_lines, peers as rmap_peers, project as rmap_project, proposals as rmap_proposals
 
 SERVER = "studio"
 
@@ -38,13 +38,16 @@ def _err(msg: str) -> dict[str, Any]:
 
 
 # What the non-Claude models may call (through ro_tools): queries only.
-READ_ONLY = ("reading_list", "idea_list", "timeline", "venue_search", "tracker_latest", "map_read")
+READ_ONLY = ("reading_list", "idea_list", "timeline", "venue_search", "tracker_latest", "map_read", "map_gaps",
+             "map_peer_suggest")
 
 MAP_OPS = ("ops 是一批操作（按顺序；新节点用 ref=\"$名字\"，后面的操作可用 $名字 指它）："
            "{op:node.add, ref, parent:<节点 id 或 $名字>, edge:refines|depends, set:{type, title, status, body}}；"
            "{op:node.update, id, set:{status|title|body|type}}；{op:node.delete, id}；"
            "{op:edge.add, from, to, kind:refines|depends|alternative|conflicts, label}；{op:edge.delete, id}；"
-           "{op:attach.add, kind:evidence, node, set:{type:paper|note|file|url, target, title, note, stance:supports|contradicts|context}}。"
+           "{op:attach.add, kind:evidence, node, set:{type:paper|note|file|url, target, title, note, stance:supports|contradicts|context}}；"
+           "同行用 {op:attach.add, kind:peer, node, set:{type:paper|scholar|lab, title, relation:same|competing|builds_on, url, date, entity}}"
+           "（挂同行更方便的是 map_peer_propose）。"
            "type: question 问题 / hypothesis 路径或假设 / subline 子线 / experiment 实验 / result 结果 / decision 决策 / kill Kill criteria / open 开放问题；"
            "status: todo 未开始 / active 进行中 / verified 已验证 / blocked 没打通 / refuted 证伪 / dropped 放弃。"
            "证据 target：paper=论文笔记名，note/file=vault 相对路径，url=链接。")
@@ -76,9 +79,13 @@ def _map_brief(slug: str) -> dict[str, Any]:
     ev: dict[str, list[str]] = {}
     for a in m["attachments"].get("evidence", []):
         ev.setdefault(a["node"], []).append(a.get("title") or a["target"])
+    peers: dict[str, list[str]] = {}
+    for a in m["attachments"].get("peer", []):
+        peers.setdefault(a["node"], []).append(f"{a['title']} ({a['relation']})")
     nodes = [{"id": n["id"], "type": n["type"], "status": n.get("status", "todo"), "title": n["title"],
               **({"parents": parents[n["id"]]} if n["id"] in parents else {}),
               **({"evidence": ev[n["id"]]} if n["id"] in ev else {}),
+              **({"peers": peers[n["id"]]} if n["id"] in peers else {}),
               **({"body": n["body"][:300]} if n.get("body") else {})} for n in m["nodes"]]
     log = [{"at": e["at"], "who": e.get("who"), "text": e.get("summary")}
            for e in rmap_project.get(slug).events(kind="log", limit=8)["events"]]
@@ -363,7 +370,71 @@ def _tools(emit: Callable[[dict[str, Any]], Awaitable[None]]) -> list[SdkMcpTool
         except KeyError as e:
             return _err(e.args[0])
 
+    @tool("map_gaps", "研究地图的同行分析：空白分支（进行中的假设/子线没有任何同行在做）和撞车风险（节点进行中，"
+                      "且做同一或竞争做法的同行 ≥ 3，或同一做法 ≥ 2），以及每个节点的同行数。不给 project 就看所有课题。",
+          _obj({"project": S}, []))
+    async def map_gaps(a):
+        if a.get("project"):
+            slug = _map_slug(a["project"])
+            if not slug:
+                return _err(f"没有这张地图：{a['project']}")
+            r = rmap_peers.analyze(slug)
+            return _ok({"project": r["title"], "slug": slug, "rule": {"dense": rmap_peers.DENSE, "same_dense": rmap_peers.SAME_DENSE},
+                        "gaps": [{k: g[k] for k in ("id", "title", "type", "status")} for g in r["gaps"]],
+                        "risks": [{k: g[k] for k in ("id", "title", "status", "same", "competing", "builds_on")} | {"peers": [p["title"] for p in g["peers"]]}
+                                  for g in r["risks"]],
+                        "nodes": [{k: n[k] for k in ("id", "title", "type", "status", "n")} for n in r["nodes"] if n["n"]]})
+        o = rmap_peers.overview()
+        return _ok({"rule": o["rule"], "gaps": o["gaps"], "risks": o["risks"],
+                    "shared_peers": [{"title": c["title"], "projects": c["projects"]} for c in o["columns"] if len(c["projects"]) > 1]})
+
+    @tool("map_peer_suggest", "同行推荐的候选：追踪页本周雷达、关注的关键词和学者、阅读清单里的新论文，按关键词配到可能相关的节点"
+                              "（matches 里有 slug、node、共同的词）。这是粗配：读标题和摘要判断真正该挂哪个节点、什么关系，"
+                              "不相关的跳过，再用 map_peer_propose 提交。project 可选。",
+          _obj({"project": S}, []))
+    async def map_peer_suggest(a):
+        slug = None
+        if a.get("project"):
+            slug = _map_slug(a["project"])
+            if not slug:
+                return _err(f"没有这张地图：{a['project']}")
+        rows = rmap_peers.suggestions(slug)
+        return _ok([{k: s[k] for k in ("key", "title", "arxiv", "ext", "url", "authors", "date", "venue", "paper", "sources", "abstract")}
+                    | {"matches": [{k: m[k] for k in ("slug", "node", "title", "status", "terms")} for m in s["matches"]]} for s in rows])
+
+    @tool("map_peer_propose",
+          "把同行挂到研究地图节点上，记成提案，用户在研究地图页确认后才写入。peers 每项：node（节点 id，来自 map_read / map_gaps / "
+          "map_peer_suggest）、type（paper|scholar|lab）、title、relation（same 同一做法 | competing 竞争做法 | builds_on 在其基础上），"
+          "可选 arxiv、ext（doi:/openreview:/acl: 键）、url、authors、venue、date（YYYY-MM）、note（一句为什么）。"
+          "同一篇论文在几个课题里会被认成同一个同行（按 arXiv 号等）。",
+          _obj({"project": S, "summary": S, "peers": {"type": "array", "items": {"type": "object"}}}, ["project", "summary", "peers"]))
+    async def map_peer_propose(a):
+        slug = _map_slug(a.get("project") or "")
+        if not slug:
+            return _err(f"没有这张地图：{a.get('project')}")
+        ops = []
+        for p in a.get("peers") or []:
+            if not isinstance(p, dict):
+                return _err("peers 每项应为对象")
+            kind = p.get("type") or "paper"
+            url = p.get("url") or (f"https://arxiv.org/abs/{p['arxiv']}" if p.get("arxiv") else None)
+            entity = p.get("entity") or rmap_peers.entity_for(kind, title=p.get("title"), arxiv=p.get("arxiv"), ext=p.get("ext"),
+                                                             lab=p.get("title") if kind == "lab" else None)
+            ops.append({"op": "attach.add", "kind": "peer", "node": p.get("node"),
+                        "set": {k: v for k, v in {"type": kind, "title": p.get("title"), "relation": p.get("relation"), "url": url,
+                                                  "authors": p.get("authors"), "venue": p.get("venue"), "date": p.get("date"),
+                                                  "note": p.get("note"), "source": "assistant", "entity": entity}.items() if v}})
+        try:
+            prop = rmap_proposals.propose(ops_=ops, summary=a.get("summary") or "", slug=slug)
+        except (KeyError, ValueError) as e:
+            return _err(e.args[0] if e.args else str(e))
+        title = rmap_project.summary(rmap_project.get(slug))["title"]
+        await changed("rmap", f"研究地图：{title} 有 {len(ops)} 个同行待你确认", prop)
+        return _ok({"proposal": prop["id"], "changes": rmap_proposals.describe(prop),
+                    "note": "已提交，等用户在研究地图页确认后才会写入；你不能应用它。"})
+
     tools = [reading_push, reading_list, reading_update, milestone_add, milestone_update, target_add,
              target_update, venue_search, venue_watch, idea_add, idea_update, idea_merge, idea_list, follow,
-             tracker_latest, timeline, venue_details_propose, map_read, map_propose, map_seed_draft]
+             tracker_latest, timeline, venue_details_propose, map_read, map_propose, map_seed_draft, map_gaps,
+             map_peer_suggest, map_peer_propose]
     return tools
