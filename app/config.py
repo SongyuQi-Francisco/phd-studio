@@ -76,6 +76,10 @@ CLAUDE_CLI = Path(_cli if _cli and Path(_cli).exists() else shutil.which("claude
 # Extra folders Claude may read (code repos, drafts), relative to the vault or absolute.
 EXTRA_READ_DIRS = [str(_p(d) if d.startswith(("/", "~")) else (VAULT_DIR / d).resolve())
                    for d in _paths.get("extra_read_dirs", [])]
+# Folders the research map may read experiment results files (CSV / JSON) from, relative to the vault or absolute.
+# Empty (the default): results can only be pasted. Nothing outside these folders is read, links included.
+RESULTS_ROOTS = [str(_p(d) if d.startswith(("/", "~")) else (VAULT_DIR / d).resolve())
+                 for d in _paths.get("results_roots", [])]
 VAULT_NAME = VAULT_DIR.name
 
 # Small, valuable state (chat logs, session ids, settings) stays with the project, one

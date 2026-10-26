@@ -54,10 +54,14 @@ class AttachmentKind:
     check: Callable[[dict[str, Any]], None] | None = None   # whole record, after a change; raise ValueError
     log: str = "each"                  # "each": an event per record; "batch": one per batch (bulk imports)
     extra: dict[str, Any] = field(default_factory=dict)     # free-form, passed to the front end via /meta
+    shard: str = ""                    # "node": one file per node in a folder (`file`, default the kind's name), so a big
+                                       # import on one node never rewrites the others' records
+    identity: Callable[[dict[str, Any]], tuple] | None = None  # what tells two records of the kind apart on one node: a
+                                       # proposal that adds a record that exists by the time it is confirmed is stale
 
     @property
     def filename(self) -> str:
-        return self.file or f"{self.name}.yaml"
+        return self.file or (self.name if self.shard else f"{self.name}.yaml")
 
     def clean(self, patch: dict[str, Any], *, new: bool) -> dict[str, Any]:
         unknown = set(patch) - set(self.fields) - {"entity"}
@@ -96,6 +100,8 @@ def attachment_kind(kind: AttachmentKind) -> AttachmentKind:
         raise ValueError(f"attachment file already in use: {kind.filename}")
     if kind.log not in ("each", "batch"):
         raise ValueError("log must be 'each' or 'batch'")
+    if kind.shard not in ("", "node"):
+        raise ValueError("shard must be '' or 'node'")
     KINDS[kind.name] = kind
     return kind
 

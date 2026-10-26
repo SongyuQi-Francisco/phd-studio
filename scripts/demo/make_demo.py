@@ -78,6 +78,7 @@ idea_radar = "Ideas/Idea Radar.md"
 lab_tracker = "Lab Tracker"
 tracker = "{tracker}"
 extra_read_dirs = []
+results_roots = ["{experiments}"]
 
 [profile]
 about = "Second-year PhD student in NLP (a fictional demo profile). Works on retrieval-augmented generation and long-context Transformers. Prefers answers in Chinese; reads English papers slowly."
@@ -955,6 +956,74 @@ RMAP_BEACON = [
 ]
 
 
+def _res(node: str, config: str, metric: str, value: float, off: int, dataset: str | None = None, **extra: Any) -> dict[str, Any]:
+    """One fictional measurement on an experiment node, dated `off` days from today."""
+    rec = {"config": config, "metric": metric, "value": value, "date": day(off), "source": extra.pop("source", "run.log")}
+    if dataset:
+        rec["dataset"] = dataset
+    return {"op": "attach.add", "kind": "results", "node": node, "set": {**rec, **extra}}
+
+
+# Fictional experiment results (docs/research-map.md, "Experiment results"), merged into the timelines above.
+RMAP_RESULTS: dict[str, list[tuple[int, str | None, list[dict[str, Any]]]]] = {
+    "Project Atlas": [
+        (-31, None, [_res("$x1", "Annotators A vs B", "Cohen's kappa", 0.71, -31, "300 answers", source="annotation.csv")]),
+        (-27, None, [_res("$x2", "NLI verifier", "Agreement", 0.71, -27, "Dev-300", baseline=True),
+                     _res("$x2", "Reranker verifier", "Agreement", 0.68, -27, "Dev-300"),
+                     _res("$x2", "NLI verifier", "F1", 0.66, -27, "Dev-300", baseline=True),
+                     _res("$x2", "Reranker verifier", "F1", 0.62, -27, "Dev-300")]),
+        (-24, None, [_res("$x6", "Attribution metric", "Spearman", 0.62, -24, "100 answers")]),
+        (-21, None, [_res("$x2", "Reranker verifier", "Agreement", 0.72, -21, "Dev-300"),
+                     _res("$x2", "Reranker verifier", "F1", 0.69, -21, "Dev-300"),
+                     _res("$x2", "NLI verifier", "Agreement", 0.71, -21, "Dev-300", baseline=True)]),
+        (-17, None, [_res("$x2", "Reranker verifier", "Agreement", 0.77, -17, "Dev-300"),
+                     _res("$x2", "Reranker + calibration", "Agreement", 0.79, -17, "Dev-300"),
+                     _res("$x2", "NLI verifier", "Agreement", 0.71, -17, "Dev-300", baseline=True),
+                     _res("$x2", "Reranker verifier", "F1", 0.73, -17, "Dev-300"),
+                     _res("$x2", "Reranker + calibration", "F1", 0.75, -17, "Dev-300"),
+                     _res("$x2", "NLI verifier", "F1", 0.67, -17, "Dev-300", baseline=True)]),
+        (-9, None, [_res("$x5", "Retrieval misses", "Share of errors", 0.31, -9, "300 answers")]),
+        (-2, None, [_res("$x3", "NLI verifier", "Latency (ms)", 12.4, -2, baseline=True),
+                    _res("$x3", "Reranker verifier", "Latency (ms)", 61.0, -2)]),
+        (-1, None, [_res("$x3", "Reranker verifier", "Latency (ms)", 54.0, -1),
+                    _res("$x3", "Reranker + calibration", "Latency (ms)", 57.5, -1)]),
+    ],
+    "Project Beacon": [
+        (-20, None, [_res("$x2", "Dense attention", "Needle recall", 0.99, -20, "128K", baseline=True),
+                     _res("$x2", "Sliding window", "Needle recall", 0.71, -20, "128K"),
+                     _res("$x2", "Block-sparse + global tokens", "Needle recall", 0.93, -20, "128K")]),
+        (-6, None, [_res("$x2", "Dense attention", "Needle recall", 0.99, -6, "128K", baseline=True),
+                    _res("$x2", "Dense attention", "Needle recall", 1.0, -6, "32K", baseline=True),
+                    _res("$x2", "Sliding window", "Needle recall", 0.71, -6, "128K"),
+                    _res("$x2", "Sliding window", "Needle recall", 0.94, -6, "32K"),
+                    _res("$x2", "Block-sparse + global tokens", "Needle recall", 0.97, -6, "128K"),
+                    _res("$x2", "Block-sparse + global tokens", "Needle recall", 0.995, -6, "32K"),
+                    _res("$x1", "FlashAttention-2", "Speedup", 1.0, -6, "128K", baseline=True),
+                    _res("$x1", "Block-sparse k=8", "Speedup", 1.42, -6, "128K")]),
+        (-4, None, [_res("$x1", "FlashAttention-2", "Speedup", 1.0, -4, "128K", baseline=True),
+                    _res("$x1", "Block-sparse k=8", "Speedup", 1.55, -4, "128K"),
+                    _res("$x1", "Block-sparse + global tokens", "Speedup", 1.5, -4, "128K")]),
+        (-2, None, [_res("$x1", "FlashAttention-2", "Speedup", 1.0, -2, "128K", baseline=True),
+                    _res("$x1", "Block-sparse k=8", "Speedup", 1.62, -2, "128K"),
+                    _res("$x1", "Block-sparse + global tokens", "Speedup", 1.7, -2, "128K")]),
+    ],
+}
+
+# An experiment's output file the Atlas ablation node reads (and watches): written to <out>/experiments/atlas/.
+ABLATION_CSV = """config,dataset,metric,value,date
+{rows}
+"""
+
+
+def ablation_rows() -> str:
+    first = [("Full retriever", "Recall@10", 0.842), ("Full retriever", "NDCG@10", 0.771), ("BM25 only", "Recall@10", 0.640), ("BM25 only", "NDCG@10", 0.553)]
+    second = [("Full retriever", "Recall@10", 0.851), ("Full retriever", "NDCG@10", 0.776),
+              ("No reranker", "Recall@10", 0.793), ("No reranker", "NDCG@10", 0.722),
+              ("No query rewrite", "Recall@10", 0.815), ("No query rewrite", "NDCG@10", 0.741),
+              ("BM25 only", "Recall@10", 0.640), ("BM25 only", "NDCG@10", 0.553)]
+    return "\n".join(f"{c},Dev-300,{m},{v},{day(off)}" for off, rows in ((-2, first), (-1, second)) for c, m, v in rows)
+
+
 def _fill_peer(op: dict[str, Any], papers: dict[str, dict[str, Any]]) -> None:
     """A demo peer named by its title gets the fictional paper's id (its entity), link, date and authors."""
     from app.rmap import peers as rpeers
@@ -994,6 +1063,7 @@ def research_maps(papers: list[dict[str, Any]] | None = None) -> None:
             at(steps[0][0] - 1, 9)
             slug = rops.create_project(title, line=title, note=f"Ideas/{title}.md")["slug"]
             refs: dict[str, str] = {}
+            steps = sorted([*steps, *RMAP_RESULTS.get(title, [])], key=lambda step: step[0])  # stable: results after the steps of the same day
             for off, summary, batch in steps:
                 at(off, 10)
                 batch = json.loads(json.dumps(batch))
@@ -1006,6 +1076,15 @@ def research_maps(papers: list[dict[str, Any]] | None = None) -> None:
                     if op.get("ref") in refs:
                         op.pop("ref")
                 refs.update(rops.apply(slug, batch, summary=summary)["refs"])
+            if title == "Project Atlas":
+                at(-1, 12)
+                exp = config.VAULT_DIR.parent / "experiments" / "atlas"
+                exp.mkdir(parents=True, exist_ok=True)
+                (exp / "ablation.csv").write_text(ABLATION_CSV.format(rows=ablation_rows()), encoding="utf-8")
+                from app.rmap.results import importer
+                importer.run_import(slug, refs["$x4"], path=str(exp / "ablation.csv"), watch=True, who="import",
+                                    mapping={"config": {"col": "config"}, "dataset": {"col": "dataset"}, "metric": {"col": "metric"},
+                                             "value": {"col": "value"}, "date": {"col": "date"}, "baselines": ["BM25 only"]})
             print(f"research map: {title} ({len(refs)} nodes and attachments)")
     finally:
         rops.now, rclock.wall_ms = real_now, real_ms
@@ -1104,7 +1183,7 @@ def build(out: Path, secrets: Path, venues_from: Path | None, fetch_pdfs: bool) 
     for d in (vault, data, state, tracker, out / "zotero", secrets, downloads):
         d.mkdir(parents=True, exist_ok=True)
     cfg = write(out / "studio.toml", CONFIG.format(vault=vault, zotero=out / "zotero", secrets=secrets, data=data,
-                                                   state=state, tracker=tracker, lines=json.dumps(LINES),
+                                                   state=state, tracker=tracker, experiments=out / "experiments", lines=json.dumps(LINES),
                                                    venues=json.dumps(WATCHED)))
     os.environ["STUDIO_CONFIG"] = str(cfg)
     os.environ["STUDIO_DEVICE"] = "demo"

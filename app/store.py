@@ -34,6 +34,7 @@ def new_id(prefix: str) -> str:
 
 class Store:
     loader = yaml.SafeLoader  # subclasses may use the faster CSafeLoader
+    dumper = yaml.SafeDumper  # ... and CSafeDumper (several times faster on a big file)
 
     def __init__(self, path: Path, collections: tuple[str, ...], header: str, name: str | None = None):
         """name: what the lock and temp file in the data dir are called (default: the file's own name);
@@ -62,8 +63,8 @@ class Store:
 
     def _write(self, data: dict[str, list[dict[str, Any]]]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        body = yaml.safe_dump({c: [self._clean(r) for r in data[c]] for c in self.collections},
-                              allow_unicode=True, sort_keys=False, width=1000)
+        body = yaml.dump({c: [self._clean(r) for r in data[c]] for c in self.collections}, Dumper=self.dumper,
+                         allow_unicode=True, sort_keys=False, width=1000)
         self._tmp.write_text(self.header + body, encoding="utf-8")
         os.replace(self._tmp, self.path)
 

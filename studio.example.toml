@@ -22,6 +22,7 @@ idea_radar = "Ideas/Idea Radar.md"
 lab_tracker = "Lab Tracker"                    # optional: weekly lab tracker notes (Labs/, Runs/)
 # tracker = "~/code/research_tracker"          # optional: tracker code dir with runs/<date>/candidates.json
 extra_read_dirs = []                           # other folders Claude may read, e.g. ["../code"]
+results_roots = []                             # folders the research map may import results files (CSV / JSON) from, e.g. ["~/code/experiments"]; empty = paste only
 # Research-line chats. Unset: a top-level vault folder with that name ("08 Review Packets" works too).
 # evidence = "Evidence"                         # source digests, verification logs
 # review_packets = "Review Packets"             # advisor packets are written here

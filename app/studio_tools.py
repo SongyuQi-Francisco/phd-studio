@@ -16,8 +16,9 @@ from typing import Any
 
 from claude_agent_sdk import SdkMcpTool, create_sdk_mcp_server, tool
 
-from . import idea_ops, plan, reading, tracking, venue_check, venues
+from . import i18n, idea_ops, plan, reading, tracking, venue_check, venues
 from .rmap import lines as rmap_lines, peers as rmap_peers, project as rmap_project, proposals as rmap_proposals
+from .rmap.results import importer as rmap_results, model as rmap_results_model, refs as rmap_refs
 
 SERVER = "studio"
 
@@ -83,10 +84,15 @@ def _map_brief(slug: str) -> dict[str, Any]:
     peers: dict[str, list[str]] = {}
     for a in m["attachments"].get("peer", []):
         peers.setdefault(a["node"], []).append(f"{a['title']} ({a['relation']})")
+    res: dict[str, list[str]] = {}
+    for a in sorted(m["attachments"].get("results", []), key=lambda a: a.get("date") or "", reverse=True):
+        if len(res.setdefault(a["node"], [])) < 12:
+            res[a["node"]].append(f"{rmap_results_model.line(a)} ({a.get('date') or '?'}{', baseline' if a.get('baseline') else ''})")
     nodes = [{"id": n["id"], "type": n["type"], "status": n.get("status", "todo"), "title": n["title"],
               **({"parents": parents[n["id"]]} if n["id"] in parents else {}),
               **({"evidence": ev[n["id"]]} if n["id"] in ev else {}),
               **({"peers": peers[n["id"]]} if n["id"] in peers else {}),
+              **({"results": res[n["id"]]} if n["id"] in res else {}),
               **({"body": n["body"][:300]} if n.get("body") else {})} for n in m["nodes"]]
     log = [{"at": e["at"], "who": e.get("who"), "text": e.get("summary")}
            for e in rmap_project.get(slug).events(kind="log", limit=8)["events"]]
@@ -398,10 +404,33 @@ def _tools(emit: Callable[[dict[str, Any]], Awaitable[None]]) -> list[SdkMcpTool
         await changed("rmap", f"研究地图：{title} 有 {n} 个同行待你确认", prop)
         return out
 
+    @tool("map_record_result",
+          "记录实验结果（提案，用户在研究地图页确认后才写入）：把跑出来的数字挂到研究地图的实验或结果节点上，可顺手更新节点状态。"
+          "先 map_read 找到节点。node=节点 id 或标题；results=[{config 配置/方法名, metric 指标名如 Recall@10, value 数值, "
+          "dataset?, date? YYYY-MM-DD, run? 种子, baseline? 是否基线, better? higher|lower, source? 来源, note?}]；"
+          "status? 节点新状态（todo/active/verified/blocked/refuted/dropped）；summary? 一句日志（不给就自动生成，里面列出数字）。"
+          "同一配置、数据集、指标、日期的结果会更新而不是重复添加。",
+          _obj({"project": S, "node": S, "results": {"type": "array", "items": {"type": "object"}}, "status": S, "summary": S},
+               ["project", "node", "results"]))
+    async def map_record_result(a):
+        try:
+            slug = _map_slug(a["project"]) or rmap_refs.find_project(a["project"])
+            built = rmap_results.build_report(slug, a["node"], a.get("results") or [], status=a.get("status") or None,
+                                              summary=a.get("summary") or None, source="assistant", with_numbers=True)
+            if not built["ops"]:
+                return _ok({"note": "这些结果已经记录过了，没有要改的。"})
+            prop = rmap_proposals.propose(ops_=built["ops"], summary=built["summary"], slug=slug)
+        except (KeyError, ValueError) as e:
+            return _err(e.args[0] if e.args else str(e))
+        title = rmap_project.summary(rmap_project.get(slug))["title"]
+        await changed("rmap", i18n.t("rmap_results.proposal_toast", title=title, n=built["added"] + built["updated"]), prop)
+        return _ok({"proposal": prop["id"], "changes": [rmap_results_model.line(r) for r in built["records"]],
+                    "note": "已提交，等用户在研究地图页确认后才会写入；你不能应用它。"})
+
     tools = [reading_push, reading_list, reading_update, milestone_add, milestone_update, target_add,
              target_update, venue_search, venue_watch, idea_add, idea_update, idea_merge, idea_list, follow,
-             tracker_latest, timeline, venue_details_propose, map_read, map_propose, map_seed_draft, map_gaps,
-             map_peer_suggest, map_peer_propose]
+             tracker_latest, timeline, venue_details_propose, map_read, map_propose, map_record_result, map_seed_draft,
+             map_gaps, map_peer_suggest, map_peer_propose]
     return tools
 
 

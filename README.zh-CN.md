@@ -209,9 +209,11 @@ flowchart LR
 ./studio target "Main paper" ACL --line "Project A"
 ./studio deadlines --days 90
 ./studio remind --check --dry-run
+./studio map result add "Project A" "Ablation A" recall@10=0.412 --config "Ours k=8" --dataset "MS MARCO" --status verified
+./studio map result import "Project A" "Ablation A" ~/code/exp/results.csv --baseline BM25 --watch
 ```
 
-`push` 必须带 `--reason`；已经读完或不读的论文不会被重新加入。所有选项见 `./studio <命令> --help`。可以在 vault 的规则文件（如 `AGENTS.md`）里告诉你的 agent 怎么用。
+`push` 必须带 `--reason`；已经读完或不读的论文不会被重新加入。所有选项见 `./studio <命令> --help`。`./studio map` 在研究地图上汇报实验结果、更新节点状态（见 [docs/research-map.md](docs/research-map.md#experiment-results)），工作台关着也能用。可以在 vault 的规则文件（如 `AGENTS.md`）里告诉你的 agent 怎么用。
 
 ## Vault 约定
 
