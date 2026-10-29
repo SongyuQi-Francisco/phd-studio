@@ -13,5 +13,7 @@
   "idea_not_found": "No such Idea: {id}",
   "excerpt.no_note": "This paper has no note yet. Create the note first, then add excerpts.",
   "excerpt.no_section": "The note has no “{section}” section",
-  "excerpt.no_selection": "No text selected"
+  "excerpt.no_selection": "No text selected",
+  "bad_host": "Refused: the Host header is not this machine (127.0.0.1 or localhost)",
+  "bad_origin": "Refused: this request comes from a page that is not on this machine"
 }

@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Security: the local server now answers only requests addressed to this machine. A `Host` other than `127.0.0.1`, `localhost` or `[::1]` gets a 403 (DNS rebinding), and writes and WebSocket handshakes with a non-local `Origin` are refused; the desktop window, other ports (`STUDIO_PORT`) and clients without an `Origin` (the CLI, curl) work as before ([#64](https://github.com/SongyuQi-Francisco/phd-studio/issues/64))
 - The demo generator (`scripts/demo/make_demo.py`) failed on a Mac with its default output folder: results files under `~/Library/Application Support` were refused. Only credentials and the app's own folders are closed now, and a test builds a whole demo workspace offline ([#66](https://github.com/SongyuQi-Francisco/phd-studio/issues/66))
 
 ## [0.1.0] - 2026-10-25
