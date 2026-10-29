@@ -13,5 +13,7 @@
   "idea_not_found": "没有这条 Idea：{id}",
   "excerpt.no_note": "这篇还没有笔记，先建笔记再摘录",
   "excerpt.no_section": "笔记里没有「{section}」这一节",
-  "excerpt.no_selection": "没有选中文字"
+  "excerpt.no_selection": "没有选中文字",
+  "bad_host": "已拒绝：Host 不是本机（127.0.0.1 或 localhost）",
+  "bad_origin": "已拒绝：请求来自不在本机的网页"
 }

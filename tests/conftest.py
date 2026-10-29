@@ -69,6 +69,35 @@ for _name in ("VAULT_DIR", "DATA_DIR", "STATE_DIR", "ZOTERO_DIR", "SECRETS_DIR")
         pytest.exit(f"config.{_name} = {_path} is outside the test sandbox {ROOT}", returncode=3)
 
 
+def _patch_test_client() -> None:
+    """The server only answers requests addressed to this machine (app/local_guard.py).
+
+    TestClient says `Host: testserver` unless told otherwise (and `websocket_connect` always joins
+    its URL to ws://testserver), so every test that builds one would be refused. Default to the
+    address the desktop window uses; tests of the guard itself pass their own host in headers.
+    """
+    from starlette import testclient
+
+    original_init = testclient.TestClient.__init__
+    original_connect = testclient.TestClient.websocket_connect
+
+    def init(self: Any, app: Any, *args: Any, **kwargs: Any) -> None:
+        if not args:
+            kwargs.setdefault("base_url", "http://127.0.0.1:8770")
+        original_init(self, app, *args, **kwargs)
+
+    def websocket_connect(self: Any, url: str, *args: Any, **kwargs: Any) -> Any:
+        if url.startswith("/"):
+            url = f"ws://{self.base_url.netloc.decode()}{url}"
+        return original_connect(self, url, *args, **kwargs)
+
+    testclient.TestClient.__init__ = init  # type: ignore[method-assign]
+    testclient.TestClient.websocket_connect = websocket_connect  # type: ignore[method-assign]
+
+
+_patch_test_client()
+
+
 def _fresh_dir(path: Path) -> None:
     shutil.rmtree(path, ignore_errors=True)
     path.mkdir(parents=True)

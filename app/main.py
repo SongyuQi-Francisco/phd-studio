@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from . import bilingual, direction, excerpt, i18n, idea_ops, library, line_chat, model_chat, notes, plan, reading, tracking, venues
 from .claude_chat import claude_status, draft_takeaway, history, registry
 from .config import CROPS_DIR, IDEA_RADAR, PROFILE, STUDIO_DIR, load_settings, save_settings
+from .local_guard import LocalOnlyMiddleware
 from .translate import translate
 from .thumbs import router as thumbs_router
 
@@ -52,6 +53,9 @@ async def revalidate_app_files(request, call_next):
     if not path.startswith(("/api/", "/vendor/")):
         response.headers["Cache-Control"] = "no-cache"
     return response
+
+
+app.add_middleware(LocalOnlyMiddleware)  # added last = outermost: checks Host and Origin before anything else runs
 
 
 def _stem_or_404(stem: str) -> str:
