@@ -161,6 +161,16 @@ def test_arxiv_only_items_are_queued_by_their_key(fake):
         "key": "arxiv:2610.11920", "title": "Loose", "reason": "进入 T1", "added": None, "state": "queued"}
 
 
+def test_vault_note_items_are_never_queued(fake, write_vault_file):
+    write_vault_file("Notes/Report A.md", "# Report A")
+    reading.push(note="Notes/Report A.md", reason="r", source="tracker")
+    bq.set_paused(True)
+    bq.tick()
+    tier("note:Notes/Report A.md", "T1")
+    bq.tick()
+    assert queued() == [] and bq.snapshot()["backfill"] == 0 and bq.backfill() == 0  # no PDF to translate
+
+
 def test_papers_with_a_bilingual_pdf_are_skipped(fake, make_note):
     reading.push(paper=paper(make_note, "Done"), reason="r", source="tracker")
     reading.push(paper=paper(make_note, "Later"), reason="r", source="tracker")

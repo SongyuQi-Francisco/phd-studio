@@ -5,6 +5,10 @@ snoozed (until a date, then back to inbox) and dismissed (kept, so it is never
 pushed again). Urgency (tier) is set before reading; depth/verdict/takeaway after.
 Every save also regenerates a read-only summary note next to the YAML file.
 
+Most items are papers (a note in the Papers folder, an arXiv id or an ext key); an item can
+also point at any other Markdown note in the vault (`note`, e.g. a report to read). Any active
+item can be pinned: pinned items are listed above everything else, most recently pinned first.
+
 The vault may be synced between computers (Syncthing). Each item carries an
 updated_at stamp, so when both machines edit the list before syncing, the
 resulting sync-conflict copy is merged back automatically (newest edit per item
@@ -19,13 +23,13 @@ import secrets
 import shutil
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterator
 
 import httpx
 import yaml
 
-from . import i18n, library
+from . import i18n, library, notes
 from .config import DATA_DIR, PAPERS_DIR, PROFILE, READING_LIST, READING_QUEUE
 
 STATUSES = ("inbox", "queued", "reading", "done", "snoozed", "dismissed")
@@ -33,15 +37,17 @@ TIERS = ("T1", "T2", "T3")
 SOURCES = ("tracker", "claude", "advisor", "self")
 DEPTHS = ("skim", "deep")
 VERDICTS = ("key", "useful", "irrelevant")
+ACTIVE = ("inbox", "queued", "reading")  # the statuses a pin shows for
 CAPS = {"T1": 5, "queued": 12}
 STALE_DAYS = 21
-FIELDS = ("id", "paper", "arxiv", "ext", "title", "url", "status", "tier", "lines", "source", "pushed_by",
+FIELDS = ("id", "paper", "arxiv", "ext", "note", "title", "url", "status", "tier", "lines", "source", "pushed_by",
           "pushed_at", "reason", "due", "snooze_until", "opened_at", "read_at", "depth", "verdict",
-          "takeaway", "updated_at")
+          "takeaway", "pinned", "pinned_at", "updated_at")
 
 HEADER = """# Reading list, managed by PhD Studio. Edit through the app or the CLI:
 #   studio push --paper "Note Name" --tier T1 --line "Project A" --reason "why" --by "who"
 #   studio push --arxiv 2606.17328 --reason "why" --by "who"
+#   studio push --note "Notes/Report A.md" --reason "why" --pin
 # status: inbox | queued | reading | done | snoozed | dismissed   tier: T1 (this week) | T2 | T3
 """
 VIEW_BEGIN = "<!-- BEGIN STUDIO_READING_LIST -->"  # legacy block in the Reading Queue note
@@ -73,7 +79,7 @@ def _norm(item: dict[str, Any]) -> dict[str, Any]:
         v = item.get(k)
         if isinstance(v, date):
             v = v.isoformat()
-        if v in (None, "", []):
+        if v in (None, "", []) or v is False:
             continue
         out[k] = v
     out.setdefault("lines", [])
@@ -157,7 +163,7 @@ def _wake_snoozed(items: list[dict[str, Any]]) -> bool:
 
 def _link_notes(items: list[dict[str, Any]]) -> bool:
     """Attach items without a note (arXiv id or DOI/OpenReview/ACL key) to a paper note once one exists."""
-    loose = [i for i in items if not i.get("paper") and (i.get("arxiv") or i.get("ext"))]
+    loose = [i for i in items if not i.get("paper") and not i.get("note") and (i.get("arxiv") or i.get("ext"))]
     if not loose:
         return False
     by_arxiv, by_ext = library.arxiv_index(), library.ext_index()
@@ -200,14 +206,27 @@ def editing() -> Iterator[list[dict[str, Any]]]:
 
 def key_of(item: dict[str, Any]) -> str:
     """The reader's paper key: the note stem, or before a note exists arxiv:<id>, or the ext key
-    (doi:<doi>, openreview:<id>, acl:<id>) of a paper that came in by DOI or an OpenReview/ACL link."""
+    (doi:<doi>, openreview:<id>, acl:<id>) of a paper that came in by DOI or an OpenReview/ACL link.
+    An item for another vault note is note:<vault-relative path>."""
+    if item.get("note"):
+        return f"note:{item['note']}"
     return item.get("paper") or (f"arxiv:{item['arxiv']}" if item.get("arxiv") else item.get("ext") or item["id"])
+
+
+def is_note(item: dict[str, Any]) -> bool:
+    """An item for a vault note that is not a paper: it opens in the note sheet and has no PDF."""
+    return bool(item.get("note"))
+
+
+def is_pinned(item: dict[str, Any]) -> bool:
+    """Pinned and still to read: done and dismissed items are never shown as pinned."""
+    return bool(item.get("pinned")) and item.get("status") in ACTIVE
 
 
 def find(items: list[dict[str, Any]], key: str) -> dict[str, Any] | None:
     for i in items:
         if i["id"] == key or i.get("paper") == key or (i.get("arxiv") and f"arxiv:{i['arxiv']}" == key) \
-                or (i.get("ext") and i["ext"] == key):
+                or (i.get("ext") and i["ext"] == key) or (i.get("note") and key in (i["note"], f"note:{i['note']}")):
             return i
     return None
 
@@ -223,7 +242,7 @@ def _same_title(items: list[dict[str, Any]], title: str | None) -> dict[str, Any
     if len(want) < 12:
         return None
     for i in items:
-        if norm_title(i.get("title")) == want:
+        if not is_note(i) and norm_title(i.get("title")) == want:
             return i
     return None
 
@@ -235,11 +254,33 @@ class ReadingError(ValueError):
     pass
 
 
-def push(*, paper: str | None = None, arxiv: str | None = None, ext: str | None = None, title: str | None = None,
-         url: str | None = None, reason: str, source: str = "self", pushed_by: str | None = None, tier: str | None = None,
-         lines: list[str] | None = None, due: str | None = None, status: str | None = None,
-         force: bool = False) -> tuple[dict[str, Any], str]:
-    """Add a paper, or update the existing entry. Returns (item, what happened)."""
+def _note_ref(path: str) -> tuple[str | None, str | None]:
+    """(paper stem, None) for a note in the Papers folder, else (None, its normalized vault-relative path).
+    The path may leave out '.md'; one outside the vault, not Markdown, or missing is refused."""
+    path = path.strip()
+    try:
+        p = notes.resolve(path if path.endswith(".md") else f"{path}.md")
+    except FileNotFoundError:
+        raise ReadingError(f"no Markdown note at '{path}' in the vault (give its vault-relative path)")
+    if p.parent == PAPERS_DIR.resolve():
+        return p.stem, None
+    return None, notes.rel(p)
+
+
+def _pin(item: dict[str, Any], on: bool) -> None:
+    if on and not item.get("pinned"):
+        item["pinned"] = True
+        item["pinned_at"] = _now()
+    elif not on:
+        item.pop("pinned", None)
+        item.pop("pinned_at", None)
+
+
+def push(*, paper: str | None = None, arxiv: str | None = None, ext: str | None = None, note: str | None = None,
+         title: str | None = None, url: str | None = None, reason: str, source: str = "self", pushed_by: str | None = None,
+         tier: str | None = None, lines: list[str] | None = None, due: str | None = None, status: str | None = None,
+         pinned: bool = False, force: bool = False) -> tuple[dict[str, Any], str]:
+    """Add a paper (or a vault note), or update the existing entry. Returns (item, what happened)."""
     if not reason.strip():
         raise ReadingError("reason is required: one line on why this paper should be read")
     if source not in SOURCES:
@@ -250,7 +291,11 @@ def push(*, paper: str | None = None, arxiv: str | None = None, ext: str | None 
         arxiv = re.sub(r"v\d+$", "", arxiv.strip().removeprefix("arXiv:").removeprefix("arxiv:"))
     if ext and not library.ext_key(ext):
         raise ReadingError("ext must look like doi:<doi>, openreview:<id> or acl:<id>")
-    if paper:
+    if note and (paper or arxiv or ext):
+        raise ReadingError("give either --note or a paper (--paper, --arxiv, ext), not both")
+    if note:
+        paper, note = _note_ref(note)  # a note in the Papers folder is listed as that paper
+    elif paper:
         try:
             library.note_path(paper)
         except FileNotFoundError:
@@ -258,16 +303,16 @@ def push(*, paper: str | None = None, arxiv: str | None = None, ext: str | None 
     elif arxiv or ext:  # an arXiv paper may also be known by its DOI: a note can carry either
         paper = (library.arxiv_index().get(arxiv) if arxiv else None) or (library.ext_index().get(ext) if ext else None)
     else:
-        raise ReadingError("give --paper (note name), --arxiv or an ext key (doi:/openreview:/acl:)")
+        raise ReadingError("give --paper (note name), --arxiv, an ext key (doi:/openreview:/acl:) or --note (vault path)")
     if not title and arxiv and not paper and not find(_load_raw(), f"arxiv:{arxiv}"):
         # The title is what a second door (an OpenReview or DOI item of the same paper) is recognised by,
         # so it is known before the duplicate check; asked here, not under the list's lock.
         title = fetch_arxiv_title(arxiv)
 
     with editing() as items:
-        existing = find(items, paper) if paper else None
+        existing = find(items, f"note:{note}") if note else find(items, paper) if paper else None
         existing = existing or (find(items, f"arxiv:{arxiv}") if arxiv else None) or (find(items, ext) if ext else None)
-        existing = existing or (_same_title(items, title) if not paper else None)
+        existing = existing or (_same_title(items, title) if not (paper or note) else None)
         if existing:
             if existing["status"] == "dismissed" and not force:
                 return existing, "dismissed earlier; not re-added (use --force to bring it back)"
@@ -285,12 +330,15 @@ def push(*, paper: str | None = None, arxiv: str | None = None, ext: str | None 
             if existing["status"] in ("dismissed", "done", "snoozed"):
                 existing["status"] = "inbox"
             existing["reason"] = f"{existing.get('reason', '')} | {reason}".strip(" |")
+            if pinned:
+                _pin(existing, True)
             return existing, f"already listed ({existing['status']}); merged"
         item = {
             "id": "r" + secrets.token_hex(3),
             "paper": paper,
             "arxiv": arxiv,
             "ext": ext,
+            "note": note,
             "url": url,
             "title": title,
             "status": status or ("queued" if tier and source == "self" else "inbox"),
@@ -302,6 +350,7 @@ def push(*, paper: str | None = None, arxiv: str | None = None, ext: str | None 
             "reason": reason.strip(),
             "due": due,
         }
+        _pin(item, pinned)
         items.append(item)
         return _norm(item), "added"
 
@@ -319,20 +368,26 @@ def update(item_id: str, patch: dict[str, Any]) -> dict[str, Any]:
             raise ReadingError("bad depth")
         if patch.get("verdict") and patch["verdict"] not in VERDICTS:
             raise ReadingError("bad verdict")
+        if "pinned" in patch and not isinstance(patch["pinned"], bool):
+            raise ReadingError("pinned must be true or false")
         for k in ("status", "tier", "lines", "due", "snooze_until", "depth", "verdict", "takeaway", "reason"):
             if k in patch:
                 item[k] = patch[k]
+        if "pinned" in patch:
+            _pin(item, patch["pinned"])
         if patch.get("tier") and item["status"] == "inbox":
             item["status"] = "queued"
         if item["status"] == "done":
             item.setdefault("read_at", today())
         if item["status"] != "snoozed":
             item.pop("snooze_until", None)
+        if item["status"] in ("done", "dismissed"):  # a pin only means something while the item is still to read
+            _pin(item, False)
         return _norm(item)
 
 
 def mark_opened(key: str) -> dict[str, Any] | None:
-    """Opening a paper in the reader moves its entry to `reading`."""
+    """Opening a paper in the reader (or a note item in the note sheet) moves its entry to `reading`."""
     with editing() as items:
         item = find(items, key)
         if item is None:
@@ -351,10 +406,11 @@ def summary(items: list[dict[str, Any]]) -> dict[str, Any]:
     week_ago = (t - timedelta(days=7)).isoformat()
     for i in items:
         i["age_days"] = (t - date.fromisoformat(i["pushed_at"])).days if i.get("pushed_at") else 0
-        i["stale"] = i["status"] == "inbox" and i["age_days"] > STALE_DAYS
+        i["stale"] = i["status"] == "inbox" and i["age_days"] > STALE_DAYS and not i.get("pinned")
         i["key"] = key_of(i)
         if not i.get("title"):
-            i["title"] = i.get("paper") or i.get("arxiv") or i.get("ext")
+            i["title"] = i.get("paper") or (PurePosixPath(i["note"]).stem if i.get("note") else None) \
+                or i.get("arxiv") or i.get("ext")
     active_inbox = [i for i in items if i["status"] == "inbox" and not i["stale"]]
     queued = [i for i in items if i["status"] == "queued"]
     return {
@@ -369,6 +425,10 @@ def summary(items: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _link(i: dict[str, Any]) -> str:
+    if i.get("note"):
+        target = i["note"].removesuffix(".md")
+        label = i.get("title") or PurePosixPath(target).name
+        return f"[[{target}]]" if label == target else f"[[{target}|{label}]]"
     if i.get("paper"):
         return f"[[{i['paper']}]]"
     if i.get("arxiv"):
@@ -383,6 +443,8 @@ def _write_view(items: list[dict[str, Any]]) -> None:
         return [f"- {_link(i)}" + (f" · {', '.join(i['lines'])}" if i.get("lines") else "")
                 + (f" — {i['reason']}" if i.get("reason") else "") for i in sel]
     order = {"T1": 0, "T2": 1, "T3": 2}
+    pinned = sorted((i for i in items if is_pinned(i)), key=lambda i: i.get("pinned_at", ""), reverse=True)
+    items = [i for i in items if not is_pinned(i)]
     queued = sorted((i for i in items if i["status"] == "queued"),
                     key=lambda i: (order.get(i.get("tier"), 3), i.get("due") or "9", i.get("pushed_at", "")))
     reading = [i for i in items if i["status"] == "reading"]
@@ -390,6 +452,8 @@ def _write_view(items: list[dict[str, Any]]) -> None:
     inbox = [i for i in items if i["status"] == "inbox" and i.get("pushed_at", "") >= cutoff]
     parts = ["---", "type: reading-list", "generated: true", "---", "", "# " + i18n.tv("reading.view.title"), "",
              "> " + i18n.tv("reading.view.generated", file=READING_LIST.name), ""]
+    if pinned:
+        parts += ["## " + i18n.tv("reading.view.pinned"), *rows(pinned), ""]
     if reading:
         parts += ["## " + i18n.tv("reading.view.reading"), *rows(reading), ""]
     for tier in TIERS:

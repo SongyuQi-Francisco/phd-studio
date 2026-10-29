@@ -1,6 +1,12 @@
-"""app/reading.py: push rules, status transitions, caps and stale handling, the Reading List.md view, conflict merge."""
+"""app/reading.py: push rules, status transitions, caps and stale handling, the Reading List.md view, conflict merge,
+vault-note items and pinning (and web/reading-groups.js, the page's groups)."""
 from __future__ import annotations
 
+import asyncio
+import json
+import re
+import shutil
+import subprocess
 import threading
 from datetime import date, timedelta
 from pathlib import Path
@@ -11,6 +17,9 @@ import yaml
 
 from app import config, reading
 from app.reading import ReadingError
+
+PROJECT = Path(__file__).resolve().parent.parent
+JSC = Path("/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc")
 
 
 def days_ago(n: int) -> str:
@@ -597,3 +606,296 @@ def test_concurrent_pushes_do_not_lose_items():
     items = reading.load()
     assert len(items) == 20
     assert len({i["id"] for i in items}) == 20
+
+
+# ---------- vault-note items ----------
+
+
+@pytest.fixture
+def report(write_vault_file) -> str:
+    write_vault_file("Notes/Report A.md", "# Report A\n\nFindings.")
+    return "Notes/Report A.md"
+
+
+def test_push_note_lists_a_vault_note_under_its_path(report):
+    item, what = push(note=report, reason="read before the meeting", source="claude", pushed_by="Ada Example")
+    assert what == "added"
+    assert item["note"] == "Notes/Report A.md" and item["status"] == "inbox"
+    assert "paper" not in item and "arxiv" not in item and "title" not in item  # the title is the note's name, not stored
+    assert reading.key_of(item) == "note:Notes/Report A.md"
+    assert reading.is_note(item)
+    [stored] = raw_items()
+    assert stored["note"] == "Notes/Report A.md" and stored["id"] == item["id"]
+    [shown] = reading.load()
+    reading.summary([shown])
+    assert (shown["key"], shown["title"], shown["stale"]) == ("note:Notes/Report A.md", "Report A", False)
+
+
+def test_note_path_is_normalized_and_may_leave_out_md(report):
+    for path in ("Notes/Report A", " ./Notes/../Notes/Report A.md ", str(config.VAULT_DIR / report)):
+        item, _ = push(note=path)
+        assert item["note"] == "Notes/Report A.md", path
+    assert len(raw_items()) == 1  # one item, found again by its normalized path
+
+
+def test_note_must_be_a_markdown_note_inside_the_vault(write_vault_file, report):
+    write_vault_file("Notes/data.txt", "x")
+    (config.VAULT_DIR.parent / "outside.md").write_text("# not in the vault", encoding="utf-8")
+    for bad in ("Notes/Missing.md", "Notes/data.txt", "../outside.md", "/etc/hosts", "Notes/../../outside"):
+        with pytest.raises(ReadingError, match="no Markdown note"):
+            push(note=bad)
+    assert not config.READING_LIST.exists()
+
+
+def test_note_and_a_paper_cannot_be_given_together(notes, report):
+    for other in ({"paper": "Alpha"}, {"arxiv": "2606.00001"}, {"ext": "doi:10.5555|abc.1"}):
+        with pytest.raises(ReadingError, match="either --note or a paper"):
+            push(note=report, **other)
+
+
+def test_a_note_in_the_papers_folder_is_listed_as_that_paper(notes):
+    item, _ = push(note=str(config.PAPERS_DIR.relative_to(config.VAULT_DIR) / "Alpha.md"))
+    assert item["paper"] == "Alpha" and "note" not in item
+    _, what = push(paper="Alpha")
+    assert what.startswith("already listed") and len(raw_items()) == 1
+
+
+def test_note_items_dedupe_by_path_and_keep_their_title(report):
+    first, _ = push(note=report, reason="r1", title="Report A, final", lines=["Project A"])
+    again, what = push(note="Notes/Report A", reason="r2", lines=["Project B"])
+    assert what == "already listed (inbox); merged" and again["id"] == first["id"]
+    [item] = raw_items()
+    assert item["reason"] == "r1 | r2" and item["lines"] == ["Project A", "Project B"]
+    assert item["title"] == "Report A, final"
+
+
+def test_a_paper_with_the_same_title_as_a_note_item_is_its_own_item(report):
+    push(note=report, title="Retrieval Augmented Ranking Survey")
+    item, what = push(arxiv="2606.00001", title="Retrieval Augmented Ranking Survey")
+    assert what == "added" and item["arxiv"] == "2606.00001"
+    assert len(raw_items()) == 2
+
+
+def test_note_items_are_found_updated_opened_and_marked_done(report):
+    item, _ = push(note=report)
+    assert reading.find(reading.load(), "note:Notes/Report A.md")["id"] == item["id"]
+    assert reading.find(reading.load(), "Notes/Report A.md")["id"] == item["id"]
+    assert reading.update("note:Notes/Report A.md", {"tier": "T1"})["status"] == "queued"
+    assert reading.mark_opened("note:Notes/Report A.md")["status"] == "reading"
+    out = reading.update(item["id"], {"status": "done", "depth": "deep", "verdict": "key", "takeaway": "one idea"})
+    assert (out["status"], out["read_at"], out["note"]) == ("done", date.today().isoformat(), "Notes/Report A.md")
+    _, what = push(note=report)
+    assert what.startswith("already read on")
+
+
+def test_note_items_are_never_attached_to_a_paper_note(make_note, report):
+    with reading.editing() as items:
+        items.append({"id": "r00009", "note": report, "arxiv": "2606.00001", "status": "inbox", "reason": "hand-edited"})
+    make_note("Alpha", arxiv="2606.00001")
+    item = reading.find(reading.load(), "r00009")
+    assert "paper" not in item and reading.key_of(item) == "note:Notes/Report A.md"
+
+
+def test_view_links_note_items_as_wikilinks(write_vault_file, report, english):
+    write_vault_file("Report B.md", "# B")
+    push(note=report, title="The final report", tier="T1", source="self", reason="before the meeting")
+    push(note="Report B", reason="top level")
+    text = view()
+    assert "## T1\n- [[Notes/Report A|The final report]] — before the meeting\n" in text
+    assert "## Inbox (1 to triage)\n- [[Report B]] — top level" in text
+    with reading.editing() as items:
+        items[0].pop("title")
+    assert "- [[Notes/Report A|Report A]]" in view()
+
+
+def test_the_same_note_pushed_on_both_macs_is_deduplicated(report):
+    write_list(config.READING_LIST, [{"id": "r0000a", "note": report, "status": "inbox", "pushed_at": "2026-10-20",
+                                      "reason": "mac one", "updated_at": "2026-10-24T09:00:00"}])
+    write_list(conflict_path(), [{"id": "r0000b", "note": report, "status": "queued", "tier": "T1", "pushed_at": "2026-10-20",
+                                  "reason": "mac two", "updated_at": "2026-10-24T10:00:00"}])
+    [item] = reading.load()
+    assert (item["note"], item["status"], item["reason"]) == (report, "queued", "mac two")
+
+
+def test_a_note_item_whose_note_is_gone_still_loads(report):
+    push(note=report)
+    (config.VAULT_DIR / report).unlink()
+    [item] = reading.load()
+    assert reading.summary([item])["inbox"] == 1 and item["title"] == "Report A"
+
+
+@pytest.fixture
+def client():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    return TestClient(app)
+
+
+def test_api_lists_patches_and_pushes_note_items(client, notes, report):
+    r = client.post("/api/reading", json={"note": report, "reason": "r", "pinned": True}).json()
+    assert r["result"] == "added" and r["item"]["note"] == report and r["item"]["pinned"] is True
+    push(paper="Alpha")
+    got = client.get("/api/reading").json()
+    item = next(i for i in got["items"] if i.get("note"))
+    assert (item["key"], item["title"]) == ("note:Notes/Report A.md", "Report A")
+    assert got["summary"]["inbox"] == 2
+    assert client.patch(f"/api/reading/{item['id']}", json={"status": "queued", "tier": "T2"}).json()["item"]["tier"] == "T2"
+    assert client.post("/api/reading/opened", json={"key": item["key"]}).json()["item"]["status"] == "reading"
+    assert client.post("/api/reading", json={"note": "Notes/Missing.md"}).status_code == 400
+
+
+def test_other_pages_take_note_items_in_their_stride(client, notes, report):
+    push(note=report, tier="T1", source="self")
+    push(paper="Alpha", tier="T1", source="self")
+    assert client.get("/api/overview").json()["reading"]["T1"] == 2
+    assert [p["stem"] for p in client.get("/api/papers").json()["papers"] if p["queue_rank"] is not None] == ["Alpha"]
+    assert client.post("/api/thumbs", json={"keys": ["note:Notes/Report A.md"]}).json() == {"have": []}
+    assert client.get("/api/thumb/note:Notes/Report A.md").status_code == 404
+    assert client.get("/api/papers/note:Notes/Report A.md").status_code == 404
+
+
+def test_the_assistant_can_push_and_pin_a_note(monkeypatch, report):
+    from app import studio_tools
+
+    async def emit(_e: dict[str, Any]) -> None:
+        pass
+
+    monkeypatch.setattr(studio_tools, "create_sdk_mcp_server", lambda name, tools: tools)
+    tools = {t.name: t for t in studio_tools.build(emit)[0]}
+    out = asyncio.run(tools["reading_push"].handler({"note": report, "reason": "r", "pinned": True}))
+    assert not out.get("is_error")
+    [item] = raw_items()
+    assert item["note"] == report and item["pinned"] is True
+    asyncio.run(tools["reading_update"].handler({"id": item["id"], "pinned": False}))
+    listed = json.loads(asyncio.run(tools["reading_list"].handler({}))["content"][0]["text"])
+    assert listed[0]["key"] == "note:Notes/Report A.md" and listed[0]["pinned"] is None
+
+
+# ---------- pinning ----------
+
+
+def test_push_can_pin_and_stamps_when(notes):
+    item, _ = push(paper="Alpha", pinned=True)
+    assert item["pinned"] is True and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d", item["pinned_at"])
+    plain, _ = push(paper="Beta")
+    assert "pinned" not in plain and "pinned_at" not in plain
+    assert "pinned" not in raw_items()[1]  # nothing written for an unpinned item
+
+
+def test_pin_and_unpin_through_update(notes):
+    item, _ = push(paper="Alpha")
+    out = reading.update(item["id"], {"pinned": True})
+    assert out["pinned"] is True and out["pinned_at"]
+    with reading.editing() as items:
+        items[0]["pinned_at"] = "2026-01-01T09:00:00"
+    assert reading.update(item["id"], {"pinned": True})["pinned_at"] == "2026-01-01T09:00:00"  # already pinned: kept
+    out = reading.update(item["id"], {"pinned": False})
+    assert "pinned" not in out and "pinned_at" not in out
+    assert "pinned" not in raw_items()[0] and "pinned_at" not in raw_items()[0]
+    with pytest.raises(ReadingError, match="pinned"):
+        reading.update(item["id"], {"pinned": "yes"})
+
+
+def test_pinning_is_an_edit_that_syncs(notes):
+    item, _ = push(paper="Alpha")
+    with reading.editing() as items:
+        items[0]["updated_at"] = "2000-01-01T00:00:00"
+    reading.update(item["id"], {"pinned": True})
+    assert raw_items()[0]["updated_at"] > "2000-01-01T00:00:00"
+
+
+def test_done_and_dismissed_clear_the_pin_but_snooze_keeps_it(notes):
+    a, _ = push(paper="Alpha", pinned=True)
+    b, _ = push(paper="Beta", pinned=True)
+    c, _ = push(paper="Gamma", pinned=True)
+    assert "pinned" not in reading.update(a["id"], {"status": "done"})
+    assert "pinned" not in reading.update(b["id"], {"status": "dismissed"})
+    assert reading.update(c["id"], {"status": "snoozed", "snooze_until": "2999-01-01"})["pinned"] is True
+    assert not reading.is_pinned(reading.find(reading.load(), c["id"]))  # snoozed: not shown as pinned until it wakes
+    assert reading.is_pinned(reading.update(c["id"], {"status": "inbox"}))
+
+
+def test_repush_with_pin_pins_an_existing_item(notes):
+    push(paper="Alpha")
+    item, what = push(paper="Alpha", reason="again", pinned=True)
+    assert what.endswith("merged") and item["pinned"] is True
+    item, what = push(paper="Alpha", reason="once more")
+    assert item["pinned"] is True  # a plain push leaves the pin alone
+
+
+def test_a_pinned_inbox_item_never_goes_stale(notes):
+    push(paper="Alpha", pinned=True)
+    push(paper="Beta")
+    with reading.editing() as items:
+        for i in items:
+            i["pushed_at"] = days_ago(reading.STALE_DAYS + 10)
+    items = reading.load()
+    s = reading.summary(items)
+    assert {i["paper"]: i["stale"] for i in items} == {"Alpha": False, "Beta": True}
+    assert s["inbox"] == 1
+
+
+def test_view_lists_pinned_items_first_newest_pin_on_top_and_once(notes, make_note, english):
+    make_note("Delta")
+    push(paper="Alpha", tier="T1", source="self")
+    push(paper="Beta")
+    push(paper="Gamma")
+    push(paper="Delta")
+    with reading.editing() as items:
+        for i in items:
+            pin = {"Alpha": "2026-10-20T09:00:00", "Beta": "2026-10-21T09:00:00", "Delta": "2026-10-22T09:00:00"}.get(i["paper"])
+            if pin:
+                i.update(pinned=True, pinned_at=pin)
+        next(i for i in items if i["paper"] == "Delta")["status"] = "done"  # hand-edited: done never shows as pinned
+    text = view()
+    assert text.index("## Pinned\n- [[Beta]] — worth a look\n- [[Alpha]] — worth a look\n") < text.index("## Inbox")
+    assert text.count("[[Alpha]]") == 1 and text.count("[[Beta]]") == 1
+    assert "## T1" not in text and "## Inbox (1 to triage)\n- [[Gamma]]" in text
+    assert "[[Delta]]" not in text
+
+
+def test_view_heading_for_pinned_items_is_in_chinese(notes):
+    push(paper="Alpha", pinned=True)
+    assert "## 置顶\n- [[Alpha]]" in view()
+
+
+def test_hand_written_pin_with_a_bare_timestamp_loads_as_text(notes):
+    push(paper="Alpha")
+    text = config.READING_LIST.read_text(encoding="utf-8")
+    config.READING_LIST.write_text(text.replace("  status: inbox\n", "  status: inbox\n  pinned: true\n  pinned_at: 2026-10-29T08:30:00\n"),
+                                   encoding="utf-8")
+    [item] = reading.load()
+    assert item["pinned"] is True and item["pinned_at"] == "2026-10-29T08:30:00"
+    assert reading.is_pinned(item)
+
+
+def test_a_false_pin_is_not_written_back(notes):
+    push(paper="Alpha")
+    with reading.editing() as items:
+        items[0]["pinned"] = False
+    assert "pinned" not in config.READING_LIST.read_text(encoding="utf-8").split("items:", 1)[1]
+
+
+# ---------- the page's groups (web/reading-groups.js) ----------
+
+
+@pytest.mark.parametrize("engine", ["node", "jsc"])
+def test_reading_groups_in_a_javascript_engine(engine, tmp_path):
+    exe = shutil.which("node") if engine == "node" else (str(JSC) if JSC.exists() else None)
+    if not exe:
+        pytest.skip(f"{engine} is not installed")
+    shutil.copy(PROJECT / "web" / "reading-groups.js", tmp_path / "reading-groups.mjs")
+    shutil.copy(PROJECT / "tests" / "js" / "reading_groups.test.mjs", tmp_path / "test.mjs")
+    args = [exe, "-m", "test.mjs"] if engine == "jsc" else [exe, "test.mjs"]
+    r = subprocess.run(args, cwd=tmp_path, capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0 and r.stdout.strip().endswith("ok"), r.stdout + r.stderr
+
+
+def test_the_page_uses_the_groups_and_opens_notes_in_the_note_sheet():
+    page = (PROJECT / "web" / "reading.js").read_text(encoding="utf-8")
+    assert 'import { readingGroups, ACTIVE } from "/reading-groups.js";' in page
+    assert "readingGroups(filtered)" in page and "onOpenNote(i.note)" in page
+    assert "!item.note && html`<button" in page  # no AI draft in the done dialog for a note item
+    main = (PROJECT / "web" / "main.js").read_text(encoding="utf-8")
+    assert "onOpenNote=${setNotePath}" in main

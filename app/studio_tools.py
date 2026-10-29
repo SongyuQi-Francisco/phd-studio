@@ -134,15 +134,17 @@ def _tools(emit: Callable[[dict[str, Any]], Awaitable[None]]) -> list[SdkMcpTool
         await emit({"type": "studio_changed", "area": area, "summary": summary, "record": record})
 
     @tool("reading_push", "把论文加入阅读清单收件箱。paper=论文笔记名，或 arxiv=arXiv 号（没有笔记时），"
-                          "或 ext=doi:<DOI> / openreview:<forum id> / acl:<Anthology id>（没有 arXiv 版本时）。reason 必填。",
-          _obj({"paper": S, "arxiv": S, "ext": S, "url": S, "title": S, "reason": S, "tier": {"type": "string", "enum": ["T1", "T2", "T3"]},
-                "lines": SA, "due": S}, ["reason"]))
+                          "或 ext=doi:<DOI> / openreview:<forum id> / acl:<Anthology id>（没有 arXiv 版本时）；"
+                          "不是论文的 vault 笔记（如报告）用 note=vault 相对路径。reason 必填。pinned=true 置顶。",
+          _obj({"paper": S, "arxiv": S, "ext": S, "note": S, "url": S, "title": S, "reason": S,
+                "tier": {"type": "string", "enum": ["T1", "T2", "T3"]}, "lines": SA, "due": S, "pinned": {"type": "boolean"}},
+               ["reason"]))
     async def reading_push(a):
         try:
-            item, what = reading.push(paper=a.get("paper"), arxiv=a.get("arxiv"), ext=a.get("ext"), url=a.get("url"),
-                                      title=a.get("title"),
+            item, what = reading.push(paper=a.get("paper"), arxiv=a.get("arxiv"), ext=a.get("ext"), note=a.get("note"),
+                                      url=a.get("url"), title=a.get("title"),
                                       reason=a["reason"], source="claude", pushed_by=i18n.tv("tools.pushed_by"),
-                                      tier=a.get("tier"), lines=a.get("lines"), due=a.get("due"))
+                                      tier=a.get("tier"), lines=a.get("lines"), due=a.get("due"), pinned=bool(a.get("pinned")))
         except reading.ReadingError as e:
             return _err(str(e))
         await changed("reading", i18n.t("tools.changed.reading_push", key=reading.key_of(item), what=_push_result(what)), item)
@@ -153,12 +155,14 @@ def _tools(emit: Callable[[dict[str, Any]], Awaitable[None]]) -> list[SdkMcpTool
     async def reading_list(a):
         items = reading.load()
         reading.summary(items)
-        sel = [{k: i.get(k) for k in ("id", "key", "title", "status", "tier", "lines", "reason", "pushed_at")}
+        sel = [{k: i.get(k) for k in ("id", "key", "title", "status", "tier", "pinned", "lines", "reason", "pushed_at")}
                for i in items if not a.get("status") or i["status"] == a["status"]]
         return _ok(sel[:80])
 
-    @tool("reading_update", "修改阅读清单条目：status、tier、lines、due、takeaway、verdict(key/useful/irrelevant)、depth(skim/deep)。",
-          _obj({"id": S, "status": S, "tier": S, "lines": SA, "due": S, "takeaway": S, "verdict": S, "depth": S}, ["id"]))
+    @tool("reading_update", "修改阅读清单条目：status、tier、lines、due、takeaway、verdict(key/useful/irrelevant)、depth(skim/deep)、"
+                            "pinned(true 置顶 / false 取消置顶)。",
+          _obj({"id": S, "status": S, "tier": S, "lines": SA, "due": S, "takeaway": S, "verdict": S, "depth": S,
+                "pinned": {"type": "boolean"}}, ["id"]))
     async def reading_update(a):
         try:
             item = reading.update(a["id"], {k: v for k, v in a.items() if k != "id"})

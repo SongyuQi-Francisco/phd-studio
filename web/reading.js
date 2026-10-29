@@ -1,10 +1,12 @@
-// Reading list: inbox -> T1/T2/T3 -> reading -> done, with snooze / dismiss.
+// Reading list: inbox -> T1/T2/T3 -> reading -> done, with snooze / dismiss; pinned items on top.
+// An item is a paper, or a vault note (i.note), which opens in the note sheet instead of the reader.
 // i18n: done
 import { useEffect, useMemo, useRef, useState, useCallback } from "preact/hooks";
 import { html, Icon, api, prefs } from "/lib.js";
 import { t, lang } from "/i18n.js";
 import { C, Donut, Bars, Progress, Sparkline, perWeek, weekLabel } from "/charts.js";
 import { Thumb, loadThumbs, Skeleton, Empty, Collapse, Glyph, monthDay } from "/ui.js";
+import { readingGroups, ACTIVE } from "/reading-groups.js";
 
 const SOURCES = ["tracker", "claude", "advisor", "self"]; // i18n-keys: reading.source.{tracker,claude,advisor,self}
 const VERDICTS = ["key", "useful", "irrelevant"]; // i18n-keys: reading.verdict.{key,useful,irrelevant}
@@ -12,6 +14,18 @@ const DEPTHS = ["skim", "deep"]; // i18n-keys: reading.depth.{skim,deep}
 const sourceName = (s) => (SOURCES.includes(s) ? t("reading.source." + s) : s);
 const verdictName = (v) => (VERDICTS.includes(v) ? t("reading.verdict." + v) : v);
 const depthName = (d) => (DEPTHS.includes(d) ? t("reading.depth." + d) : d);
+const groupText = (id) => ({
+  pinned: { label: t("reading.group.pinned") },
+  inbox: { label: t("common.status.inbox"), hint: t("reading.group.inbox_hint") },
+  reading: { label: t("common.status.reading") },
+  T1: { label: t("common.tier.t1_week") },
+  T2: { label: "T2" },
+  T3: { label: "T3" },
+  done: { label: t("common.status.done") },
+  snoozed: { label: t("common.status.snoozed") },
+  stale: { label: t("reading.group.stale"), hint: t("reading.group.stale_hint") },
+  dismissed: { label: t("common.status.dismissed") },
+})[id];
 // Pipeline stages for the donut: inbox (neutral), tiers on one blue ramp (T1 darkest), reading, done.
 const stages = () => [
   { id: "inbox", label: t("common.status.inbox"), color: "var(--series-0)" },
@@ -65,7 +79,7 @@ export function DoneDialog({ item, onClose, onSaved }) {
         <div class="seg">${VERDICTS.map((k) => html`<button class=${verdict === k ? "on" : ""} onClick=${() => setVerdict(verdict === k ? "" : k)}>${verdictName(k)}</button>`)}</div></div>
       <div class="field col">
         <div class="row-between"><label>${t("common.term.takeaway")}</label>
-          <button class="tb-btn" disabled=${drafting} onClick=${draft}><${Icon} name="sparkle" sm />${drafting ? t("reading.done.drafting") : t("reading.done.draft")}</button></div>
+          ${!item.note && html`<button class="tb-btn" disabled=${drafting} onClick=${draft}><${Icon} name="sparkle" sm />${drafting ? t("reading.done.drafting") : t("reading.done.draft")}</button>`}</div>
         <textarea class="ta" rows="3" placeholder=${t("reading.done.takeaway_hint")} value=${takeaway} onInput=${(e) => setTakeaway(e.target.value)} />
         ${err && html`<div class="err">${err}</div>`}
       </div>
@@ -86,9 +100,9 @@ function Row({ i, selected, onSelect, onOpen, act, ready }) {
     : i.status === "inbox" ? html`<span class="newdot" title=${t("common.status.inbox")} />` : null;
   const stop = (fn) => (e) => { e.stopPropagation(); fn(); };
   return html`<div class=${"rl-row" + (selected ? " sel" : "")} onMouseMove=${(e) => pointerMoved(e) && !selected && onSelect()} onClick=${() => onOpen(i)}>
-    <${Thumb} k=${i.key} title=${i.title} size="sm" ready=${ready} badge=${badge && html`<span class="badge">${badge}</span>`} />
+    <${Thumb} k=${i.note ? null : i.key} note=${!!i.note} title=${i.title} size="sm" ready=${ready} badge=${badge && html`<span class="badge">${badge}</span>`} />
     <div class="rl-main">
-      <div class="rl-title">${i.title}${i.paper ? "" : html` <span class="muted">${{ doi: "DOI", openreview: "OpenReview", acl: "ACL" }[(i.key || "").split(":")[0]] || "arXiv"}</span>`}</div>
+      <div class="rl-title">${i.title}${i.paper ? "" : html` <span class="muted">${i.note ? t("common.term.note") : { doi: "DOI", openreview: "OpenReview", acl: "ACL" }[(i.key || "").split(":")[0]] || "arXiv"}</span>`}</div>
       <div class="rl-reason">${i.status === "done" && i.takeaway ? i.takeaway : i.reason}</div>
       <div class="rl-meta">
         ${i.lines.map((l) => html`<span class="tag">${l}</span>`)}
@@ -103,6 +117,8 @@ function Row({ i, selected, onSelect, onOpen, act, ready }) {
       ${(i.status === "inbox" || i.status === "queued") && html`<button class="abtn" title=${t("reading.snooze_title")} onClick=${stop(() => act(i, { status: "snoozed", snooze_until: addDays(7) }))}><${Icon} name="clock" sm /></button>
         <button class="abtn" title=${t("reading.skip_title")} onClick=${stop(() => act(i, { status: "dismissed" }))}><${Icon} name="x" sm /></button>`}
       ${(i.status === "snoozed" || i.status === "dismissed" || i.stale) && html`<button class="abtn txt" onClick=${stop(() => act(i, { status: "inbox" }))}>${t("reading.back_to_inbox")}</button>`}
+      ${ACTIVE.includes(i.status) && html`<button class=${"abtn" + (i.pinned ? " on" : "")} title=${i.pinned ? t("reading.unpin_title") : t("reading.pin_title")}
+        onClick=${stop(() => act(i, { pinned: !i.pinned }))}><${Glyph} name="pin" sm /></button>`}
     </div>
   </div>`;
 }
@@ -127,7 +143,7 @@ function Insight({ items }) {
   </section>`;
 }
 
-export function ReadingPage({ onOpen, toast, version }) {
+export function ReadingPage({ onOpen, onOpenNote, toast, version }) {
   const [data, setData] = useState(null);
   const [line, setLine] = useState("");
   const [sel, setSel] = useState(0);
@@ -139,7 +155,7 @@ export function ReadingPage({ onOpen, toast, version }) {
 
   const load = useCallback(() => api("/api/reading").then((r) => {
     setData(r);
-    loadThumbs(r.items.map((i) => i.key)).then(() => setReady((n) => n + 1));
+    loadThumbs(r.items.filter((i) => !i.note).map((i) => i.key)).then(() => setReady((n) => n + 1));  // a note has no PDF
   }), []);
   useEffect(() => { load(); }, [version]);
   useEffect(() => prefs.set("rlCharts", charts), [charts]);
@@ -147,24 +163,16 @@ export function ReadingPage({ onOpen, toast, version }) {
   const items = data?.items || [];
   const s = data?.summary;
   const filtered = useMemo(() => items.filter((i) => !line || i.lines.includes(line)), [items, line]);
-  const groups = useMemo(() => {
-    const by = (st) => filtered.filter((i) => i.status === st);
-    const order = (a, b) => (a.due || "9").localeCompare(b.due || "9") || a.age_days - b.age_days;
-    const queued = by("queued").sort(order);
-    return [
-      { id: "inbox", label: t("common.status.inbox"), items: by("inbox").filter((i) => !i.stale).sort((a, b) => a.age_days - b.age_days), hint: t("reading.group.inbox_hint") },
-      { id: "reading", label: t("common.status.reading"), items: by("reading") },
-      { id: "T1", label: t("common.tier.t1_week"), items: queued.filter((i) => i.tier === "T1") },
-      { id: "T2", label: "T2", items: queued.filter((i) => i.tier === "T2") },
-      { id: "T3", label: "T3", items: queued.filter((i) => i.tier === "T3") },
-      { id: "done", label: t("common.status.done"), items: by("done").sort((a, b) => (b.read_at || "").localeCompare(a.read_at || "")), fold: true },
-      { id: "snoozed", label: t("common.status.snoozed"), items: by("snoozed"), fold: true },
-      { id: "stale", label: t("reading.group.stale"), items: by("inbox").filter((i) => i.stale), fold: true, hint: t("reading.group.stale_hint") },
-      { id: "dismissed", label: t("common.status.dismissed"), items: by("dismissed"), fold: true },
-    ];
-  }, [filtered, lang()]);
+  const groups = useMemo(() => readingGroups(filtered).map((g) => ({ ...g, ...groupText(g.id) })), [filtered, lang()]);
   const flat = groups.flatMap((g) => (g.fold && !open[g.id] ? [] : g.items));
   const current = flat[Math.min(sel, flat.length - 1)];
+
+  // A note item opens in the note sheet; opening it moves it to "reading", as opening a paper does.
+  const openItem = (i) => {
+    if (!i.note) return onOpen(i);
+    onOpenNote(i.note);
+    api("/api/reading/opened", { json: { key: i.key } }).then(load).catch(() => {});
+  };
 
   const act = async (i, patch) => {
     if (patch === "done") { setDoneItem(i); return; }
@@ -185,7 +193,7 @@ export function ReadingPage({ onOpen, toast, version }) {
       else if (e.key === "s" && ["inbox", "queued"].includes(i.status)) act(i, { status: "snoozed", snooze_until: addDays(7) });
       else if (e.key === "x" && ["inbox", "queued"].includes(i.status)) act(i, { status: "dismissed" });
       else if (e.key === "d" && ["queued", "reading"].includes(i.status)) act(i, "done");
-      else if (e.key === "Enter") onOpen(i);
+      else if (e.key === "Enter") openItem(i);
     };
     window.addEventListener("keydown", k);
     return () => window.removeEventListener("keydown", k);
@@ -236,9 +244,9 @@ export function ReadingPage({ onOpen, toast, version }) {
       </div>
       ${g.fold
         ? html`<${Collapse} open=${!!open[g.id]}>${g.items.map((i) => { const vis = !!open[g.id]; if (vis) idx += 1; const my = idx;
-            return html`<${Row} key=${i.id} i=${i} ready=${ready} selected=${vis && current && current.id === i.id} onSelect=${() => vis && setSel(my)} onOpen=${onOpen} act=${act} />`; })}</${Collapse}>`
+            return html`<${Row} key=${i.id} i=${i} ready=${ready} selected=${vis && current && current.id === i.id} onSelect=${() => vis && setSel(my)} onOpen=${openItem} act=${act} />`; })}</${Collapse}>`
         : g.items.map((i) => { idx += 1; const my = idx;
-            return html`<${Row} key=${i.id} i=${i} ready=${ready} selected=${current && current.id === i.id} onSelect=${() => setSel(my)} onOpen=${onOpen} act=${act} />`; })}
+            return html`<${Row} key=${i.id} i=${i} ready=${ready} selected=${current && current.id === i.id} onSelect=${() => setSel(my)} onOpen=${openItem} act=${act} />`; })}
     </section>`)}
     <div class="rl-keys"><span class="kbd">1</span><span class="kbd">2</span><span class="kbd">3</span> ${t("reading.keys.tier")} · <span class="kbd">S</span> ${t("reading.keys.snooze")} · <span class="kbd">X</span> ${t("reading.keys.skip")} · <span class="kbd">D</span> ${t("common.status.done")} · <span class="kbd">J</span>/<span class="kbd">K</span> ${t("reading.keys.move")} · <span class="kbd">↵</span> ${t("common.open")}</div>
   </div>
