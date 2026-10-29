@@ -220,17 +220,19 @@ class PushReq(BaseModel):
     paper: str | None = None
     arxiv: str | None = None
     ext: str | None = None  # doi:<doi> / openreview:<id> / acl:<id>, for a paper without a note or arXiv id
+    note: str | None = None  # vault-relative path of a Markdown note that is not a paper (a report, say)
     reason: str | None = None  # None: the default words of the Mac that adds it (api.reason_self)
     tier: str | None = None
     lines: list[str] = []
+    pinned: bool = False
 
 
 @app.post("/api/reading")
 def reading_push(req: PushReq) -> dict[str, Any]:
     try:
         reason = i18n.tv("api.reason_self") if req.reason is None else req.reason  # stored in the reading list: the vault language
-        item, what = reading.push(paper=req.paper, arxiv=req.arxiv, ext=req.ext, reason=reason, source="self",
-                                  tier=req.tier, lines=req.lines)
+        item, what = reading.push(paper=req.paper, arxiv=req.arxiv, ext=req.ext, note=req.note, reason=reason, source="self",
+                                  tier=req.tier, lines=req.lines, pinned=req.pinned)
     except reading.ReadingError as e:
         raise HTTPException(400, str(e))
     return {"item": item, "result": what}

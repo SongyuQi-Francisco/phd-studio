@@ -571,7 +571,7 @@ def _candidates(today: date) -> list[dict[str, Any]]:
                              date_=w.get("date"), abstract=w.get("abstract") or "", venue=w.get("venue"),
                              paper=idx.get(aid) if aid else None))
     for it in reading.load():
-        if it.get("status") not in ("inbox", "queued", "reading"):
+        if it.get("status") not in ("inbox", "queued", "reading") or reading.is_note(it):  # a vault note is not a peer paper
             continue
         title = it.get("title") or it.get("paper") or ""
         out.append(_cand("reading", None, title=title, arxiv=it.get("arxiv"), ext=it.get("ext"), url=it.get("url"),

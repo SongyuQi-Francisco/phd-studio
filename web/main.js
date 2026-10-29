@@ -598,7 +598,7 @@ function App() {
   if (reading) page = html`<${Reader} key=${stem} stem=${stem} paper=${paper} pageRef=${pageRef} viewRef=${viewRef} jumpRef=${jumpRef} toast=${toast}
       onSelectionAction=${onSelectionAction} onCropAction=${onCropAction} onDone=${() => setDoneOpen(true)} onAddToList=${addToList}
       onExcerpted=${onExcerpted} onNoteChanged=${() => { loadPaper(stem); setNoteVersion((n) => n + 1); }} />`;
-  else if (view === "list") page = html`<${ReadingPage} version=${dataVersion} toast=${toast} onOpen=${(i) => pick(i.key)} />`;
+  else if (view === "list") page = html`<${ReadingPage} version=${dataVersion} toast=${toast} onOpen=${(i) => pick(i.key)} onOpenNote=${setNotePath} />`;
   else if (view === "timeline") page = html`<${TimelinePage} version=${dataVersion} tab=${tlTab} onOpenVenue=${setVenueKey} toast=${toast} onChanged=${bump} />`;
   else if (view === "ideas") page = html`<${IdeasPage} version=${dataVersion} lines=${status?.lines || []} radarPath=${status?.idea_radar}
       onAsk=${ask} onOpenNote=${setNotePath} onOpenPaper=${openPaper} toast=${toast} />`;

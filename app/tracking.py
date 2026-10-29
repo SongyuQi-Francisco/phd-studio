@@ -336,7 +336,8 @@ def feed(days: int = 30, per_follow: int = 8, refresh: bool = False, today: date
     items = reading.load()
     listed = {i.get("arxiv"): i["status"] for i in items if i.get("arxiv")}
     listed_ext = {i["ext"]: i["status"] for i in items if i.get("ext")}
-    listed_title = {reading.norm_title(i["title"]): i["status"] for i in items if i.get("title")}  # the same paper under another key
+    listed_title = {reading.norm_title(i["title"]): i["status"] for i in items  # the same paper under another key
+                    if i.get("title") and not reading.is_note(i)}
     idx, ext_idx = library.arxiv_index(), library.ext_index()
     out = []
     for f in follows():
