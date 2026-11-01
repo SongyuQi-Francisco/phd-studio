@@ -12,12 +12,19 @@ Operations (ids may be "$name" refs to records added earlier in the same batch):
     {"op": "edge.update",   "id": <edge>, "set": {kind, label}}
     {"op": "edge.delete",   "id": <edge>}
     {"op": "attach.add",    "ref": "$v", "kind": "evidence", "node": <node>, "set": {...}}
-    {"op": "attach.update", "kind": "evidence", "id": <id>, "set": {...}}
-    {"op": "attach.delete", "kind": "evidence", "id": <id>}
+    {"op": "attach.update", "kind": "evidence", "id": <id>, "set": {...}, "node": <node>}
+    {"op": "attach.delete", "kind": "evidence", "id": <id>, "node": <node>}
+                            # node (optional): the node the record hangs on; a kind kept one file per node then
+                            # reads only that file instead of asking this Mac's index where the record lives
     {"op": "log",           "text": "one line for the change log", "nodes": [<node>, ...]}
     {"op": "project.update", "set": {title, line, note, description, archived}}
 
 `simulate` runs the same checks without writing.
+
+A batch reads what it writes: the map file whole, a kind kept in one file whole, and of a kind kept one file per node
+(results) only the files of the nodes it touches (records.Shards). Its clock observes what it reads, so every stamp it
+writes is later than any stamp on the records it changes: those are the only records whose fields it competes with,
+and the other files keep their records and stamps untouched. The clock also never goes back on this Mac (clock.STATE).
 """
 from __future__ import annotations
 
@@ -26,17 +33,19 @@ import secrets
 from contextlib import ExitStack
 from typing import Any
 
+from .. import i18n
 from ..config import DEVICE, RMAP_DIR
 from ..store import now
 from . import model, registry
 from .clock import Clock
 from .project import PROJECT_ID, Project, get, taken
-from .records import child_live, clocks, last_write, live_ids, own_live, set_field
+from .records import Shards, child_live, clocks, last_write, live_ids, own_live, set_field
 
 OPS = ("node.add", "node.update", "node.delete", "edge.add", "edge.update", "edge.delete",
        "attach.add", "attach.update", "attach.delete", "log", "project.update")
 MAX_OPS = 400          # one action of a person or the assistant
 MAX_IMPORT_OPS = 20000  # an import (who="import" / "cli"): a results CSV, a first map; still one atomic batch
+SHARD_ID_BYTES = 6     # random part of a new id of a kind kept one file per node (results: many thousands per map)
 
 
 def _rid(prefix: str, taken_ids: set[str], nbytes: int = 4) -> str:
@@ -63,8 +72,10 @@ class _Batch:
         self.refs: dict[str, str] = {}
         self.events: list[dict[str, Any]] = []
         self.bulk: dict[tuple[str, str], dict[str, Any]] = {}  # (kind, action) -> one event, for kinds logged per batch
-        self.att: dict[str, list[dict[str, Any]]] = {}
+        self.att: dict[str, list[dict[str, Any]]] = {}  # kinds kept in one file: every record
         self.att_by: dict[str, dict[str, dict[str, Any]]] = {}
+        self.shards: dict[str, Shards] = {}  # kinds kept one file per node: the files opened so far
+        self.indexed: set[str] = set()  # sharded kinds whose ids (this Mac's index) are in `taken`
         self.stack: ExitStack | None = None
         self.taken = {r["id"] for c in data.values() for r in c}
         self.nodes = {n["id"]: n for n in data["nodes"]}
@@ -101,21 +112,41 @@ class _Batch:
     def live_edges(self) -> list[dict[str, Any]]:
         return [e for e in self.data["edges"] if child_live(e, self.live) and e.get("from") in self.live and e.get("to") in self.live]
 
-    def kind_data(self, name: str) -> list[dict[str, Any]]:
+    def kind(self, name: Any) -> registry.AttachmentKind:
         kinds = registry.kinds()
         if name not in kinds:
             raise ValueError(f"没有这种挂载：{name}")
+        return kinds[name]
+
+    def seen(self, recs: list[dict[str, Any]]) -> None:
+        """Records the batch read: their ids are taken, and the clock goes past their stamps."""
+        for r in recs:
+            self.taken.add(r["id"])
+            self.clock.observe(last_write(r))
+
+    def kind_data(self, name: str) -> list[dict[str, Any]]:
+        """Every record of a kind kept in one file."""
+        kind = self.kind(name)
         if name not in self.att:
-            store = self.p.kind_store(kinds[name])
+            store = self.p.kind_store(kind)
             if self.stack is None:  # a dry run: read only (nothing there yet for a project not yet created)
                 self.att[name] = [] if self.fresh else copy.deepcopy(store.load(include_deleted=True)[name])
             else:
                 self.att[name] = self.stack.enter_context(store.editing(skip_unchanged=True))[name]
             self.att_by[name] = {r["id"]: r for r in self.att[name]}
-            for r in self.att[name]:
-                self.taken.add(r["id"])
-                self.clock.observe(last_write(r))
+            self.seen(self.att[name])
         return self.att[name]
+
+    def shard_data(self, name: str) -> Shards:
+        """A kind kept one file per node: a node's file is opened (and locked till the batch is written) when first
+        needed, so the batch reads only the nodes it touches."""
+        if name not in self.shards:
+            store = self.p.kind_store(self.kind(name))
+            if self.stack is None:
+                self.shards[name] = store.reading(seen=self.seen, fresh=self.fresh)
+            else:
+                self.shards[name] = self.stack.enter_context(store.editing(seen=self.seen))
+        return self.shards[name]
 
     def define(self, op: dict[str, Any], rid: str) -> None:
         ref = op.get("ref")
@@ -144,8 +175,8 @@ class _Batch:
         set_field(rec, "deleted_by", by, stamp)
         rec["updated_at"] = self.at
 
-    def new(self, prefix: str, fields: dict[str, Any], stamp: str) -> dict[str, Any]:
-        rec = {"id": _rid(prefix, self.taken), "created_at": self.at, "updated_at": self.at, "clock": {}}
+    def new(self, prefix: str, fields: dict[str, Any], stamp: str, nbytes: int = 4) -> dict[str, Any]:
+        rec = {"id": _rid(prefix, self.taken, nbytes), "created_at": self.at, "updated_at": self.at, "clock": {}}
         for k, v in fields.items():
             if v is not None:
                 set_field(rec, k, v, stamp)
@@ -183,7 +214,7 @@ class _Batch:
                 self.tomb(e, stamp, rec["id"])
                 self.log("edge", "delete", e["id"], [e["from"], e["to"]], stamp, record=_snap(e))
         for name, kind in registry.kinds().items():
-            for a in self.kind_data(name):
+            for a in self.shard_data(name).node(rec["id"]) if kind.shard else self.kind_data(name):
                 if a.get("node") == rec["id"] and child_live(a, self.live):
                     stamp = self.clock.tick()
                     self.tomb(a, stamp, rec["id"])
@@ -250,31 +281,54 @@ class _Batch:
 
     def attach_add(self, op: dict[str, Any]) -> None:
         name = op.get("kind")
-        recs = self.kind_data(name)
-        kind = registry.kinds()[name]
+        kind = self.kind(name)
+        recs = None if kind.shard else self.kind_data(name)
         node = self.node(self.ref(op.get("node"), "node"))
         if kind.node_types and node.get("type") not in kind.node_types:
             raise ValueError(f"{name} 只能挂在 {', '.join(kind.node_types)} 节点上")
         fields = {k: v for k, v in kind.clean(op.get("set") or {}, new=True).items() if v not in (None, "", [])}
         kind.check_record(fields)
+        if kind.shard:
+            shards = self.shard_data(name)
+            shards.node(node["id"])
+            if name not in self.indexed:  # a new id is checked against every id of the kind, not just the files read
+                self.taken.update(shards.ids())
+                self.indexed.add(name)
         stamp = self.clock.tick()
-        rec = self.new(kind.prefix, {"node": node["id"], **fields}, stamp)
-        recs.append(rec)
-        self.att_by[name][rec["id"]] = rec
+        rec = self.new(kind.prefix, {"node": node["id"], **fields}, stamp, SHARD_ID_BYTES if kind.shard else 4)
+        if kind.shard:
+            shards.add(rec)
+        else:
+            recs.append(rec)
+            self.att_by[name][rec["id"]] = rec
         self.define(op, rec["id"])
         self._log_attach(kind, "add", rec, node, stamp, record=_snap(rec), summary=kind.line(rec))
 
     def _attachment(self, op: dict[str, Any]) -> dict[str, Any]:
-        self.kind_data(op.get("kind"))
+        """The record an update or delete is about. With `node`, it must hang on that node (of a kind kept one file
+        per node, only that file is read); without, a sharded kind finds the record's file through this Mac's index."""
+        name = op.get("kind")
+        kind = self.kind(name)
         rid = self.ref(op.get("id"))
-        rec = self.att_by[op["kind"]].get(rid)
+        at = self.ref(op["node"], "node") if op.get("node") is not None else None
+        if at is not None and at not in self.nodes:
+            raise KeyError(i18n.t("rmap.not_on_node", kind=name, id=rid, node=at))
+        if kind.shard:
+            rec = self.shard_data(name).find(rid, at)
+        else:
+            self.kind_data(name)
+            rec = self.att_by[name].get(rid)
+            if rec is not None and at is not None and rec.get("node") != at:
+                rec = None
+        if rec is None and at is not None:
+            raise KeyError(i18n.t("rmap.not_on_node", kind=name, id=rid, node=at))
         if rec is None or not child_live(rec, self.live) or rec.get("node") not in self.live:
-            raise KeyError(f"没有这条 {op.get('kind')}：{rid}")
+            raise KeyError(f"没有这条 {name}：{rid}")
         return rec
 
     def attach_update(self, op: dict[str, Any]) -> None:
         rec = self._attachment(op)
-        kind = registry.kinds()[op["kind"]]
+        kind = self.kind(op["kind"])
         new = kind.clean(op.get("set") or {}, new=False)
         new = {k: (None if v in ("", []) else v) for k, v in new.items()}
         changes = _changes(rec, new)
@@ -291,7 +345,7 @@ class _Batch:
 
     def attach_delete(self, op: dict[str, Any]) -> None:
         rec = self._attachment(op)
-        kind = registry.kinds()[op["kind"]]
+        kind = self.kind(op["kind"])
         stamp = self.clock.tick()
         self.tomb(rec, stamp)
         self._log_attach(kind, "delete", rec, self.nodes.get(rec.get("node"), {"id": rec.get("node")}), stamp, record=_snap(rec))

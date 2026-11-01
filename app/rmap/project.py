@@ -100,6 +100,13 @@ def dag_edges(m: dict[str, Any]) -> list[dict[str, Any]]:
     return [e for e in m["edges"] if e.get("kind") in model.FLOW and not e.get("cycle")]
 
 
+class EventStore(Store):
+    """A month of the change log: plain records (a conflict copy is unioned in), read and written with libyaml when it
+    is there, like FieldStore: every write reads the month's file again, and a month of imports is big."""
+
+    loader, dumper = FieldStore.loader, FieldStore.dumper
+
+
 class Project:
     def __init__(self, slug: str):
         if not model.valid_slug(slug):
@@ -120,8 +127,8 @@ class Project:
         return FieldStore(self.dir / kind.filename, (kind.name,), HEADER, name=name)
 
     def event_store(self, month: str) -> Store:
-        return Store(self.dir / "events" / f"{month}.yaml", ("events",), EVENTS_HEADER,
-                     name=f"rmap/{self.slug}.events-{month}")
+        return EventStore(self.dir / "events" / f"{month}.yaml", ("events",), EVENTS_HEADER,
+                          name=f"rmap/{self.slug}.events-{month}")
 
     def event_months(self) -> list[str]:
         """Months with a log file, newest first (conflict copies are merged by their store, not listed)."""

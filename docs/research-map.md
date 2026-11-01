@@ -42,9 +42,12 @@ merging whole records by `updated_at`.
 
 - **Clock stamps.** Every field a write sets (or clears) gets a stamp in the record's `clock`:
   `{title: "1793001234567.0000.macbook", status: …}`. Stamps come from a hybrid logical clock
-  (`app/rmap/clock.py`): milliseconds that follow the wall clock but never go backwards on a Mac and never
-  fall behind a stamp already seen in the map, a counter for writes in the same millisecond, and the
-  device name as tie-break, so no two writes compare equal. Text order is time order.
+  (`app/rmap/clock.py`): milliseconds that follow the wall clock but never go backwards on a Mac (the last
+  stamp is kept in `<data>/rmap/clock`) and never fall behind a stamp the write has read, a counter for
+  writes in the same millisecond, and the device name as tie-break, so no two writes compare equal. Text
+  order is time order. A write reads the map file, the attachment files kept whole, and of a kind kept one
+  file per node only the nodes it touches: those hold every record it changes, so each field it writes is
+  stamped after the field it replaces, and the records in the files it does not read keep their own stamps.
 - **Merge.** For each field the later stamp wins. Two Macs that change different fields of a node both
   keep their change; a cleared field stays cleared against an older copy. Records written before stamps
   existed count as written whole at their `updated_at`.
@@ -127,7 +130,9 @@ one appears, across all maps.
 ## Events
 
 `events/<YYYY-MM>.yaml → events[]`, one record per changed record, written after the change itself.
-Events are never edited; conflict copies of a month merge as a union.
+Events are never edited; conflict copies of a month merge as a union. Every write reads the month again, so
+the log is read and written with libyaml (`CSafeLoader` / `CSafeDumper`, like the map's own files), or the
+pure Python YAML where PyYAML was built without it.
 
 | field | |
 |---|---|
@@ -181,6 +186,18 @@ Operations: `node.add / update / delete`, `edge.add / update / delete`, `attach.
 `log`, `project.update`. A batch holds up to 400 operations; with `who="import"` or `"cli"` up to 20000
 (a results CSV is still one atomic batch). The CLI (#48) and the assistant's confirmed proposals use the
 same call.
+
+A batch reads only what it writes (#72). The map file and the attachment kinds kept in one file are read
+whole; of a kind kept one file per node (results) it opens a node's file the first time it needs it, and keeps
+it locked until the batch is written: `attach.add` opens the node it adds to, `node.delete` the node's own file,
+and `attach.update / delete` the file the record is in. That file comes from `"node": <node id>` on the
+operation when the caller knows it (the record must then be on that node), or else from this Mac's index of
+record id → node (`<data>/rmap/<slug>.<kind>.ids.json`, never synced: it lists the ids in each file of the
+kind, conflict copies included, with the file's size and time, and reads again only the files whose size or
+time moved; a lost or broken index is built again from the files, and an id it does not know makes it read
+every file before the record counts as missing). A new id is checked against the index too; ids of a kind kept
+one file per node have 6 random bytes (`rs` + 12 hex digits; older ids with 8 keep working). The map's lock is
+held from reading the map to writing the files, so it now lasts as long as the files the batch touches take.
 
 ## The assistant: proposals
 
@@ -242,8 +259,10 @@ The change log gets one line per batch (`kind: results`, `count`), plus the sent
 numbers themselves for a report).
 
 Results are stored **one file per node** (`results/<node id>.yaml`, the kind registers `shard="node"`, see "Back-end
-extension points"): writing to a node rewrites only its file, an import reads only its node's records, and a listing
-reads none.
+extension points"): a write through `ops.apply` reads and rewrites only the files of the nodes it touches (see
+"Writing: one path"; about 0.1 s for one record or a 300-row import onto a small node in a map with 16000 results),
+an import reads only its node's records, and a listing reads none. Imports, reports and `results/set` name the node
+on their `attach.update` operations, so they need no index.
 
 **Reading (#71).** The map page never gets the records of the whole map. `GET /projects/{slug}` carries a **digest** per
 node instead (`digests.results[node]`: `count`, the most recently measured `metric` and its `dataset`, the latest
@@ -260,9 +279,8 @@ changes, and say so with a retry when a read fails (never "no results"). The pan
 once that node's records are in. Everything else reads only the kinds it uses (`Project.read(attachments=[...])`): the canvas evidence, the peer
 analysis and suggestions peers and evidence, a proposal the kinds it changes (and, for a measurement it would add, that
 node's file), the CLI's `show` the digests. The time travel replays every kind, results included (a batch event names
-its records and replay takes their fields from the files), and gives each replayed map its digests. A write through `ops.apply` on this kind still reads all the shards (about 1.5 s per 17000 records, so a
-write takes about 3 s in a map with that many); an import is capped at 19998 records (rows × metrics), checked before
-anything is written.
+its records and replay takes their fields from the files), and gives each replayed map its digests. An import is capped at 19998 records (rows × metrics), checked before anything
+is written.
 
 **Tables.** `app/rmap/results/tabular.py` reads pasted text or a file: CSV, TSV (a spreadsheet paste), a Markdown table,
 JSON (an array of objects, an object of `name -> metrics`, or an object holding such an array; nested objects become
@@ -353,7 +371,7 @@ and the plan: no approval card. The assistant only proposes; the user confirms.
 | `POST /projects/{slug}/batch` | `{ops, summary?, who?}` |
 | `POST /projects/{slug}/nodes` · `PATCH` · `DELETE /nodes/{id}` | `POST` takes node fields + `parent`, `edge` |
 | `POST /projects/{slug}/edges` · `PATCH` · `DELETE /edges/{id}` | |
-| `GET` · `POST /projects/{slug}/attachments/{kind}` · `PATCH` · `DELETE …/{id}` | any registered kind; `GET …?node=` lists one node's records (a kind kept per node reads that node's file alone) |
+| `GET` · `POST /projects/{slug}/attachments/{kind}` · `PATCH` · `DELETE …/{id}` | any registered kind; `GET …?node=` lists one node's records (a kind kept per node reads that node's file alone); `PATCH` may name the record's node in the body (`node`) and `DELETE` as `?node=`: only that node's file is read, and a record on another node is a 404 |
 | `POST /projects/{slug}/results/preview` · `/results/import` · `/results/sync` · `GET /projects/{slug}/results/status` · `GET /results/files` | experiment results (plugin routes, see "Experiment results"): columns and a mapping for pasted text or a file · upsert a table onto a node (`dry_run`) · read the watched files · what this Mac watches · CSV / JSON files in the code folders |
 | `GET /proposals?slug=` · `POST /proposals/{id}/apply` · `DELETE /proposals/{id}` | the assistant's proposals (for a map, plus the ones that would create one) |
 | `GET /lines` · `POST /seed {line}` | research lines with a note and their map · a first map drafted from a note, as a proposal |
@@ -375,7 +393,8 @@ failing plugin is logged and skipped.
   generic routes, cascade on node delete, events, and its `extra` in `/meta`. A validator takes a value
   and returns the clean one (or raises `ValueError`); `check(record)` sees the whole record after each
   add or change; `shard="node"` keeps the kind in one file per node (`<file or name>/<node id>.yaml`, a
-  `ShardedStore`) so a big import on one node does not rewrite the others; `identity(record) -> tuple` says what tells two
+  `ShardedStore`) so a write reads and rewrites only the nodes it touches, whatever the others hold (records are
+  found by id through this Mac's index, see "Writing: one path"); `identity(record) -> tuple` says what tells two
   records of the kind apart on a node (a proposal that adds one that exists by the time it is confirmed is stale);
   `log="batch"` logs one event per batch and action (`targets`, `count`) instead of one
   per record, for kinds filled by bulk imports. `digest(records) -> dict | None` (needs `shard="node"`): what the map

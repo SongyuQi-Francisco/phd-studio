@@ -109,7 +109,7 @@ def upsert_ops(existing: list[dict[str, Any]], node_id: str, recs: list[dict[str
             if r.get(flag) and r[flag] != old.get(flag):
                 patch[flag] = r[flag]
         if patch:
-            out.append({"op": "attach.update", "kind": "results", "id": old["id"], "set": patch})
+            out.append({"op": "attach.update", "kind": "results", "id": old["id"], "node": node_id, "set": patch})
             stats["updated"] += 1
         else:
             stats["unchanged"] += 1
@@ -277,7 +277,7 @@ def bulk_set(slug: str, fields: dict[str, Any], *, node: str | None = None, conf
                     continue
                 patch = {k: v for k, v in want.items() if _differs(r, k, v)}
                 if patch:
-                    todo.append({"op": "attach.update", "kind": "results", "id": r["id"], "set": patch})
+                    todo.append({"op": "attach.update", "kind": "results", "id": r["id"], "node": nid, "set": patch})
         for i in range(0, len(todo), BULK_CHUNK):
             ops.apply(slug, todo[i:i + BULK_CHUNK], who="user")
         return {"updated": len(todo)}

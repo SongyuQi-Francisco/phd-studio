@@ -61,12 +61,15 @@ class Store:
         return {k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in r.items()
                 if v not in (None, "", [])}
 
-    def _write(self, data: dict[str, list[dict[str, Any]]]) -> None:
+    def _write(self, data: dict[str, list[dict[str, Any]]]) -> os.stat_result:
+        """Returns the written file's stat, taken before it replaced the old one (so it is ours, whatever comes next)."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         body = yaml.dump({c: [self._clean(r) for r in data[c]] for c in self.collections}, Dumper=self.dumper,
                          allow_unicode=True, sort_keys=False, width=1000)
         self._tmp.write_text(self.header + body, encoding="utf-8")
+        st = self._tmp.stat()
         os.replace(self._tmp, self.path)
+        return st
 
     def _merge_conflicts(self, data: dict[str, list[dict[str, Any]]]) -> bool:
         copies = sorted(self.path.parent.glob(f"{self.path.stem}.sync-conflict-*{self.path.suffix}"))
