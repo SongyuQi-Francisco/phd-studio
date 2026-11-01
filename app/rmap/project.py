@@ -2,6 +2,7 @@
 
     <research_maps>/<slug>/map.yaml          project (one record, id "project"), nodes, edges
     <research_maps>/<slug>/<kind>.yaml       attachments of one kind (evidence.yaml, ...)
+    <research_maps>/<slug>/<kind>/<node>.yaml  a kind kept per node (results/): the map page gets a digest per node
     <research_maps>/<slug>/events/<YYYY-MM>.yaml   the change log, one file per month
 
 Map and attachment records merge field by field (records.py); the log is append-only. Readers apply the
@@ -15,8 +16,10 @@ import copy
 import fcntl
 import hashlib
 import json
+import logging
 import os
 import re
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +29,7 @@ from . import model, registry
 from .clock import from_iso, parse
 from .records import FieldStore, ShardedStore, child_live, clocks, live_ids, own_live
 
+log = logging.getLogger(__name__)
 HEADER = "# Research map, managed by PhD Studio (研究地图). Edit in the app; see docs/research-map.md.\n"
 EVENTS_HEADER = "# Research map change log, managed by PhD Studio. One record per change; never edited.\n"
 PROJECT_ID = "project"
@@ -127,10 +131,12 @@ class Project:
         return sorted({p.stem for p in d.glob("*.yaml") if re.fullmatch(r"\d{4}-\d{2}", p.stem)}, reverse=True)
 
     # ---- reading ----
-    def read(self, include_deleted: bool = False, attachments: bool = True) -> dict[str, Any]:
-        """The whole map: project record, nodes, edges, every registered attachment kind, and warnings.
-        attachments=False leaves the attachment kinds out (`attachments` is {}): a listing needs none of them, and
-        a map with thousands of result records is slow to read."""
+    def read(self, include_deleted: bool = False, attachments: bool | Iterable[str] = True,
+             digests: bool = False) -> dict[str, Any]:
+        """The map: project record, nodes, edges, attachment records, and warnings.
+        attachments: True for every registered kind, False for none (`attachments` is {}), or the names of the kinds
+        to read. Read only the kinds you use: a map can hold thousands of result records.
+        digests: also `digests` {kind: {node: digest}} for the kinds that have one (see `digests`)."""
         self.ingest()
         data = copy.deepcopy(self.map.load(include_deleted=True))
         project = next((r for r in data["project"] if r["id"] == PROJECT_ID), None) or {"id": PROJECT_ID, "title": self.slug}
@@ -143,13 +149,58 @@ class Project:
             if e["id"] in cycle:
                 e["cycle"] = True
         loaded = {}
-        for name, kind in (registry.kinds().items() if attachments else []):
+        for name, kind in _chosen(attachments).items():
             recs = self.kind_store(kind).load(include_deleted=True)[name]
             loaded[name] = [r for r in recs if include_deleted or (child_live(r, live) and r.get("node") in live)]
         warnings = [{"kind": "cycle", "edges": sorted(cycle)}] if cycle else []
-        return {"slug": self.slug, "project": project, "nodes": nodes, "edges": edges,
-                "attachments": loaded, "warnings": warnings, "stamp": self.stamp(),
-                "seq": self._ingest_state()["seq"]}
+        out = {"slug": self.slug, "project": project, "nodes": nodes, "edges": edges,
+               "attachments": loaded, "warnings": warnings, "stamp": self.stamp(),
+               "seq": self._ingest_state()["seq"]}
+        if digests:
+            out["digests"] = self.digests(live)
+        return out
+
+    def digests(self, live: set[str] | None = None) -> dict[str, dict[str, Any]]:
+        """{kind: {node: digest}} for every kind with a digest (registry.AttachmentKind.digest) and every live node
+        that has records of it. Such a kind keeps one file per node, and a node's records live and die with it (a
+        node delete's tombstones name that node), so a digest depends on its file alone: it is kept with the
+        file's signature (and its conflict copies'), and only the nodes whose file changed are read again. A node
+        whose digest cannot be worked out (a file broken by hand) is logged and left out until its file changes."""
+        if live is None:
+            live = live_ids(self.map.load(include_deleted=True)["nodes"])
+        out: dict[str, dict[str, Any]] = {}
+        for name, kind in registry.kinds().items():
+            if not kind.digest:
+                continue
+            store = self.kind_store(kind)
+            sigs: dict[str, list[tuple[Any, ...]]] = {}
+            for fname, sig in _files(store.folder).items():
+                sigs.setdefault(fname.split(".sync-conflict-")[0].removesuffix(".yaml"), []).append((fname, *sig))
+            book = out[name] = {}
+            for node, sig in sigs.items():
+                if node not in live:
+                    continue
+                key = (str(store.folder), node)
+                hit = _DIGESTS.get(key)
+                if hit is None or hit[0] != sig:
+                    hit = _DIGESTS[key] = (sig, _digest(kind, node, lambda: [
+                        r for r in store.load_node(node, include_deleted=True) if child_live(r, live) and r.get("node") == node]))
+                if hit[1] is not None:
+                    book[node] = hit[1]
+        return out
+
+    def records(self, name: str, node: str | None = None) -> list[dict[str, Any]]:
+        """The live records of one attachment kind, or of one node only: a kind kept per node then reads that
+        node's file and no other. KeyError for a kind nobody registered."""
+        kind = registry.kinds()[name]
+        self.ingest()
+        live = live_ids(self.map.load(include_deleted=True)["nodes"])
+        if node is not None and node not in live:
+            return []
+        store = self.kind_store(kind)
+        recs = (store.load_node(node, include_deleted=True) if node is not None and isinstance(store, ShardedStore)
+                else store.load(include_deleted=True)[name])
+        return [r for r in recs if child_live(r, live) and r.get("node") in live and node in (None, r.get("node"))]
 
     def _month_events(self, month: str) -> list[dict[str, Any]]:
         rows = self.event_store(month).load()["events"]
@@ -240,6 +291,46 @@ class Project:
             return []
         registry.publish(self.slug, new)  # outside the lock: a subscriber may read the map again
         return new
+
+
+_DIGESTS: dict[tuple[str, str], tuple[list[tuple[Any, ...]], dict[str, Any] | None]] = {}  # (folder, node) -> (sig, digest)
+
+
+def _chosen(attachments: bool | Iterable[str]) -> dict[str, registry.AttachmentKind]:
+    """The kinds `read(attachments=...)` asks for: all of them, none, or those named (unknown names are skipped)."""
+    kinds = registry.kinds()
+    if attachments is True or attachments is False:
+        return dict(kinds) if attachments else {}
+    names = [attachments] if isinstance(attachments, str) else list(attachments)
+    return {n: kinds[n] for n in names if n in kinds}
+
+
+def _digest(kind: registry.AttachmentKind, node: str, records) -> dict[str, Any] | None:
+    """One node's digest (records: a list, or a function that reads it); None when it has no records, or when its
+    file or the kind's digest fails (logged): one broken node must not take the map down."""
+    try:
+        recs = records() if callable(records) else records
+        return kind.digest(recs) if recs else None
+    except Exception:  # noqa: BLE001 - hand-edited YAML can hold anything
+        log.exception("research map: no %s digest for node %s", kind.name, node)
+        return None
+
+
+def digests_of(attachments: dict[str, list[dict[str, Any]]]) -> dict[str, dict[str, Any]]:
+    """`digests` of records in hand (a replayed map): {kind: {node: digest}} for the kinds given that have one."""
+    out: dict[str, dict[str, Any]] = {}
+    for name, kind in registry.kinds().items():
+        if kind.digest and name in attachments:
+            by_node: dict[str, list[dict[str, Any]]] = {}
+            for r in attachments[name]:
+                by_node.setdefault(r.get("node"), []).append(r)
+            out[name] = {nid: d for nid, recs in by_node.items() if (d := _digest(kind, nid, recs)) is not None}
+    return out
+
+
+def map_kinds() -> list[str]:
+    """The kinds the map page gets whole (GET /projects/{slug}); a kind with a digest comes as `digests` instead."""
+    return [name for name, kind in registry.kinds().items() if not kind.digest]
 
 
 def _files(folder: Path) -> dict[str, list[int]]:
@@ -333,4 +424,4 @@ def entities(key: str | None = None) -> dict[str, list[dict[str, Any]]]:
 
 
 __all__ = ["Project", "get", "slugs", "summary", "listing", "stamp_of", "dag_edges", "back_edges", "entities",
-           "own_live", "PROJECT_ID"]
+           "map_kinds", "digests_of", "own_live", "PROJECT_ID"]

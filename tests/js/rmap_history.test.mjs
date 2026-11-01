@@ -23,11 +23,16 @@ const frames = {
   nodes: { q: [[0, q]], h: [[1, h], [2, { ...h, status: "verified", title: "H2" }]], x: [[1, x], [3, null]] },
   edges: { e1: [[1, { id: "e1", from: "q", to: "h", kind: "refines" }]], e2: [[1, { id: "e2", from: "h", to: "x", kind: "refines" }], [3, null]] },
   attachments: { evidence: { v1: [[2, { id: "v1", node: "h", type: "paper", target: "A" }]] } },
+  digests: { results: { x: [[1, { count: 2, metric: "acc", value: 0.4 }], [2, { count: 3, metric: "acc", value: 0.5 }], [3, null]] } },
 };
 eq(mapAt(frames, 0).nodes.map((n) => n.id), ["q"], "week 0");
 eq(mapAt(frames, 1).nodes.map((n) => n.id), ["q", "h", "x"], "week 1");
 eq(mapAt(frames, 2).nodes.find((n) => n.id === "h").status, "verified", "status at week 2");
 eq(mapAt(frames, 2).attachments.evidence.length, 1, "evidence at week 2");
+eq(mapAt(frames, 0).digests.results, {}, "no digest before the node's results");
+eq(mapAt(frames, 1).digests.results.x.value, 0.4, "the digest of week 1");
+eq(mapAt(frames, 2).digests.results.x.count, 3, "and of week 2");
+eq(mapAt(frames, 3).digests.results, {}, "gone with its node");
 eq(mapAt(frames, 3).nodes.map((n) => n.id), ["q", "h"], "x gone at week 3");
 eq(mapAt(frames, 3).edges.map((e) => e.id), ["e1"], "its edge too");
 eq(mapAt(frames, 9).project.title, "P", "project");

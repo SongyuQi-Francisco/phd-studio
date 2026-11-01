@@ -1,6 +1,6 @@
 // web/rmap/results/data.js without a browser: run by tests/test_rmap_results.py with node, or with JavaScriptCore's
 // jsc (the engine of the desktop window). Prints "ok" or throws. The test copies data.js next to this file as data.mjs.
-import { compare, trend, headline, groups, metricsOf, datasetsOf, fmt, signed, lowerBetter, spark } from "./data.mjs";
+import { compare, trend, groups, metricsOf, datasetsOf, fmt, signed, lowerBetter, spark } from "./data.mjs";
 
 const out = typeof print === "function" ? print : console.log.bind(console);
 const ok = (cond, what) => { if (!cond) throw new Error(what); };
@@ -38,6 +38,8 @@ eq(l.rows.map((r) => r.config), ["BM25", "Ours"], "lower first");
 ok(l.rows[1].good === false, "slower than the baseline is not good");
 ok(lowerBetter("val_loss") && lowerBetter("WER") && !lowerBetter("Recall@10") && !lowerBetter("accuracy"), "direction guessed from the name");
 eq(compare([rec("A", "acc", 1, { better: "lower" })], "acc").dir, "lower", "an explicit `better` wins over the name");
+eq(compare(["zeta", "Émile", "ours", "Ours"].map((c) => rec(c, "acc", 0.5)), "acc").rows.map((r) => r.config), ["Ours", "ours", "zeta", "Émile"],
+  "equal values: by config in code-unit order, as the server's digest");
 
 // trend: a line per config, points by date, baselines last
 const t = trend(rs, "Recall@10", "MS MARCO");
@@ -49,9 +51,7 @@ eq(t.dates, ["2026-10-18", "2026-10-20", "2026-10-22"], "all dates");
 eq(metricsOf(rs).map((m) => m.metric).sort(), ["Recall@10", "latency_ms"], "metrics");
 eq(datasetsOf(rs, "recall@10").sort(), ["MS MARCO", "NQ"], "datasets");
 ok(groups(rs).length === 3, "metric x dataset pairs");
-eq(headline(rs).metric, "Recall@10", "headline: the most recently measured metric");
 eq(spark(rs, "Recall@10", "MS MARCO").values.length, 2, "sparkline of the best config");
-eq(headline([]), null, "no results, no headline");
 
 // numbers
 eq([fmt(0.41234), fmt(12.5), fmt(1234.56), fmt(48)], ["0.4123", "12.5", "1235", "48"], "4 significant digits");

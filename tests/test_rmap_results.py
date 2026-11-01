@@ -847,6 +847,208 @@ def test_listings_do_not_read_the_results(slug: str, exp, monkeypatch, capsys):
     assert code == 0 and slug in out
 
 
+def _rec(config, metric, value, **extra):
+    return {"id": f"r{config}{metric}{value}", "node": "x", "config": config, "metric": metric, "value": value,
+            "date": "2026-10-20", **extra}
+
+
+def test_a_nodes_digest_is_its_latest_metric_and_the_best_config_on_it():
+    rs = [_rec("BM25", "Recall@10", 0.38, baseline=True, dataset="MS MARCO"),
+          _rec("DPR", "Recall@10", 0.41, baseline=True, dataset="MS MARCO"),
+          _rec("Ours", "Recall@10", 0.44, dataset="MS MARCO", date="2026-10-18"),
+          _rec("Ours", "Recall@10", 0.46, dataset="MS MARCO", date="2026-10-22", run="1"),
+          _rec("Ours", "Recall@10", 0.48, dataset="MS MARCO", date="2026-10-22", run="2"),
+          _rec("Ours", "Recall@10", 0.30, dataset="NQ", date="2026-10-22"),
+          _rec("BM25", "latency_ms", 12, baseline=True), _rec("Ours", "latency_ms", 48)]
+    d = model.digest(rs)
+    # the latest day ties MS MARCO with NQ: the pair with more records wins; Ours averages its two runs of that day
+    assert d == {"count": 8, "metric": "Recall@10", "dataset": "MS MARCO", "last": "2026-10-22", "config": "Ours",
+                 "value": pytest.approx(0.47), "metrics": ["Recall@10", "latency_ms"], "configs": ["Ours", "BM25", "DPR"]}
+    assert model.digest([]) is None
+    only_base = [_rec("BM25", "acc", 0.3, baseline=True), _rec("DPR", "acc", 0.5, baseline=True)]
+    assert model.digest(only_base)["config"] == "DPR"  # nothing but baselines: the best of them
+    lat = [_rec("Fast", "latency_ms", 10), _rec("Slow", "latency_ms", 30), _rec("Base", "latency_ms", 5, baseline=True)]
+    assert model.digest(lat)["config"] == "Fast"  # smaller is better, and a baseline is not the node's own number
+    assert model.digest([_rec("A", "acc", 1, better="lower"), _rec("B", "acc", 2)])["config"] == "A"
+    undated = [{"id": "u", "node": "x", "config": "A", "metric": "acc", "value": 0.5, "created_at": "2026-10-01T09:00:00"}]
+    assert model.digest(undated)["last"] == "2026-10-01"  # the day it was recorded
+    ties = [_rec(c, "acc", 0.5) for c in ("zeta", "Émile", "ours", "Ours")]
+    assert model.digest(ties)["config"] == "Ours"  # equal values: code-unit order, as the panel's compare() ranks them
+    many = [_rec(f"c{i}", "acc", i / 100, date=f"2026-10-{i + 1:02d}") for i in range(20)]
+    assert model.digest(many)["configs"] == [f"c{i}" for i in range(19, 7, -1)]  # the most recent, at most SUGGEST
+
+
+def test_a_digest_reads_fields_edited_by_hand_into_other_types():
+    import datetime
+    odd = [_rec("A", 123, 0.5, date=20251020), _rec("B", 123, 0.7, date=datetime.date(2026, 10, 21), dataset=7),
+           _rec("C", "acc", float("nan")), _rec(None, "acc", "0.9")]
+    d = model.digest(odd)
+    assert d["metric"] == "123" and d["dataset"] == "7" and d["config"] == "B" and d["last"] == "2026-10-21"
+    assert model.digest([_rec("C", "acc", float("inf"))]) == {"count": 1, "metric": "acc", "dataset": "", "last": "2026-10-20",
+                                                              "metrics": ["acc"], "configs": ["C"]}  # no value to show
+
+
+@pytest.fixture
+def shard_reads(monkeypatch):
+    """The results files read from now on (each read of one, conflict copies included), as node ids."""
+    from app.store import Store
+    project._DIGESTS.clear()
+    seen: list[str] = []
+    real = Store._read
+
+    def counting(self, path):
+        if path.parent.name == "results":
+            seen.append(path.name.split(".sync-conflict-")[0].removesuffix(".yaml"))
+        return real(self, path)
+
+    monkeypatch.setattr(Store, "_read", counting)
+    return seen
+
+
+def test_the_map_page_gets_a_digest_per_node_and_reads_only_the_files_that_changed(client: TestClient, slug: str, exp, shard_reads):
+    importer.run_import(slug, exp["$x"], text=WIDE)
+    importer.run_import(slug, exp["$y"], text=LONG)
+    url = f"/api/rmap/projects/{slug}"
+    shard_reads.clear()
+    m = client.get(url).json()
+    assert "results" not in m["attachments"] and "result_sources" in m["attachments"]  # small kinds come whole, as before
+    assert sorted(shard_reads) == sorted([exp["$x"], exp["$y"]])  # the first look reads each file once
+    assert set(m["digests"]["results"]) == {exp["$x"], exp["$y"]}
+    assert m["digests"]["results"][exp["$y"]] == model.digest(results(slug, exp["$y"]))
+    assert m["digests"]["results"][exp["$x"]]["count"] == 6
+    shard_reads.clear()
+    assert client.get(url).json()["digests"] == m["digests"] and shard_reads == []  # then none, until one changes
+    importer.run_import(slug, exp["$x"], text=WIDE.replace("0.412", "0.5"))
+    shard_reads.clear()
+    again = client.get(url).json()["digests"]["results"]
+    assert shard_reads == [exp["$x"]] and again[exp["$x"]] != m["digests"]["results"][exp["$x"]]
+    assert again[exp["$y"]] == m["digests"]["results"][exp["$y"]]
+    shard_reads.clear()
+    one = client.get(f"{url}/attachments/results", params={"node": exp["$y"]}).json()["results"]
+    assert len(one) == 3 and {r["node"] for r in one} == {exp["$y"]} and shard_reads == [exp["$y"]]
+    assert client.get(f"{url}/attachments/results", params={"node": "nope"}).json() == {"results": []}
+    assert client.get(f"{url}/attachments/evidence", params={"node": exp["$x"]}).json() == {"evidence": []}
+    assert [k["name"] for k in client.get("/api/rmap/meta").json()["kinds"] if k["digest"]] == ["results"]
+    ops.apply(slug, [{"op": "node.delete", "id": exp["$y"]}])  # a node gone takes its digest along
+    assert set(client.get(url).json()["digests"]["results"]) == {exp["$x"]}
+
+
+def test_a_results_file_broken_by_hand_leaves_the_map_and_the_background_round_working(client: TestClient, slug: str, exp, monkeypatch):
+    import dataclasses
+    from app.rmap import watch
+    project._DIGESTS.clear()
+    importer.run_import(slug, exp["$x"], text=WIDE)
+    importer.run_import(slug, exp["$y"], text=WIDE)
+    path = config.RMAP_DIR / slug / "results" / f"{exp['$x']}.yaml"
+    data = raw(path)
+    for r in data["results"]:
+        r["date"], r["metric"] = 20261020, 7  # an int date and a numeric metric, typed in Obsidian
+    path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    m = client.get(f"/api/rmap/projects/{slug}")
+    assert m.status_code == 200 and m.json()["digests"]["results"][exp["$x"]]["metric"] == "7"
+    # a digest that fails anyway: that node is left out (and logged), the rest of the map is served
+    kind = registry.KINDS["results"]
+    monkeypatch.setitem(registry.KINDS, "results", dataclasses.replace(
+        kind, digest=lambda recs: 1 / 0 if recs[0]["node"] == exp["$x"] else kind.digest(recs)))
+    project._DIGESTS.clear()
+    m = client.get(f"/api/rmap/projects/{slug}")
+    assert m.status_code == 200 and set(m.json()["digests"]["results"]) == {exp["$y"]}
+    assert client.get(f"/api/rmap/projects/{slug}/history").status_code == 200
+    # a map that fails in the background round does not stop the round for the maps after it
+    other = ops.create_project("Project Beacon")["slug"]
+    real = project.Project.ingest
+
+    def broken(self):
+        if self.slug == min(slug, other):
+            raise TypeError("broken by hand")
+        return real(self)
+
+    monkeypatch.setattr(project.Project, "ingest", broken)
+    assert sorted(watch.once({})) == sorted([slug, other])
+
+
+@pytest.mark.parametrize("engine", ["node", "jsc"])
+def test_the_digest_shows_what_the_results_panel_ranks_first(engine, tmp_path):
+    """The node's corner shows the server's digest, the panel ranks with data.js: on the same records they agree."""
+    import random
+    exe = shutil.which("node") if engine == "node" else (str(JSC) if JSC.exists() else None)
+    if not exe:
+        pytest.skip(f"{engine} is not installed")
+    rng = random.Random(71)
+    cases = []
+    for i in range(400):
+        cases.append([{"id": f"r{i}-{j}", "node": "x", "config": rng.choice(["Ours", "ours", "OURS", "Émile", "emile", "zeta", "BM25", "Ablation-1"]),
+                       "metric": rng.choice(["Recall@10", "recall@10", "latency_ms", "acc"]), "dataset": rng.choice(["", "NQ", "nq", "MS MARCO"]),
+                       "value": rng.choice([0.4, 0.5, 0.41, 12, 48]), "date": rng.choice(["2026-10-18", "2026-10-20", "2026-10-22"]),
+                       **({"baseline": True} if rng.random() < 0.3 else {}), **({"better": rng.choice(["higher", "lower"])} if rng.random() < 0.1 else {})}
+                      for j in range(rng.randint(1, 9))])
+    want = [{k: model.digest(c)[k] for k in ("metric", "dataset", "config", "value")} for c in cases]
+    shutil.copy(PROJECT / "web" / "rmap" / "results" / "data.js", tmp_path / "data.mjs")
+    (tmp_path / "test.mjs").write_text(f"""import {{ compare, groups }} from "./data.mjs";
+const out = typeof print === "function" ? print : console.log.bind(console);
+const CASES = {json.dumps(cases)};
+const WANT = {json.dumps(want)};
+CASES.forEach((rs, i) => {{
+  const g = groups(rs)[0];
+  const row = compare(rs, g.metric, g.dataset).rows.find((r) => !r.baseline) || compare(rs, g.metric, g.dataset).best;
+  const got = {{ metric: g.metric, dataset: g.dataset, config: row.config, value: row.value }};
+  const w = WANT[i];
+  if (got.metric !== w.metric || got.dataset !== w.dataset || got.config !== w.config || Math.abs(got.value - w.value) > 1e-9)
+    throw new Error("case " + i + ": " + JSON.stringify(got) + " vs " + JSON.stringify(w));
+}});
+out("ok");
+""", encoding="utf-8")
+    args = [exe, "-m", "test.mjs"] if engine == "jsc" else [exe, "test.mjs"]
+    r = subprocess.run(args, cwd=tmp_path, capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0 and r.stdout.strip().endswith("ok"), r.stdout + r.stderr
+
+
+def test_writes_that_do_not_touch_results_and_the_canvas_after_them_read_no_results(slug: str, exp, shard_reads):
+    importer.run_import(slug, exp["$x"], text=WIDE)
+    ops.apply(slug, [{"op": "attach.add", "kind": "evidence", "node": exp["$x"], "set": {"type": "url", "target": "https://example.org/run"}}])
+    shard_reads.clear()
+    ops.apply(slug, [{"op": "node.update", "id": exp["$x"], "set": {"title": "Ablation A, renamed"}}])
+    canvas = (config.RMAP_DIR / slug / "map.canvas").read_text(encoding="utf-8")
+    assert "Ablation A, renamed" in canvas and "example.org/run" in canvas  # rewritten after the write, evidence and all
+    assert shard_reads == []
+    code_show = project.get(slug).read(attachments=False, digests=True)
+    assert code_show["digests"]["results"][exp["$x"]]["count"] == 6
+
+
+def test_the_background_round_works_out_the_digests_so_opening_the_map_reads_no_results(client: TestClient, slug: str, exp, shard_reads):
+    from app.rmap import watch
+    importer.run_import(slug, exp["$x"], text=WIDE)
+    project._DIGESTS.clear()  # as after the app starts
+    seen: dict[str, str] = {}
+    watch.once(seen)
+    shard_reads.clear()
+    assert client.get(f"/api/rmap/projects/{slug}").json()["digests"]["results"][exp["$x"]]["count"] == 6
+    assert shard_reads == []
+    watch.once(seen)  # nothing changed: nothing read
+    assert shard_reads == []
+
+
+def test_a_proposal_checks_for_the_same_measurement_in_that_nodes_file_only(slug: str, exp, shard_reads):
+    importer.run_import(slug, exp["$x"], text=WIDE)
+    importer.run_import(slug, exp["$y"], text=WIDE)
+    rec = proposals.propose(slug=slug, ops_=[{"op": "attach.add", "kind": "results", "node": exp["$x"],
+                                              "set": {"config": "Ours", "metric": "acc", "value": 0.9}}], summary="acc")
+    shard_reads.clear()
+    assert proposals.stale(rec) == [] and shard_reads == [exp["$x"]]
+
+
+def test_the_replayed_map_has_the_digests_of_then(slug: str, exp):
+    from app.rmap import history
+    history._cache.clear()
+    history._frames.clear()
+    importer.run_import(slug, exp["$x"], text=WIDE)
+    now = project.get(slug).read(attachments=False, digests=True)["digests"]
+    assert history.map_at(slug)["digests"] == now
+    fr = history.frames(slug)
+    assert fr["digests"]["results"][exp["$x"]][-1][1] == now["results"][exp["$x"]]
+    assert "results" in fr["attachments"]  # the records of every kind are replayed as before
+
+
 def test_a_csv_line_starting_with_a_hash_is_data_not_a_comment(slug: str, exp):
     t = tabular.parse("config,metric,value\n#3,acc,0.5\n#4,acc,0.6\n")
     assert [r["config"] for r in t.rows] == ["#3", "#4"]

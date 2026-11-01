@@ -159,8 +159,8 @@ def render(m: dict[str, Any]) -> str:
 
 
 def write(p: Project, m: dict[str, Any] | None = None) -> bool:
-    """Bring map.canvas up to date; True if it was (re)written."""
-    m = m or p.read()
+    """Bring map.canvas up to date; True if it was (re)written. It shows evidence only, so only evidence is read."""
+    m = m or p.read(attachments=["evidence"])
     text = render(m)
     path = p.dir / "map.canvas"
     LOCKS.mkdir(parents=True, exist_ok=True)

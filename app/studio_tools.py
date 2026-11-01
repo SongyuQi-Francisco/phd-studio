@@ -88,8 +88,9 @@ def _map_slug(key: str) -> str | None:
 
 
 def _map_brief(slug: str) -> dict[str, Any]:
-    """A compact map for the model: nodes with their parents, other edges, evidence, the latest log lines."""
-    m = rmap_project.get(slug).read()
+    """A compact map for the model: nodes with their parents, other edges, evidence, peers, the latest results, the
+    latest log lines."""
+    m = rmap_project.get(slug).read(attachments=["evidence", "peer", "results"])
     parents: dict[str, list[str]] = {}
     other = []
     for e in m["edges"]:

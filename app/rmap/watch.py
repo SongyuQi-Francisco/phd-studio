@@ -1,6 +1,8 @@
 """Background ingest: every few seconds, look for research maps whose files changed (the other Mac synced
 something in, or the CLI wrote) and ingest their new events, so event subscribers hear about them even
-when no map page is open. Cheap: one stat per YAML file per round."""
+when no map page is open, and bring their digests up to date (project.Project.digests: the first round
+after the app starts reads every result file once, later rounds only the files that changed), so opening
+a map reads none. Cheap when nothing changes: one stat per YAML file per round."""
 from __future__ import annotations
 
 import logging
@@ -16,14 +18,17 @@ _thread: threading.Thread | None = None
 
 
 def once(seen: dict[str, str]) -> list[str]:
-    """One round: ingest every project whose change stamp moved since `seen`; returns their slugs."""
+    """One round: ingest every project whose change stamp moved since `seen` and refresh its digests; returns
+    their slugs."""
     moved = []
     for slug in project.slugs():
         st = project.stamp_of(RMAP_DIR / slug)
         if seen.get(slug) != st:
             try:
-                project.get(slug).ingest()
-            except (KeyError, OSError, ValueError):
+                p = project.get(slug)
+                p.ingest()
+                p.digests()
+            except Exception:  # noqa: BLE001 - one broken map must not stop the round for the others
                 log.exception("research map ingest failed for %s", slug)
             seen[slug] = project.stamp_of(RMAP_DIR / slug)
             moved.append(slug)

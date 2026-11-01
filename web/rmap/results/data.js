@@ -1,7 +1,9 @@
 // Experiment results of a node (or of a whole map): which metrics there are, the latest value of each
 // config, the gap to the baselines, and the trend over dates. Pure functions with no imports, so they run
 // under node / jsc too (tests/js/rmap_results.test.mjs). Records are the `results` attachments:
-// {id, node, config, dataset?, metric, value, date?, run?, baseline?, better?, source?}.
+// {id, node, config, dataset?, metric, value, date?, run?, baseline?, better?, source?}. What a node shows at a
+// glance (its digest: count, latest metric, best value) comes with the map, worked out by the server
+// (app/rmap/results/model.py `digest`).
 // i18n: done
 
 // Metrics where a smaller number is the better one; keep in step with app/rmap/results/model.py.
@@ -52,7 +54,8 @@ export const pick = (records, metric, dataset) =>
   records.filter((r) => same(r.metric, metric) && (dataset == null || (r.dataset || "") === dataset));
 
 // The latest value of every config for one metric (and dataset): runs on the latest date are averaged.
-// Rows come best first; `ref` is the best baseline and every other row gets its gap to it.
+// Rows come best first (equal values: by config, in plain code-unit order, as the server's digest ranks them,
+// app/rmap/results/model.py); `ref` is the best baseline and every other row gets its gap to it.
 export function compare(records, metric, dataset) {
   const rs = pick(records, metric, dataset);
   const dir = rs.length ? dirOf(rs.find((r) => r.better) || rs[0]) : "higher";
@@ -68,7 +71,7 @@ export function compare(records, metric, dataset) {
     return { config, baseline: list.some((r) => r.baseline), value: mean(vals), n: vals.length, lo: Math.min(...vals), hi: Math.max(...vals),
       date: last, ids: at.map((r) => r.id) };
   });
-  rows.sort((a, b) => (dir === "lower" ? a.value - b.value : b.value - a.value) || a.config.localeCompare(b.config));
+  rows.sort((a, b) => (dir === "lower" ? a.value - b.value : b.value - a.value) || (a.config < b.config ? -1 : a.config > b.config ? 1 : 0));
   const ref = rows.find((r) => r.baseline) || null;
   for (const r of rows) {
     if (ref && !r.baseline) {
@@ -101,15 +104,6 @@ export function trend(records, metric, dataset) {
   series.sort((a, b) => (a.baseline - b.baseline) || (dir === "lower" ? last(a) - last(b) : last(b) - last(a)));
   const dates = [...new Set(series.flatMap((s) => s.points.map((p) => p.date)))].sort();
   return { series, dates, dir };
-}
-
-// What a node shows at a glance: its most recently measured metric and the best latest value of it.
-export function headline(records) {
-  if (!records.length) return null;
-  const g = groups(records)[0];
-  const c = compare(records, g.metric, g.dataset);
-  const row = c.rows.find((r) => !r.baseline) || c.best;
-  return row ? { metric: g.metric, dataset: g.dataset, value: row.value, config: row.config, count: records.length } : null;
 }
 
 // Values of the best config over time, for a sparkline.
