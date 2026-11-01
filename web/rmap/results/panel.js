@@ -1,10 +1,11 @@
 // The results panel: a sheet over the research map with the comparison (configs against the baselines), the
 // trend per config, the datasets side by side and every record, for one experiment node or all of them.
 // Adding a record by hand, importing a table and the watched files live here too. Opened from the detail
-// panel's results section and from the toolbar.
+// panel's results section and from the toolbar. The map only carries a digest per node: the records are read
+// when the sheet opens (one node's, or the whole map's for "all experiments").
 // i18n: done
 import { render } from "preact";
-import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { html, Icon, prefs } from "/lib.js";
 import { t } from "/i18n.js";
 import { Compare, Grouped, Trend } from "/rmap/results/charts.js";
@@ -14,6 +15,23 @@ import { ImportDialog } from "/rmap/results/import.js";
 export const TYPES = ["experiment", "result"];
 const today = () => new Date().toLocaleDateString("sv"); // i18n-ignore (YYYY-MM-DD, a machine format)
 const SHOWN = 25;
+
+// The result records of one node (or of the whole map: nodeId ""), read from the server and read again whenever
+// the map changes (an edit here, an import, the other Mac). null until the first answer for this node is in;
+// `none` (the map's digest says there are none) skips asking.
+export function useResults(ctx, nodeId, none = false) {
+  const key = `${ctx.slug}\u0000${nodeId || ""}`;
+  const [got, setGot] = useState({ key: null, rows: null });
+  const latest = useRef(0);
+  useEffect(() => {
+    if (none) return;
+    const mine = ++latest.current;
+    ctx.api.call(`${ctx.api.base}/attachments/results${nodeId ? "?node=" + encodeURIComponent(nodeId) : ""}`)
+      .then((r) => { if (mine === latest.current) setGot({ key, rows: r.results }); })
+      .catch((e) => { if (mine === latest.current) { setGot({ key, rows: [] }); ctx.toast(e.message); } });
+  }, [key, ctx.map.stamp, none]);
+  return none ? [] : got.key === key ? got.rows : null;
+}
 
 // Renders its children into <body>: the page root is a layout container, which would trap a fixed sheet.
 export function Portal({ children }) {
@@ -81,14 +99,15 @@ function Sources({ ctx, node, onImport }) {
 }
 
 export function ResultsSheet({ ctx, nodeId, mode, onClose }) {
-  const all = ctx.map.attachments.results || [];
+  const digests = ctx.map.digests?.results || {};
   const nodes = ctx.map.nodes.filter((n) => TYPES.includes(n.type));
   const [scope, setScope] = useState(nodeId || "");
   const [form, setForm] = useState(mode === "add" ? "add" : mode === "import" ? "import" : null);
   const [metric, setMetric] = useState(() => (nodeId ? prefs.get("rmap:rs:" + nodeId, null) : null));
   const [dataset, setDataset] = useState(null);
   const [more, setMore] = useState(false);
-  const records = useMemo(() => (scope ? all.filter((r) => r.node === scope) : all), [all, scope]);
+  const got = useResults(ctx, scope, scope ? !digests[scope] : !Object.keys(digests).length);
+  const records = got || [];
   const node = scope ? ctx.map.nodes.find((n) => n.id === scope) : null;
   const metrics = metricsOf(records);
   const m = metrics.find((x) => x.metric.toLowerCase() === (metric || "").toLowerCase())?.metric || metrics[0]?.metric || null;
@@ -105,8 +124,7 @@ export function ResultsSheet({ ctx, nodeId, mode, onClose }) {
   }, [form]);
   useEffect(() => { if (nodeId) prefs.set("rmap:rs:" + nodeId, m); }, [m]);
 
-  const counts = {};
-  for (const r of all) counts[r.node] = (counts[r.node] || 0) + 1;
+  const counts = Object.fromEntries(Object.entries(digests).map(([id, d]) => [id, d.count]));
   const fail = (e) => ctx.toast(e.message);
   const remove = (r) => ctx.api.apply([{ op: "attach.delete", kind: "results", id: r.id }]).catch(fail);
   // a baseline is a property of the config: flip it on every record of that config on this metric's node
@@ -131,10 +149,11 @@ export function ResultsSheet({ ctx, nodeId, mode, onClose }) {
         <button class="mp-close" title=${t("rmap.close")} onClick=${onClose}><${Icon} name="x" sm /></button>
       </div>
 
-      ${form === "add" && node && html`<${AddForm} ctx=${ctx} node=${node} records=${all} onDone=${() => setForm(null)} />`}
+      ${form === "add" && node && html`<${AddForm} ctx=${ctx} node=${node} records=${records} onDone=${() => setForm(null)} />`}
       ${form === "import" && node && html`<${ImportDialog} ctx=${ctx} node=${node} onClose=${() => setForm(null)} />`}
 
-      ${!records.length ? html`<div class="rs-empty"><p>${t(node ? "rmap_results.empty" : "rmap_results.empty_all")}</p>
+      ${got === null ? html`<div class="rs-empty"><p class="mp-quiet">${t("rmap_results.loading")}</p></div>`
+        : !records.length ? html`<div class="rs-empty"><p>${t(node ? "rmap_results.empty" : "rmap_results.empty_all")}</p>
           ${node && html`<code class="rs-cli">studio map result add "${ctx.map.project.title}" ${node.id} recall@10=0.412 --config "Ours"</code>`}</div>` : html`
         <div class="rs-controls">
           <div class="rs-chips" role="tablist">${metrics.map((x) => html`<button role="tab" class=${"rs-chip rs-mono" + (x.metric === m ? " on" : "")} key=${x.metric}

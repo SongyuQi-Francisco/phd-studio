@@ -65,9 +65,10 @@ def propose(*, ops_: list[dict[str, Any]], summary: str, slug: str | None = None
     return rec
 
 
-def _records(slug: str) -> tuple[dict[tuple[str, str], dict[str, Any]], set[str]]:
-    """(kind, id) -> raw record with its clock, tombstones included; and the live node ids."""
-    m = project.get(slug).read(include_deleted=True)
+def _records(slug: str, kinds: set[str]) -> tuple[dict[tuple[str, str], dict[str, Any]], set[str]]:
+    """(kind, id) -> raw record with its clock, tombstones included: the project, nodes and edges, and the records of
+    the attachment kinds named (only those: a map can hold thousands of result records); and the live node ids."""
+    m = project.get(slug).read(include_deleted=True, attachments=kinds)
     out = {("node", n["id"]): n for n in m["nodes"]}
     out.update({("edge", e["id"]): e for e in m["edges"]})
     out[("project", project.PROJECT_ID)] = m["project"]
@@ -80,7 +81,9 @@ def _base(slug: str, events: list[dict[str, Any]], ops_: list[dict[str, Any]] = 
     """What the proposal was made against: the stamps of the fields it changes, of the records it deletes
     (all of the record: "*"), and of the existing nodes it hangs new things on (only that they live).
     Kinds logged per batch (bulk imports) have no per-record events, so their changes are read off the operations."""
-    recs, _ = _records(slug)
+    kinds = {op.get("kind") for op in ops_ if op.get("op") in ("attach.update", "attach.delete")}
+    kinds |= {ev["kind"] for ev in events if ev["action"] in ("update", "delete") and ev.get("target")}
+    recs, _ = _records(slug, {k for k in kinds if isinstance(k, str)})
     base: dict[tuple[str, str], dict[str, str]] = {}
     for op in ops_:
         if op.get("op") in ("attach.update", "attach.delete") and isinstance(op.get("id"), str) and (op.get("kind"), op["id"]) in recs:
@@ -123,7 +126,7 @@ def stale(rec: dict[str, Any]) -> list[str]:
     """What moved since the proposal was shown: lines like 「Tool use helps」.status (empty if nothing)."""
     if not rec.get("slug"):
         return []
-    recs, live = _records(rec["slug"])
+    recs, live = _records(rec["slug"], {b["kind"] for b in rec.get("base") or []})
     out = []
     for b in rec.get("base") or []:
         cur = recs.get((b["kind"], b["id"]))
@@ -137,13 +140,16 @@ def stale(rec: dict[str, Any]) -> list[str]:
         if moved:
             out.append(i18n.t("rmap.moved", record=name, fields=", ".join("*" if f == "*" else f for f in moved)))
     kinds = registry.kinds()
+    have: dict[tuple[str, str], list[dict[str, Any]]] = {}  # (kind, node) -> its live records: that node's file only
     for a in rec.get("absent") or []:
         kind = kinds.get(a["kind"])
         node = recs.get(("node", a["node"]))
         if kind is None or kind.identity is None or node is None:
             continue
-        for (k, _), r in recs.items():
-            if k == a["kind"] and r.get("node") == a["node"] and child_live(r, live) and list(kind.identity(r)) == a["identity"]:
+        if (a["kind"], a["node"]) not in have:
+            have[(a["kind"], a["node"])] = project.get(rec["slug"]).records(a["kind"], a["node"])
+        for r in have[(a["kind"], a["node"])]:
+            if list(kind.identity(r)) == a["identity"]:
                 out.append(i18n.t("rmap.exists", record=i18n.t("rmap.record", kind="node", title=node.get("title") or a["node"]),
                                   kind=a["kind"], what=kind.line(r)))
                 break

@@ -152,6 +152,44 @@ def identity(rec: dict[str, Any]) -> tuple[str, str, str, str, str, str]:
             rec.get("run") or "", "" if rec.get("date_inferred") else rec.get("date") or "")
 
 
+def day_of(rec: dict[str, Any]) -> str:
+    """The day a measurement counts for: its date, else the day it was recorded."""
+    return rec.get("date") or str(rec.get("created_at") or "")[:10]
+
+
+def digest(records: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """What the map shows of a node's results (GET map sends this instead of the records): how many there are, the
+    most recently measured metric (and dataset; more records breaks a tie), the latest value of its best config that
+    is not a baseline (the best baseline when there is nothing else), and the latest date. A config's latest value is
+    the mean of its runs on its latest date, as in the results panel (web/rmap/results/data.js `compare`)."""
+    if not records:
+        return None
+    groups: dict[str, dict[str, Any]] = {}
+    for r in records:
+        key = f"{str(r.get('metric') or '').lower()}\0{str(r.get('dataset') or '').lower()}"
+        g = groups.setdefault(key, {"metric": r.get("metric") or "", "dataset": r.get("dataset") or "", "n": 0, "last": ""})
+        g["n"] += 1
+        g["last"] = max(g["last"], day_of(r))
+    top = max(groups.values(), key=lambda g: (g["last"], g["n"]))  # the first one seen among equals
+    out = {"count": len(records), "metric": top["metric"], "dataset": top["dataset"], "last": top["last"] or None}
+    rs = [r for r in records if str(r.get("metric") or "").lower() == top["metric"].lower()
+          and (r.get("dataset") or "") == top["dataset"]]
+    lower = direction(next((r for r in rs if r.get("better")), rs[0])) == "lower"
+    by_config: dict[str, list[dict[str, Any]]] = {}
+    for r in rs:
+        by_config.setdefault(str(r.get("config") or ""), []).append(r)
+    rows = []
+    for config, recs in by_config.items():
+        last = max(day_of(r) for r in recs)
+        vals = [float(r["value"]) for r in recs if day_of(r) == last
+                and isinstance(r.get("value"), (int, float)) and not isinstance(r["value"], bool)]
+        if vals:
+            rows.append({"config": config, "value": sum(vals) / len(vals), "baseline": any(r.get("baseline") for r in recs)})
+    rows.sort(key=lambda x: (x["value"] if lower else -x["value"], x["config"].casefold(), x["config"]))
+    row = next((x for x in rows if not x["baseline"]), rows[0] if rows else None)
+    return {**out, "config": row["config"], "value": row["value"]} if row else out
+
+
 def _check_result(rec: dict[str, Any]) -> None:
     if rec.get("value") is not None and not math.isfinite(rec["value"]):
         raise ValueError(i18n.t("rmap_results.bad_value", value=str(rec["value"])))
@@ -164,7 +202,7 @@ RESULTS = AttachmentKind(
             "baseline": flag, "better": better, "source": text("source", TEXT["source"]), "note": text("note", TEXT["note"]),
             "date_inferred": flag},
     required=("config", "metric", "value"), summary=line, check=_check_result, shard="node", identity=identity,
-    extra={"better": list(BETTER), "formats": list(FORMATS), "roles": list(ROLES)})
+    digest=digest, extra={"better": list(BETTER), "formats": list(FORMATS), "roles": list(ROLES)})
 
 
 def _columns(v: Any) -> list[str] | None:

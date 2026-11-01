@@ -56,6 +56,7 @@ RISK_RELATIONS = ("same", "competing")
 DENSE = 3       # same + competing peers that make a node in progress crowded
 SAME_DENSE = 2  # ... or this many doing the very same approach
 MATCH_TYPES = {"question": 0.7, "hypothesis": 1.0, "subline": 1.1, "experiment": 1.0}  # nodes a paper may match
+HUNG = ("peer", "evidence")  # the kinds that name papers, scholars and labs: what suggestions and "already hung" read
 
 
 def _choice(allowed: tuple[str, ...], key: str):
@@ -326,8 +327,8 @@ def _order(m: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def analyze(slug: str, m: dict[str, Any] | None = None) -> dict[str, Any]:
-    """One map: every node's distinct peers and counts, the gaps and the collision risks."""
-    m = m or project.get(slug).read()
+    """One map: every node's distinct peers and counts, the gaps and the collision risks. m: read with peers."""
+    m = m or project.get(slug).read(attachments=["peer"])
     peers = by_node(m)
     rows = []
     for n in _order(m):
@@ -353,7 +354,7 @@ def best_key(keys: set[str]) -> str:
 def _overview() -> dict[str, Any]:
     maps, cells = [], []
     for slug in project.slugs():
-        m = project.get(slug).read()
+        m = project.get(slug).read(attachments=["peer"])
         if m["project"].get("archived"):
             continue
         a = analyze(slug, m)
@@ -421,7 +422,7 @@ def attach(slug: str, node: str, kind: str, fields: dict[str, Any], *, who: str 
     fields = {k: v for k, v in (fields or {}).items() if v not in (None, "")}
     if fields.get("title"):
         fields["title"] = clip_title(fields["title"], kind)
-    m = project.get(slug).read()
+    m = project.get(slug).read(attachments=[kind])
     if not any(n["id"] == node for n in m["nodes"]):
         raise KeyError(node)
     mine = known_aliases(fields, kind)
@@ -440,7 +441,7 @@ def attach(slug: str, node: str, kind: str, fields: dict[str, Any], *, who: str 
 def fresh_peer_ops(slug: str, batch: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
     """The peer additions of a batch minus those already on their node (or earlier in the batch); and the
     titles left out."""
-    m = project.get(slug).read()
+    m = project.get(slug).read(attachments=["peer"])
     have: dict[str, set[str]] = {}
     for p in m["attachments"].get("peer", []):
         have.setdefault(p["node"], set()).update(known_aliases(p))
@@ -662,7 +663,7 @@ def _targets(slug: str | None = None) -> list[dict[str, Any]]:
         line_kw = {}
     out = []
     for s in ([slug] if slug else project.slugs()):
-        m = project.get(s).read()
+        m = project.get(s).read(attachments=HUNG)
         if m["project"].get("archived"):
             continue
         hung: dict[str, list[tuple[str, dict[str, Any]]]] = {}
@@ -797,9 +798,9 @@ def attached(keys: set[str]) -> list[dict[str, Any]]:
     hung before #47 (no entity) is recognised by its paper note's own ids."""
     out = []
     for s in project.slugs():
-        m = project.get(s).read()
+        m = project.get(s).read(attachments=HUNG)
         titles = {n["id"]: n["title"] for n in m["nodes"]}
-        for kind in ("peer", "evidence"):
+        for kind in HUNG:
             for a in m["attachments"].get(kind, []):
                 if keys & known_aliases(a, kind):
                     out.append({"slug": s, "project": m["project"].get("title") or s, "kind": kind, "id": a["id"],

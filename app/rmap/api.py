@@ -39,7 +39,7 @@ def meta() -> dict[str, Any]:
             "faded": list(model.FADED), "closed": list(model.CLOSED), "edge_kinds": list(model.EDGE_KINDS),
             "flow": list(model.FLOW), "max_ops": ops.MAX_OPS, "max_import_ops": ops.MAX_IMPORT_OPS,
             "kinds": [{"name": k.name, "fields": list(k.fields), "required": list(k.required), "log": k.log,
-                       "node_types": list(k.node_types), **k.extra} for k in registry.kinds().values()]}
+                       "node_types": list(k.node_types), "digest": bool(k.digest), **k.extra} for k in registry.kinds().values()]}
 
 
 @core.get("/ext")
@@ -77,7 +77,9 @@ def create(body: dict[str, Any]) -> dict[str, Any]:
 
 @core.get("/projects/{slug}")
 def read(slug: str, deleted: bool = False) -> dict[str, Any]:
-    return _run(lambda: project.get(slug).read(include_deleted=deleted))
+    """The map. A kind with a digest (results) comes as `digests[kind][node]`, not as records: the page reads
+    those per node from GET attachments/{kind}?node=."""
+    return _run(lambda: project.get(slug).read(include_deleted=deleted, attachments=project.map_kinds(), digests=True))
 
 
 @core.patch("/projects/{slug}")
@@ -145,10 +147,10 @@ def delete_edge(slug: str, eid: str) -> dict[str, Any]:
 
 @core.get("/projects/{slug}/attachments/{kind}")
 def attachments(slug: str, kind: str, node: str | None = None) -> dict[str, Any]:
+    """The live records of a kind; with `node`, that node's only (a kind kept per node reads that node's file alone)."""
     if kind not in registry.kinds():
         raise HTTPException(404, f"没有这种挂载：{kind}")
-    m = _run(lambda: project.get(slug).read())
-    return {kind: [a for a in m["attachments"][kind] if not node or a.get("node") == node]}
+    return {kind: _run(lambda: project.get(slug).records(kind, node or None))}
 
 
 @core.post("/projects/{slug}/attachments/{kind}")

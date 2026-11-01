@@ -18,7 +18,8 @@ Research Maps/
   <slug>/                     "Project Atlas" -> project-atlas-3f9c (title slug + 4 hex of the project uid)
     map.yaml                  project (one record, id "project"), nodes, edges
     evidence.yaml             evidence attachments
-    <kind>.yaml               one file per registered attachment kind (peers, results, ...)
+    <kind>.yaml               one file per registered attachment kind (peers, result sources, ...)
+    results/<node id>.yaml    a kind kept one file per node (`shard="node"`): experiment results
     events/2026-10.yaml       the change log, one file per month
     map.canvas                Obsidian Canvas view: generated, read-only
 ```
@@ -242,7 +243,21 @@ numbers themselves for a report).
 
 Results are stored **one file per node** (`results/<node id>.yaml`, the kind registers `shard="node"`, see "Back-end
 extension points"): writing to a node rewrites only its file, an import reads only its node's records, and a listing
-reads none. A write through `ops.apply` on this kind still reads all the shards (about 1.5 s per 17000 records, so a
+reads none.
+
+**Reading (#71).** The map page never gets the records of the whole map. `GET /projects/{slug}` carries a **digest** per
+node instead (`digests.results[node]`: `count`, the most recently measured `metric` and its `dataset`, the latest
+`value` of its best config that is not a baseline and that `config`, and `last`, the latest date; `model.digest`, the
+one place this is worked out). Each node's digest is kept in memory with the signature (name, mtime, size) of its file
+and conflict copies, so a read of the map opens only the files that changed since the last one: none after a write
+elsewhere, one after a write to one node, all of them once after the app starts (the background round of
+`app/rmap/watch.py` does that one, and refreshes the digests of a map whose files changed, so the page rarely waits). The detail panel's section reads its
+node's records when it is shown (`GET .../attachments/results?node=`, which reads that node's file alone), the results
+panel those of its node, or of the whole map once "all experiments" is picked; both read again when the map's stamp
+changes. Everything else reads only the kinds it uses (`Project.read(attachments=[...])`): the canvas evidence, the peer
+analysis and suggestions peers and evidence, a proposal the kinds it changes (and, for a measurement it would add, that
+node's file), the CLI's `show` the digests. The time travel replays every kind, results included (a batch event names
+its records and replay takes their fields from the files), and gives each replayed map its digests. A write through `ops.apply` on this kind still reads all the shards (about 1.5 s per 17000 records, so a
 write takes about 3 s in a map with that many); an import is capped at 19998 records (rows × metrics), checked before
 anything is written.
 
@@ -284,8 +299,9 @@ source (once, until it changes); an unexpected error in one file is logged and t
 a project) and with `studio map result sync --loop`; `studio map result sync` reads once.
 
 **The page.** A *Results* section in the detail panel of experiment and result nodes (metric chips, the top configs against
-the baseline with the gap, a small trend, add / import / open); a *Results* layer that shows the latest value of a node's
-most recent metric in the corner of its card (toggle in the toolbar); a *Results* toolbar button for the whole map. The
+the baseline with the gap, a small trend, add / import / open; it reads the node's records when shown); a *Results* layer
+that shows the latest value of a node's most recent metric in the corner of its card (the node's digest; toggle in the
+toolbar); a *Results* toolbar button for the whole map (the count is the sum of the digests). The
 results panel (a sheet over the page) has the comparison (a ranked bar per config for one metric and dataset, baselines
 grey, the best aqua, the gap to the best baseline in mono), grouped columns across datasets, a trend line per config
 (hover for the values; click the legend to hide a line), every record (mark a baseline with the star, delete), the node's
@@ -328,13 +344,13 @@ and the plan: no approval card. The assistant only proposes; the user confirms.
 | `GET /stamp` | changes whenever any map's files change |
 | `GET /projects?archived=` · `POST /projects` | list (status counts, warnings) · create `{title, line?, slug?, note?, description?}` |
 | `GET /entities?key=` | where each entity appears, across maps |
-| `GET /projects/{slug}?deleted=` · `PATCH` | the whole map with `warnings` and this Mac's ingest `seq` (`deleted=true` keeps tombstones, for replay) · project fields |
+| `GET /projects/{slug}?deleted=` · `PATCH` | the map with `warnings` and this Mac's ingest `seq` (`deleted=true` keeps tombstones, for replay): the records of every attachment kind except those with a digest (results), which come as `digests: {kind: {node: digest}}` · project fields |
 | `GET /projects/{slug}/stamp` | change stamp of one map: poll it for live refresh |
 | `GET /projects/{slug}/events?before=&since=&after=&node=&kind=&limit=` | the log, newest first: `{events (each with cursor, seq), next, seq}`; `before` / `since` take a cursor or a date; pass `next` back as `before` for the next page; `after` is an ingest sequence |
 | `POST /projects/{slug}/batch` | `{ops, summary?, who?}` |
 | `POST /projects/{slug}/nodes` · `PATCH` · `DELETE /nodes/{id}` | `POST` takes node fields + `parent`, `edge` |
 | `POST /projects/{slug}/edges` · `PATCH` · `DELETE /edges/{id}` | |
-| `GET` · `POST /projects/{slug}/attachments/{kind}` · `PATCH` · `DELETE …/{id}` | any registered kind |
+| `GET` · `POST /projects/{slug}/attachments/{kind}` · `PATCH` · `DELETE …/{id}` | any registered kind; `GET …?node=` lists one node's records (a kind kept per node reads that node's file alone) |
 | `POST /projects/{slug}/results/preview` · `/results/import` · `/results/sync` · `GET /projects/{slug}/results/status` · `GET /results/files` | experiment results (plugin routes, see "Experiment results"): columns and a mapping for pasted text or a file · upsert a table onto a node (`dry_run`) · read the watched files · what this Mac watches · CSV / JSON files in the code folders |
 | `GET /proposals?slug=` · `POST /proposals/{id}/apply` · `DELETE /proposals/{id}` | the assistant's proposals (for a map, plus the ones that would create one) |
 | `GET /lines` · `POST /seed {line}` | research lines with a note and their map · a first map drafted from a note, as a proposal |
@@ -359,7 +375,13 @@ failing plugin is logged and skipped.
   `ShardedStore`) so a big import on one node does not rewrite the others; `identity(record) -> tuple` says what tells two
   records of the kind apart on a node (a proposal that adds one that exists by the time it is confirmed is stale);
   `log="batch"` logs one event per batch and action (`targets`, `count`) instead of one
-  per record, for kinds filled by bulk imports.
+  per record, for kinds filled by bulk imports. `digest(records) -> dict | None` (needs `shard="node"`): what the map
+  shows of one node's records; the map page then gets `digests[kind][node]` instead of the records (cached per node
+  file, see "Experiment results", Reading) and reads the records per node with `GET …/attachments/{kind}?node=`;
+  `/meta` says which kinds have one (`digest: true`).
+- Reading a map in Python: `project.get(slug).read(attachments=[kinds])` reads only the kinds named (`True`: all,
+  `False`: none), `digests=True` adds the digests; `Project.records(kind, node=None)` lists one kind, or one node's
+  records of it. Read only what you use: a map can hold thousands of result records.
 - `ext_field(key, validator)`: validate what the plugin keeps in `node.ext[key]`.
 - `on_event(fn)`: `fn(slug, events)` with the events this Mac had not seen yet, oldest first: after every
   write here, and whenever events from the other Mac arrive (a background watcher, `app/rmap/watch.py`,
@@ -398,7 +420,7 @@ Every hook gets `ctx`:
 
 | | |
 |---|---|
-| `slug`, `map` | `{project, nodes, edges, attachments: {kind: [...]}, warnings, stamp, seq}` as `GET /projects/{slug}` returns it |
+| `slug`, `map` | `{project, nodes, edges, attachments: {kind: [...]}, digests: {kind: {node: digest}}, warnings, stamp, seq}` as `GET /projects/{slug}` returns it (a replayed map has its digests too) |
 | `meta`, `projects` | `/meta`; the project list with counts |
 | `selected`, `select(id)` | the selected node |
 | `open(slug, node?)` | switch to a project's map (e.g. from a view) and select one of its nodes once the map is read |

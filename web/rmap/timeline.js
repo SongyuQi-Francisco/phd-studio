@@ -55,13 +55,18 @@ function lastAt(states, wi) {
   return out;
 }
 
-// The map at the end of week wi (GET .../history), shaped like GET /api/rmap/projects/{slug}.
+// The map at the end of week wi (GET .../history), shaped like GET /api/rmap/projects/{slug}; its `digests` are
+// kept per node (`digests[kind][node]`, the digest of then).
 export function mapAt(frames, wi) {
   const pick = (book) => Object.values(book || {}).map((s) => lastAt(s, wi)).filter(Boolean);
   const attachments = {};
   for (const [kind, book] of Object.entries(frames.attachments || {})) attachments[kind] = pick(book);
+  const digests = {};
+  for (const [kind, book] of Object.entries(frames.digests || {})) {
+    digests[kind] = Object.fromEntries(Object.entries(book).map(([id, s]) => [id, lastAt(s, wi)]).filter(([, d]) => d));
+  }
   const project = lastAt(frames.project, wi) || frames.project?.[0]?.[1] || {};
-  return { slug: frames.slug, project, nodes: pick(frames.nodes), edges: pick(frames.edges), attachments,
+  return { slug: frames.slug, project, nodes: pick(frames.nodes), edges: pick(frames.edges), attachments, digests,
     warnings: [], stamp: `${frames.stamp}@${wi}`, seq: 0 };
 }
 

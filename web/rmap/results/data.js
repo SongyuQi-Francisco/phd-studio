@@ -1,7 +1,9 @@
 // Experiment results of a node (or of a whole map): which metrics there are, the latest value of each
 // config, the gap to the baselines, and the trend over dates. Pure functions with no imports, so they run
 // under node / jsc too (tests/js/rmap_results.test.mjs). Records are the `results` attachments:
-// {id, node, config, dataset?, metric, value, date?, run?, baseline?, better?, source?}.
+// {id, node, config, dataset?, metric, value, date?, run?, baseline?, better?, source?}. What a node shows at a
+// glance (its digest: count, latest metric, best value) comes with the map, worked out by the server
+// (app/rmap/results/model.py `digest`).
 // i18n: done
 
 // Metrics where a smaller number is the better one; keep in step with app/rmap/results/model.py.
@@ -101,15 +103,6 @@ export function trend(records, metric, dataset) {
   series.sort((a, b) => (a.baseline - b.baseline) || (dir === "lower" ? last(a) - last(b) : last(b) - last(a)));
   const dates = [...new Set(series.flatMap((s) => s.points.map((p) => p.date)))].sort();
   return { series, dates, dir };
-}
-
-// What a node shows at a glance: its most recently measured metric and the best latest value of it.
-export function headline(records) {
-  if (!records.length) return null;
-  const g = groups(records)[0];
-  const c = compare(records, g.metric, g.dataset);
-  const row = c.rows.find((r) => !r.baseline) || c.best;
-  return row ? { metric: g.metric, dataset: g.dataset, value: row.value, config: row.config, count: records.length } : null;
 }
 
 // Values of the best config over time, for a sparkline.

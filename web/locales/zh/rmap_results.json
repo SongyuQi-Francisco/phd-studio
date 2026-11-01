@@ -56,6 +56,7 @@
   "import": "导入",
   "layer": "结果",
   "layer.legend": "最近一次的指标值",
+  "loading": "正在读取结果…",
   "legend.baseline": "灰色是 baseline",
   "open": {
     "one": "打开结果面板（{n} 条）",

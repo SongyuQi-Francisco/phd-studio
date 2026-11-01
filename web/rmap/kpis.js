@@ -80,9 +80,11 @@ function Verified({ ctx }) {
   </div>`;
 }
 
-// Open branches with nothing hung on them yet (no evidence, no attachment of any kind).
+// Open branches with nothing hung on them yet (no evidence, no attachment of any kind: no records, and no digest
+// of a kind the map carries as digests).
 export function blankBranches(map, meta) {
   const hung = new Set(Object.values(map.attachments || {}).flat().map((a) => a.node));
+  for (const book of Object.values(map.digests || {})) Object.keys(book).forEach((id) => hung.add(id));
   return map.nodes.filter((n) => BRANCH.includes(n.type) && !meta.closed.includes(n.status) && !hung.has(n.id));
 }
 

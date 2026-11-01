@@ -121,10 +121,8 @@ def _children(m: dict[str, Any]) -> tuple[dict[str, list[dict[str, Any]]], list[
 
 
 def _show(slug: str, as_json: bool) -> int:
-    m = project.get(slug).read()
-    counts: dict[str, int] = {}
-    for a in m["attachments"]["results"]:
-        counts[a["node"]] = counts.get(a["node"], 0) + 1
+    m = project.get(slug).read(attachments=False, digests=True)  # result counts from the digests, not the records
+    counts = {nid: d["count"] for nid, d in m["digests"].get("results", {}).items()}
     if as_json:
         _json({"project": {"slug": slug, **{k: m["project"].get(k) for k in ("title", "line")}},
                "nodes": [{"id": n["id"], "type": n["type"], "status": n.get("status", "todo"), "title": n["title"],
@@ -163,7 +161,7 @@ def _list(all_: bool, as_json: bool) -> int:
 
 
 def _status(slug: str, node_key: str, to: str, note: str | None) -> int:
-    m = project.get(slug).read()
+    m = project.get(slug).read(attachments=False)
     node = refs.find_node(m, node_key)
     if node.get("status", "todo") == to:
         print(f"unchanged: {node['id']} {node['title']} is already {to}")
@@ -177,7 +175,7 @@ def _status(slug: str, node_key: str, to: str, note: str | None) -> int:
 def _note(slug: str, text: str, node_key: str | None) -> int:
     nodes = []
     if node_key:
-        nodes = [refs.find_node(project.get(slug).read(), node_key)["id"]]
+        nodes = [refs.find_node(project.get(slug).read(attachments=False), node_key)["id"]]
     ops.apply(slug, [{"op": "log", "text": text, "nodes": nodes}], who="cli")
     print("noted")
     return 0
@@ -202,11 +200,12 @@ def _add(a: argparse.Namespace, slug: str) -> int:
 
 
 def _results_list(slug: str, node_key: str | None, metric: str | None, as_json: bool) -> int:
-    m = project.get(slug).read()
+    p = project.get(slug)
+    m = p.read(attachments=False)
     node = refs.find_node(m, node_key) if node_key else None
     titles = {n["id"]: n["title"] for n in m["nodes"]}
-    rows = [a for a in m["attachments"]["results"] if (not node or a["node"] == node["id"])
-            and (not metric or a.get("metric", "").lower() == metric.lower())]
+    rows = [a for a in p.records("results", node["id"] if node else None)  # one node: that node's file only
+            if not metric or a.get("metric", "").lower() == metric.lower()]
     rows.sort(key=lambda a: (a["node"], a.get("metric", "").lower(), a.get("dataset") or "", a.get("date") or "", a.get("config", "")))
     if as_json:
         _json([{**{k: v for k, v in a.items() if k not in ("clock", "created_at", "updated_at")}, "node_title": titles.get(a["node"])} for a in rows])
@@ -246,7 +245,7 @@ def _import(a: argparse.Namespace, slug: str) -> int:
         text, path, label = None, str(Path(a.file).expanduser().resolve()), None
     table = tabular.read_file(path, in_roots=False) if path else tabular.parse(text or "", a.format)
     shown = table.meta.get("path")
-    known = project.get(slug).read()["attachments"]["result_sources"]
+    known = project.get(slug).records("result_sources")
     chosen = maps.remembered(table, known, shown) or maps.guess(table)
     if over:
         if "metrics" in over:  # wide form replaces a metric / value pair

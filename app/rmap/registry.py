@@ -58,6 +58,9 @@ class AttachmentKind:
                                        # import on one node never rewrites the others' records
     identity: Callable[[dict[str, Any]], tuple] | None = None  # what tells two records of the kind apart on one node: a
                                        # proposal that adds a record that exists by the time it is confirmed is stale
+    digest: Callable[[list[dict[str, Any]]], dict[str, Any] | None] | None = None  # a node's records -> what the map
+                                       # shows of them; the map then sends `digests[kind][node]` instead of the records,
+                                       # which the page reads per node (GET attachments/{kind}?node=). Needs shard="node"
 
     @property
     def filename(self) -> str:
@@ -102,6 +105,8 @@ def attachment_kind(kind: AttachmentKind) -> AttachmentKind:
         raise ValueError("log must be 'each' or 'batch'")
     if kind.shard not in ("", "node"):
         raise ValueError("shard must be '' or 'node'")
+    if kind.digest and kind.shard != "node":
+        raise ValueError("a digest needs shard='node' (it is cached per node file)")
     KINDS[kind.name] = kind
     return kind
 

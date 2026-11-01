@@ -173,8 +173,9 @@ class State:
         return {i for i, r in self.recs["node"].items() if not r.get("_deleted")}
 
     def snapshot(self) -> dict[str, Any]:
-        """The map at this point, shaped like GET /api/rmap/projects/{slug}. Edges carry `clock: {from}` (when
-        they were made) so cycles are marked in the same order as on the live map."""
+        """The map at this point, shaped like GET /api/rmap/projects/{slug} (with the records of every kind, and the
+        digests worked out from them). Edges carry `clock: {from}` (when they were made) so cycles are marked in the
+        same order as on the live map."""
         live = self.node_ids()
 
         def child(r: dict[str, Any]) -> bool:
@@ -189,7 +190,7 @@ class State:
         atts = {k: [_clean(a) for a in self.recs.get(k, {}).values() if child(a) and a.get("node") in live] for k in kinds}
         warnings = [{"kind": "cycle", "edges": sorted(cycle)}] if cycle else []
         return {"slug": self.tl.slug, "project": _clean(self.project) or self.tl.first_project, "nodes": nodes,
-                "edges": edges, "attachments": atts, "warnings": warnings}
+                "edges": edges, "attachments": atts, "digests": project.digests_of(atts), "warnings": warnings}
 
 
 class Timeline:
@@ -198,7 +199,9 @@ class Timeline:
     def __init__(self, slug: str):
         p = project.get(slug)
         self.slug = slug
-        self.live = p.read(include_deleted=True)
+        # every kind, results too: a kind logged per batch names its records (`targets`) and replay takes their
+        # fields from the records as they are now
+        self.live = p.read(include_deleted=True, attachments=True)
         self.stamp = self.live["stamp"]
         events = p.events(limit=10 ** 9)["events"]
         events.reverse()
@@ -307,9 +310,10 @@ _frames: dict[str, tuple[tuple[str, date], dict[str, Any]]] = {}
 
 def frames(slug: str, today: date | None = None) -> dict[str, Any]:
     """The time scrubber's data: the weeks W1 … Wn of this map, and for every record the states it had at the
-    end of each week where it changed (`[week, record]`, record None: not on the map then). The last week
-    ends now. The front end rebuilds the map of a week by taking each record's last state up to it. Cached
-    until the map changes (or the day does)."""
+    end of each week where it changed (`[week, record]`, record None: not on the map then); the digests of the
+    kinds that have one likewise, per node (`digests[kind][node]`). The last week ends now. The front end
+    rebuilds the map of a week by taking each record's last state up to it. Cached until the map changes (or
+    the day does)."""
     tl = timeline(slug)
     key = (tl.stamp, today or date.today())
     hit = _frames.get(slug)
@@ -324,7 +328,7 @@ def frames(slug: str, today: date | None = None) -> dict[str, Any]:
 def _frames_of(tl: Timeline, today: date) -> dict[str, Any]:
     slug = tl.slug
     ws = weeks(tl.first_ms, today)
-    out: dict[str, Any] = {"project": [], "nodes": {}, "edges": {}, "attachments": {}}
+    out: dict[str, Any] = {"project": [], "nodes": {}, "edges": {}, "attachments": {}, "digests": {}}
     prev: dict[tuple[str, str], str] = {}
     st, done, last, top = State(tl), set(), None, ("", "")
     for w in ws:
@@ -347,11 +351,13 @@ def _frames_of(tl: Timeline, today: date) -> dict[str, Any]:
             last = proj
         cur = {("nodes", r["id"]): r for r in snap["nodes"]} | {("edges", r["id"]): r for r in snap["edges"]}
         cur |= {(f"a:{k}", r["id"]): r for k, recs in snap["attachments"].items() for r in recs}
+        cur |= {(f"d:{k}", nid): d for k, ds in snap["digests"].items() for nid, d in ds.items()}  # keyed by node
         sig = {key: json.dumps(r, sort_keys=True, ensure_ascii=False) for key, r in cur.items()}
         for key in [*sig, *(k for k in prev if k not in sig)]:  # first-seen order, the same on every read
             if sig.get(key) == prev.get(key):
                 continue
-            book = out["attachments"].setdefault(key[0][2:], {}) if key[0].startswith("a:") else out[key[0]]
+            group = {"a:": "attachments", "d:": "digests"}.get(key[0][:2])
+            book = out[group].setdefault(key[0][2:], {}) if group else out[key[0]]
             book.setdefault(key[1], []).append([w["i"], cur.get(key)])
         prev = sig
     return {"slug": slug, "stamp": tl.stamp, "weeks": [{k: v for k, v in w.items() if k != "bound"} for w in ws], **out}

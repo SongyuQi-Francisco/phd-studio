@@ -56,6 +56,7 @@
   "import": "Import",
   "layer": "Results",
   "layer.legend": "Latest metric value",
+  "loading": "Reading the results…",
   "legend.baseline": "Grey is a baseline",
   "open": {
     "one": "Open the results panel ({n})",
