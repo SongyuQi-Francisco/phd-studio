@@ -1,6 +1,7 @@
 {
   "view.title": "阅读清单",
   "view.generated": "由 PhD Studio 根据 `{file}` 生成；在这里的改动会被覆盖。",
+  "view.pinned": "置顶",
   "view.reading": "在读",
   "view.inbox": "收件箱（{n} 篇待分拣）"
 }

@@ -104,7 +104,8 @@ def _publish(st: dict[str, Any]) -> None:
 
 
 def _qualifies(item: dict[str, Any] | None, tiers: tuple[str, ...]) -> bool:
-    return bool(item) and item["status"] in ("queued", "reading") and item.get("tier") in tiers
+    """A paper at one of these tiers, still to read (a vault-note item has no PDF to translate)."""
+    return bool(item) and item["status"] in ("queued", "reading") and item.get("tier") in tiers and not reading.is_note(item)
 
 
 def _title(item: dict[str, Any]) -> str:

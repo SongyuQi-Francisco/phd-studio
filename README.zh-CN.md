@@ -55,6 +55,7 @@
 
 - `收件箱 → T1 / T2 / T3 → 在读 → 读完`，另有稍后再读和不读。读之前定紧急程度，读完记深度、结论和一句话收获。
 - **软上限**防堆积：T1 5 篇、待读 12 篇，超出会提醒；收件箱里放了三周的会自动收起。
+- **置顶**：置顶的条目排在所有分组之上，最近置顶的在最前。除了论文，清单也能放 vault 里的任意 Markdown 笔记（比如一份报告），点开在笔记侧栏里看，不进 PDF 阅读器。
 - 每次推送都记下日期、来源和必填的一句理由。**其他 AI 会话和脚本可以用命令行推送**（`./studio push --arxiv … --reason …`）。
 - **Zotero 一键入库**：通过正在运行的 Zotero 桌面版，否则用你自己的 Zotero Web API key；入库前按 DOI / arXiv / URL 去重。
 
@@ -201,6 +202,7 @@ flowchart LR
 ```bash
 ./studio push --paper "Attention 2017" --tier T1 --line "Project A" --reason "要看什么" --by "planning session"
 ./studio push --arxiv 2606.17328 --reason "被 X 引用，看他们的指标" --by "weekly tracker" --source tracker
+./studio push --note "Notes/Report A.md" --reason "周五前读完" --tier T1 --pin
 ./studio list --status inbox
 ./studio done "Attention 2017" --depth deep --verdict key --takeaway "..."
 ./studio milestone "Draft experiments" --date 2026-11-15 --line "Project A" --kind gate
@@ -213,7 +215,7 @@ flowchart LR
 ./studio map result import "Project A" "Ablation A" ~/code/exp/results.csv --baseline BM25 --watch
 ```
 
-`push` 必须带 `--reason`；已经读完或不读的论文不会被重新加入。所有选项见 `./studio <命令> --help`。`./studio map` 在研究地图上汇报实验结果、更新节点状态（见 [docs/research-map.md](docs/research-map.md#experiment-results)），工作台关着也能用。可以在 vault 的规则文件（如 `AGENTS.md`）里告诉你的 agent 怎么用。
+`push` 必须带 `--reason`；已经读完或不读的论文不会被重新加入。`--note` 填 vault 内的相对路径；`--pin` 把条目置顶。所有选项见 `./studio <命令> --help`。`./studio map` 在研究地图上汇报实验结果、更新节点状态（见 [docs/research-map.md](docs/research-map.md#experiment-results)），工作台关着也能用。可以在 vault 的规则文件（如 `AGENTS.md`）里告诉你的 agent 怎么用。
 
 ## Vault 约定
 

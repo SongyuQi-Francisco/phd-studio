@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -97,6 +98,41 @@ def test_list_filters_and_json(capsys, make_note):
 def test_done_unknown_paper(capsys):
     code, _, err = run(capsys, "done", "Nope")
     assert code == 2 and "not on the reading list: Nope" in err
+
+
+def test_push_a_vault_note_pinned_then_finish_it(capsys, write_vault_file):
+    write_vault_file("Notes/Report A.md", "# Report A")
+    code, out, _ = run(capsys, "push", "--note", "Notes/Report A.md", "--reason", "read first", "--tier", "T1",
+                       "--line", "Project A", "--pin", "--by", "sync script")
+    assert code == 0 and out.startswith("added: r") and out.endswith(" note:Notes/Report A.md [inbox, pinned]\n")
+    [row] = json.loads(run(capsys, "list", "--json")[1])
+    assert (row["note"], row["key"], row["title"], row["tier"], row["pinned"]) == (
+        "Notes/Report A.md", "note:Notes/Report A.md", "Report A", "T1", True)
+    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d", row["pinned_at"])
+    code, out, _ = run(capsys, "push", "--note", "Notes/Report A", "--reason", "again")
+    assert code == 0 and "already listed (inbox); merged" in out and "[inbox, pinned]" in out
+    code, out, _ = run(capsys, "done", "note:Notes/Report A.md", "--takeaway", "one idea")
+    assert code == 0 and out == f"done: {row['id']} note:Notes/Report A.md\n"
+    [item] = reading.load()
+    assert (item["status"], item["takeaway"]) == ("done", "one idea") and "pinned" not in item
+
+
+def test_push_pin_works_for_papers_and_an_unpinned_push_says_nothing_about_it(capsys, make_note):
+    make_note("Alpha")
+    code, out, _ = run(capsys, "push", "--paper", "Alpha", "--reason", "r")
+    assert out.endswith("Alpha [inbox]\n")
+    code, out, _ = run(capsys, "push", "--paper", "Alpha", "--reason", "r2", "--pin")
+    assert code == 0 and out.endswith("Alpha [inbox, pinned]\n")
+
+
+def test_push_note_refuses_bad_paths_and_a_second_target(capsys, make_note, write_vault_file):
+    write_vault_file("Notes/data.txt", "x")
+    for bad in ("Notes/Missing.md", "Notes/data.txt", "../outside.md"):
+        code, out, err = run(capsys, "push", "--note", bad, "--reason", "x")
+        assert code == 2 and "no Markdown note" in err and out == "", bad
+    with pytest.raises(SystemExit):
+        cli.main(["push", "--note", "Notes/Report A.md", "--paper", "Alpha", "--reason", "x"])
+    assert not config.READING_LIST.exists()
 
 
 # ---------- milestones ----------

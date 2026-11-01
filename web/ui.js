@@ -10,6 +10,7 @@ const GLYPHS = {
   chart: "M4 20h16M7 16v-5M12 16V6M17 16v-8",
   flag: "M5 21V4M5 4h11l-2 4 2 4H5",
   layers: "M12 3 2 8l10 5 10-5zM2 13l10 5 10-5",
+  pin: "M9 3h6M10 3v6l-3 4h10l-3-4V3M12 13v8",
 };
 export function Glyph({ name, sm }) {
   return html`<svg class=${"i" + (sm ? " sm" : "")} viewBox="0 0 24 24" aria-hidden="true"><path d=${GLYPHS[name]} /></svg>`;
@@ -47,14 +48,15 @@ export async function loadThumbs(keys) {
 
 // First page of the paper's local / cached PDF, or a quiet paper-shaped placeholder.
 // `ready` changes once loadThumbs() has answered, so the placeholder can swap to the image.
-export function Thumb({ k, title, size = "md", badge, ready }) {
-  const ok = () => !!k && have.has(k) && !failed.has(k);
+// `note`: a vault note rather than a paper; always the placeholder, marked with a note icon.
+export function Thumb({ k, title, size = "md", badge, ready, note }) {
+  const ok = () => !note && !!k && have.has(k) && !failed.has(k);
   const [bad, setBad] = useState(!ok());
   useEffect(() => setBad(!ok()), [k, ready]);
   const initials = (title || k || "?").replace(/[^A-Za-z0-9一-鿿 ]/g, " ").trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();  // i18n-ignore: keeps CJK letters for initials
   return html`<div class=${"thumb " + size + (bad ? " ph" : "")} aria-hidden="true">
     ${bad
-      ? html`<div class="ph-sheet"><b>${initials}</b><i /><i /><i class="s" /><i /><i class="s" /></div>`
+      ? html`<div class="ph-sheet">${note ? html`<${Icon} name="note" sm />` : html`<b>${initials}</b>`}<i /><i /><i class="s" /><i /><i class="s" /></div>`
       : html`<img src=${`/api/thumb/${encodeURIComponent(k)}`} loading="lazy" decoding="async" alt=""
           onError=${() => { failed.add(k); setBad(true); }} />`}
     ${badge}

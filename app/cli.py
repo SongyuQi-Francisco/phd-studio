@@ -2,6 +2,7 @@
 
     studio push --paper "Attention 2017" --tier T1 --line "Project A" --reason "..." --by "planning session"
     studio push --arxiv 2606.17328 --reason "..." --by "weekly tracker" --source tracker
+    studio push --note "Notes/Report A.md" --reason "..." --tier T1 --pin
     studio list [--status inbox] [--line "Project A"]
     studio done "Attention 2017" --depth deep --verdict key --takeaway "..."
     studio milestone "Draft experiments" --date 2026-11-15 --line "Project A" [--kind gate] [--notes "..."]
@@ -28,6 +29,8 @@ A target aims at one edition (year) of a venue, and optionally one round of it (
 or accepted, the rest of that edition's deadlines are no longer reminded for that paper. `list` marks an
 edition worked out for an older target with * (it is saved when the target is next changed).
 `idea list` hides ideas that were merged into another one (--all or --status merged shows them).
+`push --note` lists any Markdown note in the vault (vault-relative path) instead of a paper; `--pin` puts the
+item above everything else on the list.
 Works whether or not the web app is running (the YAML file is locked while writing).
 """
 from __future__ import annotations
@@ -123,17 +126,19 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="studio", description="PhD Studio reading list")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    p = sub.add_parser("push", help="add a paper to the reading list (lands in the inbox)")
+    p = sub.add_parser("push", help="add a paper (or a vault note) to the reading list (lands in the inbox)")
     who = p.add_mutually_exclusive_group(required=True)
     who.add_argument("--paper", help="paper note name, e.g. 'Attention 2017'")
     who.add_argument("--arxiv", help="arXiv id for a paper without a note yet")
-    p.add_argument("--title", help="title for an arXiv-only paper (fetched from arXiv if omitted)")
+    who.add_argument("--note", help="vault-relative path of any other Markdown note, e.g. 'Notes/Report A.md'")
+    p.add_argument("--title", help="title for an arXiv-only paper (fetched from arXiv if omitted) or a note (default: its name)")
     p.add_argument("--reason", required=True, help="one line: why this paper, what to look for")
     p.add_argument("--tier", choices=reading.TIERS, help="urgency: T1 = this week")
     p.add_argument("--line", action="append", default=[], help="research line / group; repeatable")
     p.add_argument("--due", help="YYYY-MM-DD")
     p.add_argument("--by", dest="pushed_by", help="who is pushing, e.g. the session name")
     p.add_argument("--source", choices=reading.SOURCES, default="claude")
+    p.add_argument("--pin", action="store_true", help="pin it: listed above everything else")
     p.add_argument("--force", action="store_true", help="re-add even if dismissed or already read")
 
     ls = sub.add_parser("list", help="show the reading list")
@@ -142,7 +147,7 @@ def main(argv: list[str] | None = None) -> int:
     ls.add_argument("--json", action="store_true")
 
     d = sub.add_parser("done", help="mark a paper as read")
-    d.add_argument("key", help="item id, note name or arxiv:<id>")
+    d.add_argument("key", help="item id, note name, arxiv:<id> or note:<vault path>")
     d.add_argument("--depth", choices=reading.DEPTHS, default="deep")
     d.add_argument("--verdict", choices=reading.VERDICTS)
     d.add_argument("--takeaway")
@@ -225,10 +230,10 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(_default_to_add(list(sys.argv[1:] if argv is None else argv)))
     try:
         if a.cmd == "push":
-            item, what = reading.push(paper=a.paper, arxiv=a.arxiv, title=a.title, reason=a.reason,
+            item, what = reading.push(paper=a.paper, arxiv=a.arxiv, note=a.note, title=a.title, reason=a.reason,
                                       source=a.source, pushed_by=a.pushed_by, tier=a.tier,
-                                      lines=a.line, due=a.due, force=a.force)
-            print(f"{what}: {item['id']} {reading.key_of(item)} [{item['status']}]")
+                                      lines=a.line, due=a.due, pinned=a.pin, force=a.force)
+            print(f"{what}: {item['id']} {reading.key_of(item)} [{item['status']}{', pinned' if item.get('pinned') else ''}]")
         elif a.cmd == "list":
             items = reading.load()
             reading.summary(items)

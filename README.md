@@ -53,6 +53,7 @@ All screenshots use the fictional demo workspace from [`scripts/demo/make_demo.p
 
 - `inbox → T1 / T2 / T3 → reading → done`, plus snooze and dismiss. Urgency is set before reading; depth, verdict and a one-line takeaway after.
 - **Soft caps** against pile-up: 5 T1 papers and 12 queued, with a warning when you go over. Inbox items left for three weeks fold away.
+- **Pin** an item to keep it above everything else, most recently pinned first. Besides papers, the list takes any Markdown note in your vault (a report, say): it opens in the note viewer instead of the PDF reader.
 - Every push records a date, a source and a required one-line reason. **Other AI sessions and scripts push through the CLI** (`./studio push --arxiv … --reason …`).
 - **Zotero**: add the open paper in one click (through the Zotero desktop app, else the Zotero Web API with your own key), after a DOI / arXiv / URL dedupe.
 
@@ -199,6 +200,7 @@ Other agents and scripts can work with the same data:
 ```bash
 ./studio push --paper "Attention 2017" --tier T1 --line "Project A" --reason "what to look for" --by "planning session"
 ./studio push --arxiv 2606.17328 --reason "cited by X; check their metric" --by "weekly tracker" --source tracker
+./studio push --note "Notes/Report A.md" --reason "read before Friday" --tier T1 --pin
 ./studio list --status inbox
 ./studio done "Attention 2017" --depth deep --verdict key --takeaway "..."
 ./studio milestone "Draft experiments" --date 2026-11-15 --line "Project A" --kind gate
@@ -211,7 +213,7 @@ Other agents and scripts can work with the same data:
 ./studio map result import "Project A" "Ablation A" ~/code/exp/results.csv --baseline BM25 --watch
 ```
 
-`--reason` is required for `push`, and papers already read or dismissed are not added again. Run `./studio <command> --help` for every option. `./studio map` reports experiment results and node status on a research map (see [docs/research-map.md](docs/research-map.md#experiment-results)); it works while the app is closed. Tell your agents about it in the vault rules file (e.g. `AGENTS.md`).
+`--reason` is required for `push`, and papers already read or dismissed are not added again. `--note` takes a vault-relative path; `--pin` puts the item at the top of the list. Run `./studio <command> --help` for every option. `./studio map` reports experiment results and node status on a research map (see [docs/research-map.md](docs/research-map.md#experiment-results)); it works while the app is closed. Tell your agents about it in the vault rules file (e.g. `AGENTS.md`).
 
 ## Vault conventions
 
