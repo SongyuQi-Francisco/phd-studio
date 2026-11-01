@@ -11,6 +11,8 @@ again whenever it changes.
 
 Every read-compute-write runs under a lock on the project's results that works across processes (the app's
 watcher, `studio map result sync --loop` and the CLI all write), so two of them never both decide that a row is new.
+Inside this process the thread lock `_lock` comes first, then that file lock (`with _lock, writing(slug)`): the
+watcher holds `_lock` across `sync()`, and a page import that took the file lock first would wait on it forever.
 """
 from __future__ import annotations
 
@@ -36,7 +38,7 @@ SAMPLE_ROWS = 8
 MAX_RECORDS = ops.MAX_IMPORT_OPS - 2  # one atomic batch: the records, a source record and the log line
 BULK_CHUNK = 390                      # a person's batch is capped at ops.MAX_OPS; bulk_set goes in chunks of this
 STATE_FILE = DATA_DIR / "rmap" / "results-watch.json"
-_lock = threading.RLock()  # threads of this process; the file locks below are for the others
+_lock = threading.RLock()  # threads of this process, taken before the file lock below (that one is for the others)
 
 
 def today() -> str:
@@ -168,7 +170,7 @@ def run_import(slug: str, node_key: str, *, text: str | None = None, path: str |
     watch: True / False sets whether this Mac watches the file (None leaves it as it is). trusted: the person at the
     command line named the file themselves, so it need not be inside a results root (a watched file always must)."""
     table = tabular.read_file(path, in_roots=not trusted or bool(watch)) if path else tabular.parse(text or "", fmt)
-    with (nullcontext() if dry_run else writing(slug)), _lock:
+    with _lock, (nullcontext() if dry_run else writing(slug)):
         m = _core(slug)
         node = _node(m, node_key)
         sources = _sources(slug, m)
@@ -242,7 +244,7 @@ def build_report(slug: str, node_key: str, items: list[dict[str, Any]], *, statu
 def report(slug: str, node_key: str, items: list[dict[str, Any]], *, status: str | None = None, summary: str | None = None,
            source: str = "cli", day: str | None = None, who: str = "cli") -> dict[str, Any]:
     """build_report, then write it (one atomic batch)."""
-    with writing(slug), _lock:
+    with _lock, writing(slug):
         built = build_report(slug, node_key, items, status=status, summary=summary, source=source, day=day)
         _check_size(built["ops"])
         if not built["ops"]:
@@ -267,7 +269,7 @@ def bulk_set(slug: str, fields: dict[str, Any], *, node: str | None = None, conf
     if unknown or not fields:
         raise ValueError(i18n.t("rmap_results.unknown_fields", fields=", ".join(sorted(unknown)) or "-"))
     want = model.RESULTS.clean(fields, new=False)
-    with writing(slug), _lock:
+    with _lock, writing(slug):
         m = _core(slug)
         nodes = [_node(m, node)["id"]] if node else [n["id"] for n in m["nodes"] if n.get("type") in model.NODE_TYPES]
         todo: list[dict[str, Any]] = []

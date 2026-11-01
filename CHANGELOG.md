@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A research map batch that failed, and a dry run, moved Syncthing conflict copies out of the vault without writing what they held into the file: the other Mac's changes were left only in this Mac's `sync-conflicts` folder. Copies now leave the vault only once the merged file is written ([#75](https://github.com/SongyuQi-Francisco/phd-studio/issues/75))
+- Results: the file watcher and an import or a baseline flag from the page could deadlock (they took the thread lock and the file lock in opposite orders) ([#72](https://github.com/SongyuQi-Francisco/phd-studio/issues/72))
 - Security: the local server now answers only requests addressed to this machine. A `Host` other than `127.0.0.1`, `localhost` or `[::1]` gets a 403 (DNS rebinding), and writes and WebSocket handshakes with a non-local `Origin` are refused; the desktop window, other ports (`STUDIO_PORT`) and clients without an `Origin` (the CLI, curl) work as before ([#64](https://github.com/SongyuQi-Francisco/phd-studio/issues/64))
 - The demo generator (`scripts/demo/make_demo.py`) failed on a Mac with its default output folder: results files under `~/Library/Application Support` were refused. Only credentials and the app's own folders are closed now, and a test builds a whole demo workspace offline ([#66](https://github.com/SongyuQi-Francisco/phd-studio/issues/66))
 

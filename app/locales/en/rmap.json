@@ -11,6 +11,7 @@
   "exists": "{record} already has the same {kind} record ({what})",
   "gone": "{record} was deleted",
   "moved": "{fields} of {record} changed",
+  "node_hint": "node in a {kind} operation should be the id of the node the record hangs on",
   "not_on_node": "No {kind} record {id} on node {node}",
   "record": "“{title}”",
   "stale": "The map changed after this proposal: {what}. Nothing was written; discard it and ask the assistant to look again.",

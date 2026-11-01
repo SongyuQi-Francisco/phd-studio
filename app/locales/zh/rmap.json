@@ -8,6 +8,7 @@
   "exists": "{record}上已经有同样的 {kind} 记录（{what}）",
   "gone": "{record}已被删除",
   "moved": "{record}的 {fields} 被改过",
+  "node_hint": "{kind} 操作里的 node 应为这条记录所在节点的 id",
   "not_on_node": "节点 {node} 上没有这条 {kind}：{id}",
   "record": "「{title}」",
   "stale": "地图在提议之后改过了：{what}。这条提议没有写入，可以放弃后让助手重新看一遍。",

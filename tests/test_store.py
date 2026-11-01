@@ -230,6 +230,24 @@ def test_editing_merges_conflicts_before_applying_the_change(st: Store):
     assert not copy.exists()
 
 
+def test_a_conflict_copy_stays_in_the_vault_until_the_merge_is_written(st: Store):
+    write_yaml(st.path, things=[{"id": "t1", "name": "a", "updated_at": "2026-10-24T10:00:00"}])
+    copy = conflict_copy(st)
+    write_yaml(copy, things=[{"id": "t2", "name": "only theirs", "updated_at": "2026-10-24T10:00:00"}])
+    base = st.path.read_bytes()
+    with pytest.raises(RuntimeError):
+        with st.editing() as data:
+            assert {r["id"] for r in data["things"]} == {"t1", "t2"}
+            raise RuntimeError("the change failed")
+    assert copy.exists() and st.path.read_bytes() == base  # nothing written, nothing moved
+    assert {r["id"] for r in st.peek()["things"]} == {"t1", "t2"}  # a dry run sees it, and moves nothing either
+    assert copy.exists() and st.path.read_bytes() == base
+    with st.editing(skip_unchanged=True):
+        pass  # changed nothing, but merged a copy: written, then the copy leaves the vault
+    assert not copy.exists() and (store.CONFLICTS_DIR / copy.name).exists()
+    assert {r["id"] for r in read_yaml(st)["things"]} == {"t1", "t2"}
+
+
 # ---------- locking ----------
 
 

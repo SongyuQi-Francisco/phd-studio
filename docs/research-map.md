@@ -36,7 +36,8 @@ no clock stamp (see below), so the other Mac's copy may win over them.
 
 Every file is a store built on `app/store.py` (locked read-modify-write, temp files and locks in the data
 dir under `rmap/`, never in the vault; a write that changes nothing leaves the file alone; Syncthing
-conflict copies are merged on the next read and moved to `<data>/sync-conflicts/`). The map and
+conflict copies are merged on the next read and moved to `<data>/sync-conflicts/` once the file holding the merge
+is written, so a write that fails or a dry run leaves them in the vault). The map and
 attachment files merge **field by field** (`app/rmap/records.py`); the other stores of the app keep
 merging whole records by `updated_at`.
 
@@ -172,7 +173,8 @@ all-projects map.
 Every change goes through `app/rmap/ops.apply(slug, ops, who=, summary=)`: a batch validated as a
 whole and written under the map's lock (all or nothing), then logged. Ids in a batch may be `$name`
 refs to records added earlier in it. `ops.simulate(slug | None, ops)` runs the same checks without
-writing (None: against a new, empty map) and returns the events the batch would log.
+writing (None: against a new, empty map) and returns the events the batch would log: it writes no file and no index,
+and merges conflict copies in memory only.
 
 ```json
 [{"op": "node.add", "ref": "$h", "set": {"type": "hypothesis", "title": "Tool use helps"}, "parent": "n1a2b3c4"},
@@ -195,7 +197,8 @@ operation when the caller knows it (the record must then be on that node), or el
 record id → node (`<data>/rmap/<slug>.<kind>.ids.json`, never synced: it lists the ids in each file of the
 kind, conflict copies included, with the file's size and time, and reads again only the files whose size or
 time moved; a lost or broken index is built again from the files, and an id it does not know makes it read
-every file before the record counts as missing). A new id is checked against the index too; ids of a kind kept
+every file before the record counts as missing; saving it is best effort, so a full disk never fails the write it
+serves). A node whose id is no file name (one added by hand as 「实验一」) has no such file and is skipped. A new id is checked against the index too; ids of a kind kept
 one file per node have 6 random bytes (`rs` + 12 hex digits; older ids with 8 keep working). The map's lock is
 held from reading the map to writing the files, so it now lasts as long as the files the batch touches take.
 
@@ -308,7 +311,8 @@ atomic batch** through `ops.apply(who="import")` (up to 19000 rows), after check
 would be added, updated or left alone and writes nothing. Importing the same table twice changes nothing and logs
 nothing. A baseline ticked in the page is not unticked by a later import. Reading, deciding and writing run under a lock on
 the project's results that holds across processes (`importer.writing`), so the app's watcher, `studio map result sync
---loop` and the CLI never both decide that a row is new. `watch=None` (what the page sends unless the box was ticked or
+--loop` and the CLI never both decide that a row is new; inside one process the thread lock `importer._lock` is always
+taken first, then the file lock. `watch=None` (what the page sends unless the box was ticked or
 unticked) leaves a file's watch as it is, the other Mac's included; only an explicit True / False changes it. `bulk_set`
 (`POST .../results/set`) marks a config as a baseline or sets a metric's direction on every matching record, in
 chunks of 390 operations (each chunk atomic).

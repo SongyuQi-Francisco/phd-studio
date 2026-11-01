@@ -19,7 +19,7 @@ Operations (ids may be "$name" refs to records added earlier in the same batch):
     {"op": "log",           "text": "one line for the change log", "nodes": [<node>, ...]}
     {"op": "project.update", "set": {title, line, note, description, archived}}
 
-`simulate` runs the same checks without writing.
+`simulate` runs the same checks without writing: no file, no index, and Syncthing conflict copies stay in the vault.
 
 A batch reads what it writes: the map file whole, a kind kept in one file whole, and of a kind kept one file per node
 (results) only the files of the nodes it touches (records.Shards). Its clock observes what it reads, so every stamp it
@@ -39,7 +39,7 @@ from ..store import now
 from . import model, registry
 from .clock import Clock
 from .project import PROJECT_ID, Project, get, taken
-from .records import Shards, child_live, clocks, last_write, live_ids, own_live, set_field
+from .records import ShardedStore, Shards, child_live, clocks, last_write, live_ids, own_live, set_field
 
 OPS = ("node.add", "node.update", "node.delete", "edge.add", "edge.update", "edge.delete",
        "attach.add", "attach.update", "attach.delete", "log", "project.update")
@@ -130,7 +130,7 @@ class _Batch:
         if name not in self.att:
             store = self.p.kind_store(kind)
             if self.stack is None:  # a dry run: read only (nothing there yet for a project not yet created)
-                self.att[name] = [] if self.fresh else copy.deepcopy(store.load(include_deleted=True)[name])
+                self.att[name] = [] if self.fresh else copy.deepcopy(store.peek(include_deleted=True)[name])
             else:
                 self.att[name] = self.stack.enter_context(store.editing(skip_unchanged=True))[name]
             self.att_by[name] = {r["id"]: r for r in self.att[name]}
@@ -214,6 +214,8 @@ class _Batch:
                 self.tomb(e, stamp, rec["id"])
                 self.log("edge", "delete", e["id"], [e["from"], e["to"]], stamp, record=_snap(e))
         for name, kind in registry.kinds().items():
+            if kind.shard and not ShardedStore.can_hold(rec["id"]):  # a node added by hand with an id that is no file name
+                continue
             for a in self.shard_data(name).node(rec["id"]) if kind.shard else self.kind_data(name):
                 if a.get("node") == rec["id"] and child_live(a, self.live):
                     stamp = self.clock.tick()
@@ -310,7 +312,11 @@ class _Batch:
         name = op.get("kind")
         kind = self.kind(name)
         rid = self.ref(op.get("id"))
-        at = self.ref(op["node"], "node") if op.get("node") is not None else None
+        at = op.get("node")
+        if at is not None:
+            if not isinstance(at, str) or not at:
+                raise ValueError(i18n.t("rmap.node_hint", kind=name))
+            at = self.ref(at, "node")
         if at is not None and at not in self.nodes:
             raise KeyError(i18n.t("rmap.not_on_node", kind=name, id=rid, node=at))
         if kind.shard:
@@ -428,7 +434,7 @@ def simulate(slug: str | None, ops: list[dict[str, Any]], *, who: str = "user", 
     empty project (a first map drafted before the project exists). Raises like apply on an invalid batch."""
     p = get(slug) if slug else Project("draft")
     ops, group = _check(ops, who, summary)
-    data = copy.deepcopy(p.map.load(include_deleted=True)) if slug else {"project": [], "nodes": [], "edges": []}
+    data = copy.deepcopy(p.map.peek(include_deleted=True)) if slug else {"project": [], "nodes": [], "edges": []}
     b = _Batch(p, data, who, group, fresh=not slug)
     for op in ops:
         b.run(op)

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import logging
 import os
 import re
 from collections.abc import Callable, Iterator
@@ -27,6 +28,7 @@ from ..store import Store
 from .clock import from_iso
 
 META = ("id", "clock", "created_at", "updated_at")
+log = logging.getLogger(__name__)
 
 
 def clocks(rec: dict[str, Any]) -> dict[str, str]:
@@ -134,8 +136,13 @@ class ShardedStore:
         self._index = DATA_DIR / f"{name}.ids.json"
         self._index_lock = DATA_DIR / f"{name}.ids.lock"
 
+    @staticmethod
+    def can_hold(node: str) -> bool:
+        """Whether a node can have a file: its id is a file name (a node added by hand as 「实验一」 cannot)."""
+        return bool(NODE_FILE.fullmatch(node or ""))
+
     def shard(self, node: str) -> FieldStore:
-        if not NODE_FILE.fullmatch(node or ""):
+        if not self.can_hold(node):
             raise ValueError(f"no such node: {node!r}")
         return FieldStore(self.folder / f"{node}.yaml", (self.collection,), self.header, name=f"{self.name}.{node}")
 
@@ -171,7 +178,8 @@ class ShardedStore:
     def editing(self, seen: Callable[[list[dict[str, Any]]], None] | None = None) -> Iterator[Shards]:
         """A write's view of the kind (see Shards): each node's file is read and locked when the block first asks
         for it, and stays locked until the block ends. Then only the files whose records changed (or that merged a
-        conflict copy) are rewritten, and the index learns what they now hold. Nothing is written if the block raises.
+        conflict copy) are rewritten, the conflict copies they merged leave the vault, and the index learns what the
+        files now hold. Nothing is written or moved if the block raises.
         seen: called with each node's records as they are read (the batch's clock observes them)."""
         with ExitStack() as stack:
             shards = Shards(self, stack, seen)
@@ -179,7 +187,8 @@ class ShardedStore:
             shards.finish()
 
     def reading(self, seen: Callable[[list[dict[str, Any]]], None] | None = None, fresh: bool = False) -> Shards:
-        """The same view for a dry run: nothing is locked or written. fresh: a project that does not exist yet."""
+        """The same view for a dry run: nothing is written, not even the index, and conflict copies are merged in
+        memory and left in the vault. fresh: a project that does not exist yet."""
         return Shards(self, None, seen, fresh)
 
     # ---- this Mac's index: record id -> node ----
@@ -216,13 +225,20 @@ class ShardedStore:
                 fcntl.flock(f, fcntl.LOCK_UN)
 
     def _save_index(self, files: dict[str, dict[str, Any]]) -> None:
+        """Best effort: the index is a cache that heals by the files' size and time, so a full disk must not fail
+        the write it serves (the old index stays, and its stale entries are read again next time)."""
         tmp = self._index.with_name(f"{self._index.name}.{os.getpid()}.tmp")
-        tmp.write_text(json.dumps({"v": INDEX_VERSION, "files": files}, separators=(",", ":")), encoding="utf-8")
-        os.replace(tmp, self._index)
+        try:
+            tmp.write_text(json.dumps({"v": INDEX_VERSION, "files": files}, separators=(",", ":")), encoding="utf-8")
+            os.replace(tmp, self._index)
+        except OSError as e:
+            log.warning("research map index %s not saved: %s", self._index, e)
+            tmp.unlink(missing_ok=True)
 
-    def index(self, full: bool = False) -> dict[str, str]:
+    def index(self, full: bool = False, save: bool = True) -> dict[str, str]:
         """Record id -> node, for every record of the kind on this Mac (a conflict copy's too). The files whose size
-        or time moved since the index last saw them are read again; all of them with `full`."""
+        or time moved since the index last saw them are read again; all of them with `full`. save=False: a dry run,
+        which leaves the index file as it was."""
         with self._index_locked() as files:
             now = self._files()
             changed = bool(set(files) - set(now))
@@ -236,19 +252,23 @@ class ShardedStore:
                     else:
                         files[name] = {"sig": sig, "ids": [r["id"] for r in recs]}
                     changed = True
-            if changed:
+            if changed and save:
                 self._save_index(files)
         return {rid: node_of(name) for name, e in files.items() for rid in e["ids"]}
 
     def _remember(self, written: dict[str, tuple[list[int], list[str]]]) -> None:
         """After a write: the nodes' files as written (their size and time, and ids). The conflict copies those files
-        merged are gone; dropping every copy of the node is safe, since a copy still there is read again next time."""
-        with self._index_locked() as files:
-            for node, (sig, ids) in written.items():
-                for name in [n for n in files if n.startswith(node + CONFLICT)]:
-                    del files[name]
-                files[f"{node}.yaml"] = {"sig": sig, "ids": ids}
-            self._save_index(files)
+        merged are gone; dropping every copy of the node is safe, since a copy still there is read again next time.
+        Best effort, like `_save_index`: the files are written by now, and a write is never undone for its cache."""
+        try:
+            with self._index_locked() as files:
+                for node, (sig, ids) in written.items():
+                    for name in [n for n in files if n.startswith(node + CONFLICT)]:
+                        del files[name]
+                    files[f"{node}.yaml"] = {"sig": sig, "ids": ids}
+                self._save_index(files)
+        except OSError as e:
+            log.warning("research map index %s not updated: %s", self._index, e)
 
 
 class Shards:
@@ -259,7 +279,7 @@ class Shards:
     def __init__(self, store: ShardedStore, stack: ExitStack | None,
                  seen: Callable[[list[dict[str, Any]]], None] | None = None, fresh: bool = False):
         self.store, self.stack, self.seen, self.fresh = store, stack, seen, fresh
-        self.loaded: dict[str, tuple[FieldStore, dict[str, list[dict[str, Any]]], bool, tuple]] = {}
+        self.loaded: dict[str, tuple[FieldStore, dict[str, list[dict[str, Any]]], list[Path], tuple]] = {}
         self.by_id: dict[str, dict[str, Any]] = {}
         self._ids: dict[str, str] | None = None
         self._full = False
@@ -269,16 +289,16 @@ class Shards:
         coll = self.store.collection
         if nid not in self.loaded:
             st = self.store.shard(nid)
-            merged = False
+            copies: list[Path] = []
             if self.fresh:
                 data: dict[str, list[dict[str, Any]]] = {coll: []}
             elif self.stack is None:
-                data = {coll: self.store.load_node(nid, include_deleted=True)}
+                data = {coll: st.peek(include_deleted=True)[coll]}
             else:
                 self.stack.enter_context(st._locked())
                 data = st._read(st.path)
-                merged = st._merge_conflicts(data)
-            self.loaded[nid] = (st, data, merged, ShardedStore._mark(data[coll]))
+                copies = st._merge_conflicts(data)
+            self.loaded[nid] = (st, data, copies, ShardedStore._mark(data[coll]))
             for r in data[coll]:
                 self.by_id.setdefault(r["id"], r)
             if self.seen:
@@ -294,7 +314,7 @@ class Shards:
         if self.fresh:
             return {}
         if self._ids is None or (full and not self._full):
-            self._ids = self.store.index(full=full)
+            self._ids = self.store.index(full=full, save=self.stack is not None)
             self._full = self._full or full
         return self._ids
 
@@ -303,7 +323,8 @@ class Shards:
         record elsewhere is None."""
         if rid not in self.by_id:
             if node is not None:
-                self.node(node)
+                if self.store.can_hold(node):  # a node whose id is no file name has no records of the kind
+                    self.node(node)
             else:
                 for full in (False, True):  # an id the index does not know: read every file again before saying no
                     nid = self.ids(full).get(rid)
@@ -315,12 +336,15 @@ class Shards:
         return rec if rec is not None and (node is None or rec.get("node") == node) else None
 
     def finish(self) -> None:
-        """Write the files whose records changed (or that merged a conflict copy) and tell the index; under the locks."""
+        """Write the files whose records changed (or that merged a conflict copy), move the merged copies out of the
+        vault, and tell the index; under the locks."""
         coll = self.store.collection
         written: dict[str, tuple[list[int], list[str]]] = {}
-        for nid, (st, data, merged, before) in self.loaded.items():
-            if merged or ShardedStore._mark(data[coll]) != before:
+        for nid, (st, data, copies, before) in self.loaded.items():
+            if copies or ShardedStore._mark(data[coll]) != before:
                 stat = st._write(data)
                 written[nid] = ([stat.st_mtime_ns, stat.st_size], [r["id"] for r in data[coll]])
+        for st, _, copies, _ in self.loaded.values():
+            st._park(copies)
         if written:
             self.store._remember(written)
