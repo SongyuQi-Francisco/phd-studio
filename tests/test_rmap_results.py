@@ -834,28 +834,20 @@ def test_results_live_one_file_per_node_and_a_write_leaves_the_others_alone(slug
 
 
 @pytest.fixture
-def shard_reads(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """Every read of a results file, by node (a write's own reads and the index's alike). What the event subscribers
-    read once the write is done (the canvas file is drawn again from the map) is theirs, and not counted."""
+def shard_reads(monkeypatch):
+    """The results files read from now on (each read of one, conflict copies included), as node ids: a write's
+    own reads, the index's, and what the event subscribers read after it (the canvas reads no results)."""
     from app.store import Store
+    project._DIGESTS.clear()
     seen: list[str] = []
-    real_read, real_publish = Store._read, registry.publish
-    subscribers = [False]
+    real = Store._read
 
-    def counting(self, path: Path):
-        if path.parent.name == model.RESULTS.filename and not subscribers[0]:
-            seen.append(path.name.split(".")[0])
-        return real_read(self, path)
-
-    def publish(slug_: str, events: list[dict]) -> None:
-        subscribers[0] = True
-        try:
-            real_publish(slug_, events)
-        finally:
-            subscribers[0] = False
+    def counting(self, path):
+        if path.parent.name == "results":
+            seen.append(path.name.split(".sync-conflict-")[0].removesuffix(".yaml"))
+        return real(self, path)
 
     monkeypatch.setattr(Store, "_read", counting)
-    monkeypatch.setattr(registry, "publish", publish)
     return seen
 
 
@@ -1046,9 +1038,7 @@ def test_a_conflict_copy_is_in_the_index_and_merges_field_by_field(slug: str, ex
     conflict(f).write_text(yaml.safe_dump(theirs), encoding="utf-8")
     shard_reads.clear()
     ops.apply(slug, [{"op": "attach.update", "kind": "results", "id": on_x, "set": {"baseline": True}}])
-    assert set(shard_reads) == {x, y}  # y: the index read the new copy's ids (the write itself opened only x)
-    if not conflict(f).exists():  # the canvas, drawn again after the write, read the whole map: hand the copy back
-        conflict(f).write_text(yaml.safe_dump(theirs), encoding="utf-8")
+    assert set(shard_reads) == {x, y} and conflict(f).exists()  # y: the index read the new copy's ids; the write left y alone
     shard_reads.clear()
     ops.apply(slug, [{"op": "attach.update", "kind": "results", "id": "rsfeedfacecafe", "set": {"baseline": True}},  # only in the copy
                      {"op": "attach.update", "kind": "results", "id": mine, "set": {"baseline": True}}])
@@ -1167,23 +1157,6 @@ def test_a_digest_reads_fields_edited_by_hand_into_other_types():
     assert d["metric"] == "123" and d["dataset"] == "7" and d["config"] == "B" and d["last"] == "2026-10-21"
     assert model.digest([_rec("C", "acc", float("inf"))]) == {"count": 1, "metric": "acc", "dataset": "", "last": "2026-10-20",
                                                               "metrics": ["acc"], "configs": ["C"]}  # no value to show
-
-
-@pytest.fixture
-def shard_reads(monkeypatch):
-    """The results files read from now on (each read of one, conflict copies included), as node ids."""
-    from app.store import Store
-    project._DIGESTS.clear()
-    seen: list[str] = []
-    real = Store._read
-
-    def counting(self, path):
-        if path.parent.name == "results":
-            seen.append(path.name.split(".sync-conflict-")[0].removesuffix(".yaml"))
-        return real(self, path)
-
-    monkeypatch.setattr(Store, "_read", counting)
-    return seen
 
 
 def test_the_map_page_gets_a_digest_per_node_and_reads_only_the_files_that_changed(client: TestClient, slug: str, exp, shard_reads):
@@ -1316,6 +1289,23 @@ def test_a_proposal_checks_for_the_same_measurement_in_that_nodes_file_only(slug
                                               "set": {"config": "Ours", "metric": "acc", "value": 0.9}}], summary="acc")
     shard_reads.clear()
     assert proposals.stale(rec) == [] and shard_reads == [exp["$x"]]
+
+
+def test_a_proposal_that_names_the_records_node_reads_only_that_nodes_file(slug: str, exp, shard_reads):
+    x, y = exp["$x"], exp["$y"]
+    [rid] = add(slug, x)
+    add(slug, y)
+    shard_reads.clear()
+    rec = proposals.propose(slug=slug, ops_=[{"op": "attach.update", "kind": "results", "id": rid, "node": x, "set": {"value": 0.9}}],
+                            summary="fix the number")
+    assert set(shard_reads) == {x} and rec["base"][0]["node"] == x
+    shard_reads.clear()
+    assert proposals.stale(rec) == [] and set(shard_reads) == {x}
+    ops.apply(slug, [{"op": "attach.update", "kind": "results", "id": rid, "node": x, "set": {"value": 0.5}}])
+    assert proposals.stale(rec) and "value" in proposals.stale(rec)[0]  # changed here before it was confirmed
+    old = {**rec, "base": [{k: v for k, v in b.items() if k != "node"} for b in rec["base"]]}  # made before #72: reads the kind
+    shard_reads.clear()
+    assert proposals.stale(old) == proposals.stale(rec) and {x, y} <= set(shard_reads)
 
 
 def test_the_replayed_map_has_the_digests_of_then(slug: str, exp):

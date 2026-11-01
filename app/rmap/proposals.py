@@ -19,7 +19,7 @@ from .. import i18n
 from ..config import STATE_DIR
 from ..store import now
 from . import model, ops, project, registry
-from .records import child_live, clocks, last_write, live_ids, own_live
+from .records import ShardedStore, child_live, clocks, last_write, live_ids, own_live
 
 PROPOSALS_FILE = STATE_DIR / "rmap_proposals.json"
 MAX_PENDING = 30
@@ -65,15 +65,38 @@ def propose(*, ops_: list[dict[str, Any]], summary: str, slug: str | None = None
     return rec
 
 
-def _records(slug: str, kinds: set[str]) -> tuple[dict[tuple[str, str], dict[str, Any]], set[str]]:
+def _on_nodes(items: list[tuple[Any, Any]]) -> dict[str, set[str]]:
+    """Of (kind, node) pairs, the kinds kept one file per node whose every pair names an existing node: kind -> those
+    nodes, whose files alone hold the records (a pair without a node, or with a "$ref", needs the whole kind)."""
+    kinds = registry.kinds()
+    out: dict[str, set[str]] = {}
+    whole: set[str] = set()
+    for name, node in items:
+        if name not in kinds or not kinds[name].shard:
+            continue
+        if isinstance(node, str) and not node.startswith("$") and ShardedStore.can_hold(node):
+            out.setdefault(name, set()).add(node)
+        else:
+            whole.add(name)
+    return {k: v for k, v in out.items() if k not in whole}
+
+
+def _records(slug: str, kinds: set[str], nodes: dict[str, set[str]] | None = None) -> tuple[dict[tuple[str, str], dict[str, Any]], set[str]]:
     """(kind, id) -> raw record with its clock, tombstones included: the project, nodes and edges, and the records of
-    the attachment kinds named (only those: a map can hold thousands of result records); and the live node ids."""
-    m = project.get(slug).read(include_deleted=True, attachments=kinds)
+    the attachment kinds named (only those: a map can hold thousands of result records); and the live node ids.
+    nodes: {kind: node ids} for kinds kept one file per node (`_on_nodes`): only those nodes' files are read."""
+    nodes = nodes or {}
+    p = project.get(slug)
+    m = p.read(include_deleted=True, attachments={k for k in kinds if k not in nodes})
     out = {("node", n["id"]): n for n in m["nodes"]}
     out.update({("edge", e["id"]): e for e in m["edges"]})
     out[("project", project.PROJECT_ID)] = m["project"]
     for kind, recs in m["attachments"].items():
         out.update({(kind, r["id"]): r for r in recs})
+    for kind, nids in nodes.items():
+        store = p.kind_store(registry.kinds()[kind])
+        for nid in sorted(nids):
+            out.update({(kind, r["id"]): r for r in store.load_node(nid, include_deleted=True)})
     return out, live_ids(m["nodes"])
 
 
@@ -81,9 +104,12 @@ def _base(slug: str, events: list[dict[str, Any]], ops_: list[dict[str, Any]] = 
     """What the proposal was made against: the stamps of the fields it changes, of the records it deletes
     (all of the record: "*"), and of the existing nodes it hangs new things on (only that they live).
     Kinds logged per batch (bulk imports) have no per-record events, so their changes are read off the operations."""
-    kinds = {op.get("kind") for op in ops_ if op.get("op") in ("attach.update", "attach.delete")}
-    kinds |= {ev["kind"] for ev in events if ev["action"] in ("update", "delete") and ev.get("target")}
-    recs, _ = _records(slug, {k for k in kinds if isinstance(k, str)})
+    changed = [op for op in ops_ if op.get("op") in ("attach.update", "attach.delete")]
+    logged = [ev for ev in events if ev["action"] in ("update", "delete") and ev.get("target")]
+    kinds = {op.get("kind") for op in changed} | {ev["kind"] for ev in logged}
+    nodes = _on_nodes([(op.get("kind"), op.get("node")) for op in changed] +
+                      [(ev["kind"], (ev.get("nodes") or [None])[0]) for ev in logged])
+    recs, _ = _records(slug, {k for k in kinds if isinstance(k, str)}, nodes)
     base: dict[tuple[str, str], dict[str, str]] = {}
     for op in ops_:
         if op.get("op") in ("attach.update", "attach.delete") and isinstance(op.get("id"), str) and (op.get("kind"), op["id"]) in recs:
@@ -103,7 +129,8 @@ def _base(slug: str, events: list[dict[str, Any]], ops_: list[dict[str, Any]] = 
             for nid in ev.get("nodes") or []:
                 if ("node", nid) in recs:
                     base.setdefault(("node", nid), {})
-    return [{"kind": k, "id": i, "title": (recs[(k, i)].get("title") if k == "node" else None), "fields": f}
+    return [{"kind": k, "id": i, "title": (recs[(k, i)].get("title") if k == "node" else None), "fields": f,
+             **({"node": recs[(k, i)].get("node")} if k not in ("node", "edge", "project") else {})}
             for (k, i), f in base.items()]
 
 
@@ -126,9 +153,11 @@ def stale(rec: dict[str, Any]) -> list[str]:
     """What moved since the proposal was shown: lines like 「Tool use helps」.status (empty if nothing)."""
     if not rec.get("slug"):
         return []
-    recs, live = _records(rec["slug"], {b["kind"] for b in rec.get("base") or []})
+    base = rec.get("base") or []
+    recs, live = _records(rec["slug"], {b["kind"] for b in base},
+                          _on_nodes([(b["kind"], b.get("node")) for b in base if b["kind"] not in ("node", "edge", "project")]))
     out = []
-    for b in rec.get("base") or []:
+    for b in base:
         cur = recs.get((b["kind"], b["id"]))
         name = i18n.t("rmap.record", kind=b["kind"], title=b.get("title") or b["id"])
         alive = cur is not None and (own_live(cur) if b["kind"] in ("node", "project") else child_live(cur, live))

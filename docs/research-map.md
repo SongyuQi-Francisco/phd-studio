@@ -280,7 +280,7 @@ node's records when it is shown (`GET .../attachments/results?node=`, which read
 panel those of its node, or of the whole map once "all experiments" is picked; both read again when the map's stamp
 changes, and say so with a retry when a read fails (never "no results"). The panel remembers the metric shown per node
 once that node's records are in. Everything else reads only the kinds it uses (`Project.read(attachments=[...])`): the canvas evidence, the peer
-analysis and suggestions peers and evidence, a proposal the kinds it changes (and, for a measurement it would add, that
+analysis and suggestions peers and evidence, a proposal the kinds it changes (of results only the files of the nodes its operations name, and, for a measurement it would add, that
 node's file), the CLI's `show` the digests. The time travel replays every kind, results included (a batch event names
 its records and replay takes their fields from the files), and gives each replayed map its digests. An import is capped at 19998 records (rows × metrics), checked before anything
 is written.
