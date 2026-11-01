@@ -141,7 +141,7 @@ export function ResultsSheet({ ctx, nodeId, mode, onClose }) {
 
   const counts = Object.fromEntries(Object.entries(digests).map(([id, d]) => [id, d.count]));
   const fail = (e) => ctx.toast(e.message);
-  const remove = (r) => ctx.api.apply([{ op: "attach.delete", kind: "results", id: r.id }]).catch(fail);
+  const remove = (r) => ctx.api.apply([{ op: "attach.delete", kind: "results", id: r.id, node: r.node }]).catch(fail);
   // a baseline is a property of the config: flip it on every record of that config on this metric's node
   // the server flags every matching record (however many: it goes in chunks), then the page reads the map again
   const flag = (json) => ctx.api.call(`${ctx.api.base}/results/set`, { json }).then(() => ctx.api.refresh()).catch(fail);

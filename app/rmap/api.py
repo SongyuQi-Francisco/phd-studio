@@ -163,19 +163,25 @@ def add_attachment(slug: str, kind: str, body: dict[str, Any]) -> dict[str, Any]
     return {**r, "id": r["refs"]["$new"]}
 
 
+def _on(node: Any) -> dict[str, Any]:
+    """The node an attachment hangs on, when the caller knows it: a kind kept one file per node reads only that file."""
+    return {"node": node} if node else {}
+
+
 @core.patch("/projects/{slug}/attachments/{kind}/{aid}")
 def update_attachment(slug: str, kind: str, aid: str, body: dict[str, Any]) -> dict[str, Any]:
     if kind not in registry.kinds():
         raise HTTPException(404, f"没有这种挂载：{kind}")
-    patch = {k: v for k, v in body.items() if k != "who"}
-    return _run(ops.apply, slug, [{"op": "attach.update", "kind": kind, "id": aid, "set": patch}], who=_who(body))
+    patch = {k: v for k, v in body.items() if k not in ("who", "node")}
+    return _run(ops.apply, slug, [{"op": "attach.update", "kind": kind, "id": aid, "set": patch, **_on(body.get("node"))}],
+                who=_who(body))
 
 
 @core.delete("/projects/{slug}/attachments/{kind}/{aid}")
-def delete_attachment(slug: str, kind: str, aid: str) -> dict[str, Any]:
+def delete_attachment(slug: str, kind: str, aid: str, node: str | None = None) -> dict[str, Any]:
     if kind not in registry.kinds():
         raise HTTPException(404, f"没有这种挂载：{kind}")
-    return _run(ops.apply, slug, [{"op": "attach.delete", "kind": kind, "id": aid}])
+    return _run(ops.apply, slug, [{"op": "attach.delete", "kind": kind, "id": aid, **_on(node)}])
 
 
 # ---- the assistant's proposals and first maps drafted from research-line notes ----

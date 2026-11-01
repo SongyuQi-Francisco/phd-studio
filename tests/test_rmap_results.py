@@ -20,7 +20,7 @@ from app.rmap import ops, project, proposals, registry
 from app.rmap.results import importer, mapping, model, refs, tabular
 
 from .conftest import CONFIG_FILE, PROJECT
-from .test_rmap import as_other_mac, conflict, raw
+from .test_rmap import as_other_mac, conflict, node_rec, raw
 
 
 @pytest.fixture(autouse=True)
@@ -830,6 +830,277 @@ def test_results_live_one_file_per_node_and_a_write_leaves_the_others_alone(slug
     assert all(r.get("deleted") for r in raw(folder / f"{exp['$x']}.yaml")["results"])
 
 
+# ---------- a write opens only the files it needs (#72) ----------
+
+
+@pytest.fixture
+def shard_reads(monkeypatch):
+    """The results files read from now on (each read of one, conflict copies included), as node ids: a write's
+    own reads, the index's, and what the event subscribers read after it (the canvas reads no results)."""
+    from app.store import Store
+    project._DIGESTS.clear()
+    seen: list[str] = []
+    real = Store._read
+
+    def counting(self, path):
+        if path.parent.name == "results":
+            seen.append(path.name.split(".sync-conflict-")[0].removesuffix(".yaml"))
+        return real(self, path)
+
+    monkeypatch.setattr(Store, "_read", counting)
+    return seen
+
+
+def add(slug: str, node: str, n: int = 1, tag: str = "c") -> list[str]:
+    ops.apply(slug, [{"op": "attach.add", "kind": "results", "node": node, "set": {"config": f"{tag}{i}", "metric": "acc", "value": i}}
+                     for i in range(n)], who="import")
+    return [r["id"] for r in project.get(slug).kind_store(model.RESULTS).load_node(node) if r["config"].startswith(tag)]
+
+
+def index_file(slug: str) -> Path:
+    return config.DATA_DIR / "rmap" / f"{slug}.results.ids.json"
+
+
+def test_a_write_reads_only_the_files_of_the_nodes_it_touches(slug: str, exp, shard_reads: list[str]):
+    x, y = exp["$x"], exp["$y"]
+    add(slug, x, 5)
+    on_y = add(slug, y, 5)
+    shard_reads.clear()
+    add(slug, x, 3, tag="more")
+    assert set(shard_reads) == {x}
+    for op in ({"op": "attach.update", "kind": "results", "id": on_y[0], "set": {"value": 0.5}},  # by id alone: the index knows
+               {"op": "attach.update", "kind": "results", "id": on_y[1], "node": y, "set": {"baseline": True}},
+               {"op": "attach.delete", "kind": "results", "id": on_y[2]}):
+        shard_reads.clear()
+        ops.apply(slug, [op])
+        assert set(shard_reads) == {y}, op
+    shard_reads.clear()
+    ops.apply(slug, [{"op": "node.delete", "id": y}])  # takes its own results along, reads nobody else's
+    assert set(shard_reads) == {y}
+    assert len(results(slug, x)) == 8 and results(slug, y) == []
+    assert all(r.get("deleted") for r in raw(config.RMAP_DIR / slug / "results" / f"{y}.yaml")["results"])
+    assert not list(config.RMAP_DIR.rglob("*.ids.json")) and index_file(slug).exists()  # this Mac's cache, not the vault's
+
+
+def test_a_record_named_on_the_wrong_node_is_refused(client: TestClient, slug: str, exp):
+    x, y = exp["$x"], exp["$y"]
+    [rid] = add(slug, x)
+    for node in (y, "nope"):
+        with pytest.raises(KeyError, match=f"节点 {node} 上没有这条 results"):
+            ops.apply(slug, [{"op": "attach.update", "kind": "results", "id": rid, "node": node, "set": {"value": 2}}])
+    base = f"/api/rmap/projects/{slug}/attachments/results/{rid}"
+    assert client.patch(base, json={"value": 3, "node": y}).status_code == 404
+    assert client.patch(base, json={"value": 3, "node": x}).status_code == 200
+    assert client.delete(base, params={"node": y}).status_code == 404
+    assert client.delete(base, params={"node": x}).status_code == 200
+    assert results(slug) == []
+    # evidence (one file for the whole map) checks the node the same way
+    v = ops.apply(slug, [{"op": "attach.add", "ref": "$v", "kind": "evidence", "node": exp["$h"], "set": {"type": "paper", "target": "P"}}])["refs"]["$v"]
+    with pytest.raises(KeyError, match="上没有这条 evidence"):
+        ops.apply(slug, [{"op": "attach.delete", "kind": "evidence", "id": v, "node": x}])
+    for bad in ("", 7, [x]):
+        with pytest.raises(ValueError, match="node 应为这条记录所在节点的 id"):
+            ops.apply(slug, [{"op": "attach.delete", "kind": "evidence", "id": v, "node": bad}])
+
+
+def test_a_node_whose_id_is_no_file_name_is_still_edited_and_deleted(slug: str, exp):
+    path = config.RMAP_DIR / slug / "map.yaml"
+    data = raw(path)  # added by hand in Obsidian
+    data["nodes"].append({"id": "实验一", "type": "experiment", "title": "By hand", "status": "todo", "updated_at": "2026-10-24T10:00:00"})
+    path.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
+    ops.apply(slug, [{"op": "node.update", "id": "实验一", "set": {"status": "active"}}])
+    with pytest.raises(KeyError, match="节点 实验一 上没有这条 results"):
+        ops.apply(slug, [{"op": "attach.delete", "kind": "results", "id": "rs0123456789ab", "node": "实验一"}])
+    ops.apply(slug, [{"op": "node.delete", "id": "实验一"}])
+    assert "实验一" not in {n["id"] for n in project.get(slug).read()["nodes"]}
+
+
+def test_a_write_does_not_hang_on_saving_the_index(slug: str, exp, monkeypatch):
+    x = exp["$x"]
+    add(slug, x)  # the index exists
+    full, real = [True], os.replace
+
+    def disk_full(src, dst):
+        if full[0] and str(dst).endswith(".ids.json"):
+            raise OSError(28, "No space left on device")
+        return real(src, dst)
+
+    monkeypatch.setattr(os, "replace", disk_full)
+    r = ops.apply(slug, [{"op": "node.update", "id": x, "set": {"title": "Ablation A (rev)"}},
+                         {"op": "attach.add", "ref": "$r", "kind": "results", "node": x, "set": {"config": "new", "metric": "acc", "value": 1}}])
+    m = project.get(slug).read()
+    assert next(n for n in m["nodes"] if n["id"] == x)["title"] == "Ablation A (rev)"  # the whole batch, not half of it
+    assert r["refs"]["$r"] in {a["id"] for a in m["attachments"]["results"]}
+    assert {(e["kind"], e["action"]) for e in r["events"]} == {("node", "update"), ("results", "add")}
+    assert {(e["kind"], e["action"]) for e in project.get(slug).events()["events"][:2]} == {("node", "update"), ("results", "add")}
+    assert not list((config.DATA_DIR / "rmap").glob("*.ids.json.*.tmp"))
+    full[0] = False  # the index is behind on x's file: it reads it again
+    ops.apply(slug, [{"op": "attach.update", "kind": "results", "id": r["refs"]["$r"], "set": {"value": 2}}])
+    assert next(a for a in results(slug, x) if a["id"] == r["refs"]["$r"])["value"] == 2
+
+
+def test_a_failed_batch_or_a_dry_run_leaves_conflict_copies_in_the_vault(slug: str, exp):
+    x, y = exp["$x"], exp["$y"]
+    [mine] = add(slug, x)
+    f, m = config.RMAP_DIR / slug / "results" / f"{x}.yaml", config.RMAP_DIR / slug / "map.yaml"
+    theirs = raw(f)
+    theirs["results"].append(as_other_mac({"id": "rsfromthemac1", "node": x, "created_at": "2026-10-26T10:00:00"},
+                                          config="Theirs", metric="acc", value=0.7))
+    conflict(f).write_text(yaml.safe_dump(theirs), encoding="utf-8")
+    their_map = raw(m)
+    as_other_mac(node_rec(their_map, x), title="Renamed there")
+    conflict(m).write_text(yaml.safe_dump(their_map, allow_unicode=True), encoding="utf-8")
+    before = (f.read_bytes(), m.read_bytes())
+    good = [{"op": "node.update", "id": y, "set": {"status": "active"}},
+            {"op": "attach.update", "kind": "results", "id": mine, "set": {"value": 2}}]
+    bad = [*good, {"op": "attach.update", "kind": "results", "id": "rsnosuchrecord", "set": {"value": 3}}]
+    with pytest.raises(KeyError):
+        ops.apply(slug, bad)
+    with pytest.raises(KeyError):
+        ops.simulate(slug, bad)
+    ops.simulate(slug, good)
+    assert conflict(f).exists() and conflict(m).exists() and (f.read_bytes(), m.read_bytes()) == before
+    assert "rsfromthemac1" in {r["id"] for r in raw(conflict(f))["results"]}
+    ops.apply(slug, good)  # a write that goes through folds both copies in, and only then do they leave the vault
+    assert not conflict(f).exists() and not conflict(m).exists()
+    assert {r["id"] for r in results(slug, x)} == {mine, "rsfromthemac1"}
+    assert next(n for n in project.get(slug).read()["nodes"] if n["id"] == x)["title"] == "Renamed there"
+
+
+def test_the_watcher_and_a_page_write_take_the_results_locks_in_one_order(slug: str, exp):
+    import fcntl
+    import threading
+    import time
+    done: list[dict] = []
+    with importer._lock:  # what the watcher holds across sync(), before it takes the file lock for each file
+        t = threading.Thread(target=lambda: done.append(importer.report(slug, exp["$x"], [{"config": "A", "metric": "acc", "value": 1}])))
+        t.start()
+        time.sleep(0.3)  # the page's write is waiting now: for the thread lock, without the file lock
+        with (project.LOCKS / f"{slug}.results.lock").open("w") as f:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)  # BlockingIOError (a deadlock for the watcher) if it held it
+            fcntl.flock(f, fcntl.LOCK_UN)
+    t.join(timeout=60)
+    assert not t.is_alive() and done[0]["applied"]
+
+
+def test_the_index_is_built_again_when_lost_broken_or_behind(slug: str, exp, shard_reads: list[str]):
+    x, y = exp["$x"], exp["$y"]
+    on_x, on_y = add(slug, x, 3), add(slug, y, 3)
+
+    def bump(rid: str, value: float) -> None:
+        ops.apply(slug, [{"op": "attach.update", "kind": "results", "id": rid, "set": {"value": value}}])
+
+    def value(rid: str) -> float:
+        return next(r for r in results(slug) if r["id"] == rid)["value"]
+
+    def tamper(fn) -> None:
+        data = json.loads(index_file(slug).read_text(encoding="utf-8"))
+        fn(data["files"])
+        index_file(slug).write_text(json.dumps(data), encoding="utf-8")
+
+    index_file(slug).unlink()  # lost: built again from the files
+    bump(on_y[0], 10)
+    assert value(on_y[0]) == 10 and index_file(slug).exists()
+    index_file(slug).write_text("{not json", encoding="utf-8")  # broken
+    bump(on_x[0], 11)
+    assert value(on_x[0]) == 11
+    # behind: the other Mac added a record to y's file (its size and time moved, so the index reads it again)
+    f = config.RMAP_DIR / slug / "results" / f"{y}.yaml"
+    theirs = raw(f)
+    theirs["results"].append(as_other_mac({"id": "rs0123456789ab", "node": y, "created_at": "2026-10-26T10:00:00"},
+                                          config="Theirs", metric="acc", value=1))
+    f.write_text(yaml.safe_dump(theirs), encoding="utf-8")
+    shard_reads.clear()
+    bump("rs0123456789ab", 12)
+    assert set(shard_reads) == {y}  # the index read y's file again, then the write opened it; x was left alone
+    assert value("rs0123456789ab") == 12
+    # behind without a sign: the index has the files' current size and time, but misses a record ...
+    tamper(lambda files: files[f"{y}.yaml"]["ids"].remove(on_y[1]))
+    bump(on_y[1], 13)
+    assert value(on_y[1]) == 13
+    # ... or puts it on the wrong node
+    tamper(lambda files: (files[f"{y}.yaml"]["ids"].remove(on_y[2]), files[f"{x}.yaml"]["ids"].append(on_y[2])))
+    bump(on_y[2], 14)
+    assert value(on_y[2]) == 14
+    with pytest.raises(KeyError, match="没有这条 results"):
+        ops.apply(slug, [{"op": "attach.delete", "kind": "results", "id": "rsdeadbeef0000"}])
+
+
+def test_a_conflict_copy_is_in_the_index_and_merges_field_by_field(slug: str, exp, shard_reads: list[str]):
+    x, y = exp["$x"], exp["$y"]
+    [mine] = add(slug, y)
+    [on_x] = add(slug, x)
+    f = config.RMAP_DIR / slug / "results" / f"{y}.yaml"
+    theirs = raw(f)
+    as_other_mac(theirs["results"][0], value=0.9)  # the other Mac changed the value of our record ...
+    theirs["results"].append(as_other_mac({"id": "rsfeedfacecafe", "node": y, "created_at": "2026-10-26T10:00:00"},
+                                          config="Theirs", metric="acc", value=0.7))  # ... and added one of its own
+    conflict(f).write_text(yaml.safe_dump(theirs), encoding="utf-8")
+    shard_reads.clear()
+    ops.apply(slug, [{"op": "attach.update", "kind": "results", "id": on_x, "set": {"baseline": True}}])
+    assert set(shard_reads) == {x, y} and conflict(f).exists()  # y: the index read the new copy's ids; the write left y alone
+    shard_reads.clear()
+    ops.apply(slug, [{"op": "attach.update", "kind": "results", "id": "rsfeedfacecafe", "set": {"baseline": True}},  # only in the copy
+                     {"op": "attach.update", "kind": "results", "id": mine, "set": {"baseline": True}}])
+    assert set(shard_reads) == {y} and not conflict(f).exists()
+    got = {r["id"]: r for r in results(slug, y)}
+    assert got[mine]["value"] == 0.9 and got[mine]["baseline"] is True  # their field and ours, both kept
+    assert got["rsfeedfacecafe"]["baseline"] is True
+    entries = json.loads(index_file(slug).read_text(encoding="utf-8"))["files"]
+    assert set(entries) == {f"{x}.yaml", f"{y}.yaml"} and "rsfeedfacecafe" in entries[f"{y}.yaml"]["ids"]
+
+
+def test_a_write_beats_what_it_read_even_when_the_other_macs_clock_is_ahead(slug: str, exp):
+    from .test_rmap import later
+    y = exp["$y"]
+    [rid] = add(slug, y)
+    f = config.RMAP_DIR / slug / "results" / f"{y}.yaml"
+    theirs = raw(f)
+    as_other_mac(theirs["results"][0], later(device="fastmac"), value=0.9)  # a minute ahead of this Mac's clock
+    conflict(f).write_text(yaml.safe_dump(theirs), encoding="utf-8")
+    add(slug, exp["$x"])  # a write elsewhere has not seen y's stamps, and need not have
+    ops.apply(slug, [{"op": "attach.update", "kind": "results", "id": rid, "set": {"value": 0.3}}])  # after seeing theirs
+    assert results(slug, y)[0]["value"] == 0.3
+
+
+def test_new_result_ids_are_longer_and_checked_against_every_node(slug: str, exp, monkeypatch, shard_reads: list[str]):
+    import secrets
+    x, y = exp["$x"], exp["$y"]
+    [old] = add(slug, y)
+    assert len(old) == 2 + 12
+    queue = [old[2:], "c" * 12]  # the first draw is an id that exists, on a node this write does not open
+    real = secrets.token_hex
+    monkeypatch.setattr(ops.secrets, "token_hex", lambda n=None: queue.pop(0) if queue and n == 6 else real(n))
+    shard_reads.clear()
+    [new] = add(slug, x)
+    assert new == "rs" + "c" * 12 and y not in shard_reads
+    # an id from before (4 random bytes) is still found and edited
+    f = config.RMAP_DIR / slug / "results" / f"{y}.yaml"
+    data = raw(f)
+    data["results"].append(as_other_mac({"id": "rs0badf00d", "node": y, "created_at": "2026-10-01T10:00:00"}, config="Old", metric="acc", value=1))
+    f.write_text(yaml.safe_dump(data), encoding="utf-8")
+    ops.apply(slug, [{"op": "attach.update", "kind": "results", "id": "rs0badf00d", "set": {"value": 2}}])
+    assert next(r for r in results(slug, y) if r["id"] == "rs0badf00d")["value"] == 2
+
+
+def test_a_dry_run_reads_only_the_nodes_it_touches_and_writes_nothing(slug: str, exp, shard_reads: list[str]):
+    x, y = exp["$x"], exp["$y"]
+    on_x, _ = add(slug, x, 2), add(slug, y, 2)
+    stamp, index = project.get(slug).stamp(), index_file(slug).read_bytes()
+    batch = [{"op": "attach.update", "kind": "results", "id": on_x[0], "set": {"value": 9}},
+             {"op": "attach.add", "kind": "results", "node": x, "set": {"config": "new", "metric": "acc", "value": 1}}]
+    shard_reads.clear()
+    sim = ops.simulate(slug, batch)
+    assert set(shard_reads) == {x} and project.get(slug).stamp() == stamp and index_file(slug).read_bytes() == index
+    assert [e["count"] for e in sim["events"] if e["kind"] == "results"] == [1, 1]
+    index_file(slug).unlink()  # without an index it reads every file to find the record, and still saves none
+    what = lambda r: [(e["kind"], e["action"], e.get("count")) for e in r["events"]]  # noqa: E731
+    assert what(ops.simulate(slug, batch)) == what(sim)
+    assert not index_file(slug).exists() and project.get(slug).stamp() == stamp
+    assert ops.simulate(None, [{"op": "node.add", "ref": "$e", "set": {"type": "experiment", "title": "E"}},
+                               {"op": "attach.add", "kind": "results", "node": "$e", "set": {"config": "a", "metric": "m", "value": 1}}])["refs"]
+
+
 def test_listings_do_not_read_the_results(slug: str, exp, monkeypatch, capsys):
     importer.run_import(slug, exp["$x"], text=WIDE)
     from app.rmap.records import ShardedStore
@@ -886,23 +1157,6 @@ def test_a_digest_reads_fields_edited_by_hand_into_other_types():
     assert d["metric"] == "123" and d["dataset"] == "7" and d["config"] == "B" and d["last"] == "2026-10-21"
     assert model.digest([_rec("C", "acc", float("inf"))]) == {"count": 1, "metric": "acc", "dataset": "", "last": "2026-10-20",
                                                               "metrics": ["acc"], "configs": ["C"]}  # no value to show
-
-
-@pytest.fixture
-def shard_reads(monkeypatch):
-    """The results files read from now on (each read of one, conflict copies included), as node ids."""
-    from app.store import Store
-    project._DIGESTS.clear()
-    seen: list[str] = []
-    real = Store._read
-
-    def counting(self, path):
-        if path.parent.name == "results":
-            seen.append(path.name.split(".sync-conflict-")[0].removesuffix(".yaml"))
-        return real(self, path)
-
-    monkeypatch.setattr(Store, "_read", counting)
-    return seen
 
 
 def test_the_map_page_gets_a_digest_per_node_and_reads_only_the_files_that_changed(client: TestClient, slug: str, exp, shard_reads):
@@ -1035,6 +1289,23 @@ def test_a_proposal_checks_for_the_same_measurement_in_that_nodes_file_only(slug
                                               "set": {"config": "Ours", "metric": "acc", "value": 0.9}}], summary="acc")
     shard_reads.clear()
     assert proposals.stale(rec) == [] and shard_reads == [exp["$x"]]
+
+
+def test_a_proposal_that_names_the_records_node_reads_only_that_nodes_file(slug: str, exp, shard_reads):
+    x, y = exp["$x"], exp["$y"]
+    [rid] = add(slug, x)
+    add(slug, y)
+    shard_reads.clear()
+    rec = proposals.propose(slug=slug, ops_=[{"op": "attach.update", "kind": "results", "id": rid, "node": x, "set": {"value": 0.9}}],
+                            summary="fix the number")
+    assert set(shard_reads) == {x} and rec["base"][0]["node"] == x
+    shard_reads.clear()
+    assert proposals.stale(rec) == [] and set(shard_reads) == {x}
+    ops.apply(slug, [{"op": "attach.update", "kind": "results", "id": rid, "node": x, "set": {"value": 0.5}}])
+    assert proposals.stale(rec) and "value" in proposals.stale(rec)[0]  # changed here before it was confirmed
+    old = {**rec, "base": [{k: v for k, v in b.items() if k != "node"} for b in rec["base"]]}  # made before #72: reads the kind
+    shard_reads.clear()
+    assert proposals.stale(old) == proposals.stale(rec) and {x, y} <= set(shard_reads)
 
 
 def test_the_replayed_map_has_the_digests_of_then(slug: str, exp):

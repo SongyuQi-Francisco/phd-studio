@@ -3,7 +3,7 @@
 A store file holds named collections of records, each with an `id` and an
 `updated_at`. Deletes are tombstones (`deleted: true`) so a record removed on
 one machine is not resurrected by the other. Syncthing conflict copies are
-merged on the next read (newest record wins) and parked outside the vault.
+merged on the next read (newest record wins) and parked outside the vault once the merged file is written.
 """
 from __future__ import annotations
 
@@ -61,17 +61,22 @@ class Store:
         return {k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in r.items()
                 if v not in (None, "", [])}
 
-    def _write(self, data: dict[str, list[dict[str, Any]]]) -> None:
+    def _write(self, data: dict[str, list[dict[str, Any]]]) -> os.stat_result:
+        """Returns the written file's stat, taken before it replaced the old one (so it is ours, whatever comes next)."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         body = yaml.dump({c: [self._clean(r) for r in data[c]] for c in self.collections}, Dumper=self.dumper,
                          allow_unicode=True, sort_keys=False, width=1000)
         self._tmp.write_text(self.header + body, encoding="utf-8")
+        st = self._tmp.stat()
         os.replace(self._tmp, self.path)
+        return st
 
-    def _merge_conflicts(self, data: dict[str, list[dict[str, Any]]]) -> bool:
+    def _merge_conflicts(self, data: dict[str, list[dict[str, Any]]]) -> list[Path]:
+        """Fold every conflict copy into data, in memory. Returns the copies: they stay in the vault until the
+        merged data is written (`_park`), so a write that fails or a dry run loses nothing the other Mac wrote."""
         copies = sorted(self.path.parent.glob(f"{self.path.stem}.sync-conflict-*{self.path.suffix}"))
-        for copy in copies:
-            other = self._read(copy)
+        for path in copies:
+            other = self._read(path)
             for c in self.collections:
                 mine = {r["id"]: r for r in data[c]}
                 for r in other[c]:
@@ -80,9 +85,17 @@ class Store:
                         data[c].append(r)
                     else:
                         self._merge_record(m, r)
+        return copies
+
+    @staticmethod
+    def _park(copies: list[Path]) -> None:
+        """Move merged conflict copies out of the vault, once the file holding what they had is written."""
+        for path in copies:
             CONFLICTS_DIR.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(copy), CONFLICTS_DIR / copy.name)
-        return bool(copies)
+            try:
+                shutil.move(str(path), CONFLICTS_DIR / path.name)
+            except FileNotFoundError:  # gone already
+                pass
 
     @staticmethod
     def _merge_record(mine: dict[str, Any], theirs: dict[str, Any]) -> None:
@@ -105,8 +118,18 @@ class Store:
         """Live (non-deleted) records per collection; tombstones too when asked."""
         with self._locked():
             data = self._read(self.path)
-            if self._merge_conflicts(data):
+            copies = self._merge_conflicts(data)
+            if copies:
                 self._write(data)
+                self._park(copies)
+        return {c: [r for r in data[c] if include_deleted or not r.get("deleted")] for c in self.collections}
+
+    def peek(self, include_deleted: bool = False) -> dict[str, list[dict[str, Any]]]:
+        """What load returns, without writing anything: conflict copies are merged in memory and left where they
+        are (a dry run)."""
+        with self._locked():
+            data = self._read(self.path)
+            self._merge_conflicts(data)
         return {c: [r for r in data[c] if include_deleted or not r.get("deleted")] for c in self.collections}
 
     @contextmanager
@@ -115,11 +138,12 @@ class Store:
         skip_unchanged: leave the file alone when the block changed nothing (and no conflict copy was merged)."""
         with self._locked():
             data = self._read(self.path)
-            merged = self._merge_conflicts(data)
-            before = copy.deepcopy(data) if skip_unchanged and not merged else None
+            copies = self._merge_conflicts(data)
+            before = copy.deepcopy(data) if skip_unchanged and not copies else None
             yield data
             if before is None or data != before:
                 self._write(data)
+            self._park(copies)
 
     def add(self, collection: str, record: dict[str, Any], prefix: str) -> dict[str, Any]:
         rec = {"id": new_id(prefix), **record, "created_at": now(), "updated_at": now()}

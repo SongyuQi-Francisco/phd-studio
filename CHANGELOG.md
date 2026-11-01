@@ -19,8 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Research maps, part 4: experiment results. Results records (config, dataset, metric, value, date, source) on experiment and result nodes; paste a CSV / TSV / JSON table or point at an output file inside a folder listed in `[paths] results_roots`, map the columns once (the app remembers the mapping for the file) and import it as one atomic batch, optionally watching the file for changes; a results panel with a comparison of configs against baselines and a trend per config, a results section and a latest-value chip on the map; `studio map` (list, show, status, note, `result add / list / import / sync`) for experiment scripts and other sessions, which works with the app stopped; and an assistant tool that proposes results for you to confirm ([#48](https://github.com/SongyuQi-Francisco/phd-studio/issues/48))
 
+### Changed
+
+- Research map writes read only what they change: a write opens the results files of the nodes it touches (a record is found by id through a per-Mac index in the data dir, rebuilt from the files when lost or behind), new result ids have 6 random bytes, and the change log is read and written with libyaml. On a map with 16000 results, adding, changing or deleting one result, deleting a node, or importing 300 rows onto a small node takes under 0.1 s instead of about 1.5 s, and the map stays locked only that long (redrawing the Obsidian Canvas afterwards is #71) ([#72](https://github.com/SongyuQi-Francisco/phd-studio/issues/72))
+
 ### Fixed
 
+- A research map batch that failed, and a dry run, moved Syncthing conflict copies out of the vault without writing what they held into the file: the other Mac's changes were left only in this Mac's `sync-conflicts` folder. Copies now leave the vault only once the merged file is written ([#75](https://github.com/SongyuQi-Francisco/phd-studio/issues/75))
+- Results: the file watcher and an import or a baseline flag from the page could deadlock (they took the thread lock and the file lock in opposite orders) ([#72](https://github.com/SongyuQi-Francisco/phd-studio/issues/72))
 - Security: the local server now answers only requests addressed to this machine. A `Host` other than `127.0.0.1`, `localhost` or `[::1]` gets a 403 (DNS rebinding), and writes and WebSocket handshakes with a non-local `Origin` are refused; the desktop window, other ports (`STUDIO_PORT`) and clients without an `Origin` (the CLI, curl) work as before ([#64](https://github.com/SongyuQi-Francisco/phd-studio/issues/64))
 - The demo generator (`scripts/demo/make_demo.py`) failed on a Mac with its default output folder: results files under `~/Library/Application Support` were refused. Only credentials and the app's own folders are closed now, and a test builds a whole demo workspace offline ([#66](https://github.com/SongyuQi-Francisco/phd-studio/issues/66))
 

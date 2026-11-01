@@ -371,6 +371,29 @@ def test_event_log_conflict_copies_are_unioned(slug: str):
     assert not conflict(path).exists()
 
 
+def test_the_event_log_is_read_with_libyaml_when_it_is_there(slug: str):
+    from app.rmap.records import FieldStore
+    p = project.get(slug)
+    st = p.event_store("2026-11")
+    assert (st.loader, st.dumper) == (FieldStore.loader, FieldStore.dumper)
+    assert st.loader is getattr(yaml, "CSafeLoader", yaml.SafeLoader)  # the pure Python one only without the C extension
+    refs = seed(slug)
+    ops.apply(slug, [{"op": "attach.add", "kind": "results", "node": refs["$x"], "set": {"config": f"c{i}", "metric": "acc", "value": i}}
+                     for i in range(3)], who="import")
+    bulk = next(e for e in all_events(slug) if e["kind"] == "results")
+    assert bulk["count"] == 3 and len(bulk["targets"]) == 3  # the records it names: the history replays them
+    # what the pure Python dumper wrote reads the same, and what libyaml writes still reads with the pure Python loader
+    month = p.event_months()[0]
+    path = p.dir / "events" / f"{month}.yaml"
+    before = all_events(slug)
+    path.write_text(project.EVENTS_HEADER + yaml.dump(raw(path), Dumper=yaml.SafeDumper, allow_unicode=True, sort_keys=False),
+                    encoding="utf-8")
+    assert all_events(slug) == before
+    with p.event_store(month).editing() as data:
+        data["events"].append({"id": "evlocal", "at": f"{month}-03T09:00:00", "kind": "log", "action": "note", "summary": "中文"})
+    assert yaml.load(path.read_text(encoding="utf-8"), Loader=yaml.SafeLoader)["events"][-1]["summary"] == "中文"
+
+
 def test_subscribers_hear_of_events_from_the_other_mac_once(slug: str, monkeypatch: pytest.MonkeyPatch):
     seen: list[tuple[str, list[str]]] = []
     monkeypatch.setattr(registry, "_SUBSCRIBERS", [])
