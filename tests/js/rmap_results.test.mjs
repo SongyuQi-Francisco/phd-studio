@@ -38,6 +38,8 @@ eq(l.rows.map((r) => r.config), ["BM25", "Ours"], "lower first");
 ok(l.rows[1].good === false, "slower than the baseline is not good");
 ok(lowerBetter("val_loss") && lowerBetter("WER") && !lowerBetter("Recall@10") && !lowerBetter("accuracy"), "direction guessed from the name");
 eq(compare([rec("A", "acc", 1, { better: "lower" })], "acc").dir, "lower", "an explicit `better` wins over the name");
+eq(compare(["zeta", "Émile", "ours", "Ours"].map((c) => rec(c, "acc", 0.5)), "acc").rows.map((r) => r.config), ["Ours", "ours", "zeta", "Émile"],
+  "equal values: by config in code-unit order, as the server's digest");
 
 // trend: a line per config, points by date, baselines last
 const t = trend(rs, "Recall@10", "MS MARCO");

@@ -28,7 +28,7 @@ _LOWER = re.compile(r"(loss|error|err\b|latency|time|perplexity|\bppl\b|\bmae\b|
 
 
 def lower_is_better(metric: str) -> bool:
-    return bool(_LOWER.search(metric or ""))
+    return bool(_LOWER.search(str(metric or "")))
 
 
 def direction(rec: dict[str, Any]) -> str:
@@ -153,39 +153,64 @@ def identity(rec: dict[str, Any]) -> tuple[str, str, str, str, str, str]:
 
 
 def day_of(rec: dict[str, Any]) -> str:
-    """The day a measurement counts for: its date, else the day it was recorded."""
-    return rec.get("date") or str(rec.get("created_at") or "")[:10]
+    """The day a measurement counts for: its date, else the day it was recorded. Always text (a date edited by hand
+    may read back as a number or a YAML date)."""
+    return str(rec.get("date") or rec.get("created_at") or "")[:10]
+
+
+def _text(v: Any) -> str:
+    return "" if v is None else str(v)
+
+
+def _by_code_units(s: str) -> bytes:
+    """Sort key that orders text as JavaScript's < does (UTF-16 code units): ties in the results panel's ranking
+    (web/rmap/results/data.js `compare`) break the same way here."""
+    return s.encode("utf-16-be", "surrogatepass")
+
+
+SUGGEST = 12  # metrics and configs a digest names, most recently measured first: what the add form suggests
+
+
+def _recent(records: list[dict[str, Any]], field: str) -> list[str]:
+    last: dict[str, str] = {}
+    for r in records:
+        v = _text(r.get(field))
+        if v:
+            last[v] = max(last.get(v, ""), day_of(r))
+    return sorted(last, key=lambda v: last[v], reverse=True)[:SUGGEST]  # stable: first seen among equals
 
 
 def digest(records: list[dict[str, Any]]) -> dict[str, Any] | None:
     """What the map shows of a node's results (GET map sends this instead of the records): how many there are, the
     most recently measured metric (and dataset; more records breaks a tie), the latest value of its best config that
-    is not a baseline (the best baseline when there is nothing else), and the latest date. A config's latest value is
-    the mean of its runs on its latest date, as in the results panel (web/rmap/results/data.js `compare`)."""
+    is not a baseline (the best baseline when there is nothing else), the latest date, and the metrics and configs
+    measured (most recent first, at most SUGGEST of each). A config's latest value is the mean of its runs on its
+    latest date, ranked as in the results panel (web/rmap/results/data.js `compare`). Fields edited by hand into
+    other types are read as text; values that are not finite numbers are left out."""
     if not records:
         return None
     groups: dict[str, dict[str, Any]] = {}
     for r in records:
-        key = f"{str(r.get('metric') or '').lower()}\0{str(r.get('dataset') or '').lower()}"
-        g = groups.setdefault(key, {"metric": r.get("metric") or "", "dataset": r.get("dataset") or "", "n": 0, "last": ""})
+        metric, dataset = _text(r.get("metric")), _text(r.get("dataset"))
+        g = groups.setdefault(f"{metric.lower()}\0{dataset.lower()}", {"metric": metric, "dataset": dataset, "n": 0, "last": ""})
         g["n"] += 1
         g["last"] = max(g["last"], day_of(r))
     top = max(groups.values(), key=lambda g: (g["last"], g["n"]))  # the first one seen among equals
-    out = {"count": len(records), "metric": top["metric"], "dataset": top["dataset"], "last": top["last"] or None}
-    rs = [r for r in records if str(r.get("metric") or "").lower() == top["metric"].lower()
-          and (r.get("dataset") or "") == top["dataset"]]
+    out = {"count": len(records), "metric": top["metric"], "dataset": top["dataset"], "last": top["last"] or None,
+           "metrics": _recent(records, "metric"), "configs": _recent(records, "config")}
+    rs = [r for r in records if _text(r.get("metric")).lower() == top["metric"].lower() and _text(r.get("dataset")) == top["dataset"]]
     lower = direction(next((r for r in rs if r.get("better")), rs[0])) == "lower"
     by_config: dict[str, list[dict[str, Any]]] = {}
     for r in rs:
-        by_config.setdefault(str(r.get("config") or ""), []).append(r)
+        by_config.setdefault(_text(r.get("config")), []).append(r)
     rows = []
     for config, recs in by_config.items():
         last = max(day_of(r) for r in recs)
-        vals = [float(r["value"]) for r in recs if day_of(r) == last
-                and isinstance(r.get("value"), (int, float)) and not isinstance(r["value"], bool)]
+        vals = [float(r["value"]) for r in recs if day_of(r) == last and isinstance(r.get("value"), (int, float))
+                and not isinstance(r["value"], bool) and math.isfinite(r["value"])]
         if vals:
             rows.append({"config": config, "value": sum(vals) / len(vals), "baseline": any(r.get("baseline") for r in recs)})
-    rows.sort(key=lambda x: (x["value"] if lower else -x["value"], x["config"].casefold(), x["config"]))
+    rows.sort(key=lambda x: (x["value"] if lower else -x["value"], _by_code_units(x["config"])))
     row = next((x for x in rows if not x["baseline"]), rows[0] if rows else None)
     return {**out, "config": row["config"], "value": row["value"]} if row else out
 

@@ -56,6 +56,7 @@
   "import": "Import",
   "layer": "Results",
   "layer.legend": "Latest metric value",
+  "load_failed": "Could not read the results: {error}",
   "loading": "Reading the results…",
   "legend.baseline": "Grey is a baseline",
   "open": {

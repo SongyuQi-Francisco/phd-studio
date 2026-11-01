@@ -17,21 +17,28 @@ const today = () => new Date().toLocaleDateString("sv"); // i18n-ignore (YYYY-MM
 const SHOWN = 25;
 
 // The result records of one node (or of the whole map: nodeId ""), read from the server and read again whenever
-// the map changes (an edit here, an import, the other Mac). null until the first answer for this node is in;
-// `none` (the map's digest says there are none) skips asking.
+// the map changes (an edit here, an import, the other Mac). rows: null until the first answer for this node is in,
+// and still null (or the last ones read) when reading failed: then error says why and retry asks again, so a
+// failure never reads as "no results". `none` (the map's digest says there are none) skips asking.
 export function useResults(ctx, nodeId, none = false) {
   const key = `${ctx.slug}\u0000${nodeId || ""}`;
-  const [got, setGot] = useState({ key: null, rows: null });
+  const [got, setGot] = useState({ key: null, rows: null, error: null });
+  const [tries, setTries] = useState(0);
   const latest = useRef(0);
   useEffect(() => {
     if (none) return;
     const mine = ++latest.current;
     ctx.api.call(`${ctx.api.base}/attachments/results${nodeId ? "?node=" + encodeURIComponent(nodeId) : ""}`)
-      .then((r) => { if (mine === latest.current) setGot({ key, rows: r.results }); })
-      .catch((e) => { if (mine === latest.current) { setGot({ key, rows: [] }); ctx.toast(e.message); } });
-  }, [key, ctx.map.stamp, none]);
-  return none ? [] : got.key === key ? got.rows : null;
+      .then((r) => { if (mine === latest.current) setGot({ key, rows: r.results, error: null }); })
+      .catch((e) => { if (mine === latest.current) setGot((g) => ({ key, rows: g.key === key ? g.rows : null, error: e.message || String(e) })); });
+  }, [key, ctx.map.stamp, none, tries]);
+  const retry = () => { setGot((g) => ({ ...g, error: null })); setTries((n) => n + 1); };
+  if (none) return { rows: [], error: null, retry };
+  return got.key === key ? { rows: got.rows, error: got.error, retry } : { rows: null, error: null, retry };
 }
+
+export const LoadError = ({ error, retry }) => html`<div class="err rs-loaderr"><span>${t("rmap_results.load_failed", { error })}</span>
+  <button class="btn ghost sm" onClick=${retry}>${t("common.retry")}</button></div>`;
 
 // Renders its children into <body>: the page root is a layout container, which would trap a fixed sheet.
 export function Portal({ children }) {
@@ -42,11 +49,17 @@ export function Portal({ children }) {
   return null;
 }
 
-function AddForm({ ctx, node, records, onDone }) {
+// What the add form suggests: this node's configs and metrics first, then the ones the other experiments measured
+// most recently (their digests name them).
+const HINTS = 50;
+const hints = (...lists) => [...new Set(lists.flat().filter(Boolean))].slice(0, HINTS);
+
+function AddForm({ ctx, node, records, digests, onDone }) {
   const [f, setF] = useState({ config: "", metric: "", dataset: "", value: "", date: today(), baseline: false });
   const [busy, setBusy] = useState(false);
-  const configs = [...new Set(records.map((r) => r.config))];
-  const names = [...new Set(records.map((r) => r.metric))];
+  const others = Object.values(digests);
+  const configs = hints(records.map((r) => r.config), others.flatMap((x) => x.configs || []));
+  const names = hints(records.map((r) => r.metric), others.flatMap((x) => x.metrics || []));
   const set = (k) => (e) => setF({ ...f, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value });
   const ok = f.config.trim() && f.metric.trim() && f.value.trim() !== "";
   const save = async (e) => {
@@ -106,7 +119,7 @@ export function ResultsSheet({ ctx, nodeId, mode, onClose }) {
   const [metric, setMetric] = useState(() => (nodeId ? prefs.get("rmap:rs:" + nodeId, null) : null));
   const [dataset, setDataset] = useState(null);
   const [more, setMore] = useState(false);
-  const got = useResults(ctx, scope, scope ? !digests[scope] : !Object.keys(digests).length);
+  const { rows: got, error, retry } = useResults(ctx, scope, scope ? !digests[scope] : !Object.keys(digests).length);
   const records = got || [];
   const node = scope ? ctx.map.nodes.find((n) => n.id === scope) : null;
   const metrics = metricsOf(records);
@@ -122,7 +135,9 @@ export function ResultsSheet({ ctx, nodeId, mode, onClose }) {
     document.addEventListener("keydown", esc);
     return () => document.removeEventListener("keydown", esc);
   }, [form]);
-  useEffect(() => { if (nodeId) prefs.set("rmap:rs:" + nodeId, m); }, [m]);
+  // remember the metric shown per node, once its records are in (while they load there is none to remember)
+  const loaded = got !== null;
+  useEffect(() => { if (scope && loaded && m) prefs.set("rmap:rs:" + scope, m); }, [m, scope, loaded]);
 
   const counts = Object.fromEntries(Object.entries(digests).map(([id, d]) => [id, d.count]));
   const fail = (e) => ctx.toast(e.message);
@@ -139,7 +154,7 @@ export function ResultsSheet({ ctx, nodeId, mode, onClose }) {
     <div class="rs-sheet" role="dialog" aria-label=${t("rmap_results.sheet")}>
       <div class="rs-top">
         <h2>${t("rmap_results.sheet")}</h2>
-        <select class="rs-scope" value=${scope} onChange=${(e) => { setScope(e.target.value); setMetric(null); setDataset(null); }} aria-label=${t("rmap_results.scope")}>
+        <select class="rs-scope" value=${scope} onChange=${(e) => { setScope(e.target.value); setMetric(e.target.value ? prefs.get("rmap:rs:" + e.target.value, null) : null); setDataset(null); }} aria-label=${t("rmap_results.scope")}>
           <option value="">${t("rmap_results.all_nodes")}</option>
           ${nodes.map((n) => html`<option value=${n.id}>${n.title}${counts[n.id] ? ` · ${counts[n.id]}` : ""}</option>`)}
         </select>
@@ -149,10 +164,11 @@ export function ResultsSheet({ ctx, nodeId, mode, onClose }) {
         <button class="mp-close" title=${t("rmap.close")} onClick=${onClose}><${Icon} name="x" sm /></button>
       </div>
 
-      ${form === "add" && node && html`<${AddForm} ctx=${ctx} node=${node} records=${records} onDone=${() => setForm(null)} />`}
+      ${form === "add" && node && html`<${AddForm} ctx=${ctx} node=${node} records=${records} digests=${digests} onDone=${() => setForm(null)} />`}
       ${form === "import" && node && html`<${ImportDialog} ctx=${ctx} node=${node} onClose=${() => setForm(null)} />`}
 
-      ${got === null ? html`<div class="rs-empty"><p class="mp-quiet">${t("rmap_results.loading")}</p></div>`
+      ${error && html`<${LoadError} error=${error} retry=${retry} />`}
+      ${got === null ? !error && html`<div class="rs-empty"><p class="mp-quiet">${t("rmap_results.loading")}</p></div>`
         : !records.length ? html`<div class="rs-empty"><p>${t(node ? "rmap_results.empty" : "rmap_results.empty_all")}</p>
           ${node && html`<code class="rs-cli">studio map result add "${ctx.map.project.title}" ${node.id} recall@10=0.412 --config "Ours"</code>`}</div>` : html`
         <div class="rs-controls">

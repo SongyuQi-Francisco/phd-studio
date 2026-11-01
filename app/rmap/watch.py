@@ -28,7 +28,7 @@ def once(seen: dict[str, str]) -> list[str]:
                 p = project.get(slug)
                 p.ingest()
                 p.digests()
-            except (KeyError, OSError, ValueError):
+            except Exception:  # noqa: BLE001 - one broken map must not stop the round for the others
                 log.exception("research map ingest failed for %s", slug)
             seen[slug] = project.stamp_of(RMAP_DIR / slug)
             moved.append(slug)

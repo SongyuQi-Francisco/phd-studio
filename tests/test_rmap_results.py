@@ -863,7 +863,7 @@ def test_a_nodes_digest_is_its_latest_metric_and_the_best_config_on_it():
     d = model.digest(rs)
     # the latest day ties MS MARCO with NQ: the pair with more records wins; Ours averages its two runs of that day
     assert d == {"count": 8, "metric": "Recall@10", "dataset": "MS MARCO", "last": "2026-10-22", "config": "Ours",
-                 "value": pytest.approx(0.47)}
+                 "value": pytest.approx(0.47), "metrics": ["Recall@10", "latency_ms"], "configs": ["Ours", "BM25", "DPR"]}
     assert model.digest([]) is None
     only_base = [_rec("BM25", "acc", 0.3, baseline=True), _rec("DPR", "acc", 0.5, baseline=True)]
     assert model.digest(only_base)["config"] == "DPR"  # nothing but baselines: the best of them
@@ -872,6 +872,20 @@ def test_a_nodes_digest_is_its_latest_metric_and_the_best_config_on_it():
     assert model.digest([_rec("A", "acc", 1, better="lower"), _rec("B", "acc", 2)])["config"] == "A"
     undated = [{"id": "u", "node": "x", "config": "A", "metric": "acc", "value": 0.5, "created_at": "2026-10-01T09:00:00"}]
     assert model.digest(undated)["last"] == "2026-10-01"  # the day it was recorded
+    ties = [_rec(c, "acc", 0.5) for c in ("zeta", "Émile", "ours", "Ours")]
+    assert model.digest(ties)["config"] == "Ours"  # equal values: code-unit order, as the panel's compare() ranks them
+    many = [_rec(f"c{i}", "acc", i / 100, date=f"2026-10-{i + 1:02d}") for i in range(20)]
+    assert model.digest(many)["configs"] == [f"c{i}" for i in range(19, 7, -1)]  # the most recent, at most SUGGEST
+
+
+def test_a_digest_reads_fields_edited_by_hand_into_other_types():
+    import datetime
+    odd = [_rec("A", 123, 0.5, date=20251020), _rec("B", 123, 0.7, date=datetime.date(2026, 10, 21), dataset=7),
+           _rec("C", "acc", float("nan")), _rec(None, "acc", "0.9")]
+    d = model.digest(odd)
+    assert d["metric"] == "123" and d["dataset"] == "7" and d["config"] == "B" and d["last"] == "2026-10-21"
+    assert model.digest([_rec("C", "acc", float("inf"))]) == {"count": 1, "metric": "acc", "dataset": "", "last": "2026-10-20",
+                                                              "metrics": ["acc"], "configs": ["C"]}  # no value to show
 
 
 @pytest.fixture
@@ -917,6 +931,76 @@ def test_the_map_page_gets_a_digest_per_node_and_reads_only_the_files_that_chang
     assert [k["name"] for k in client.get("/api/rmap/meta").json()["kinds"] if k["digest"]] == ["results"]
     ops.apply(slug, [{"op": "node.delete", "id": exp["$y"]}])  # a node gone takes its digest along
     assert set(client.get(url).json()["digests"]["results"]) == {exp["$x"]}
+
+
+def test_a_results_file_broken_by_hand_leaves_the_map_and_the_background_round_working(client: TestClient, slug: str, exp, monkeypatch):
+    import dataclasses
+    from app.rmap import watch
+    project._DIGESTS.clear()
+    importer.run_import(slug, exp["$x"], text=WIDE)
+    importer.run_import(slug, exp["$y"], text=WIDE)
+    path = config.RMAP_DIR / slug / "results" / f"{exp['$x']}.yaml"
+    data = raw(path)
+    for r in data["results"]:
+        r["date"], r["metric"] = 20261020, 7  # an int date and a numeric metric, typed in Obsidian
+    path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    m = client.get(f"/api/rmap/projects/{slug}")
+    assert m.status_code == 200 and m.json()["digests"]["results"][exp["$x"]]["metric"] == "7"
+    # a digest that fails anyway: that node is left out (and logged), the rest of the map is served
+    kind = registry.KINDS["results"]
+    monkeypatch.setitem(registry.KINDS, "results", dataclasses.replace(
+        kind, digest=lambda recs: 1 / 0 if recs[0]["node"] == exp["$x"] else kind.digest(recs)))
+    project._DIGESTS.clear()
+    m = client.get(f"/api/rmap/projects/{slug}")
+    assert m.status_code == 200 and set(m.json()["digests"]["results"]) == {exp["$y"]}
+    assert client.get(f"/api/rmap/projects/{slug}/history").status_code == 200
+    # a map that fails in the background round does not stop the round for the maps after it
+    other = ops.create_project("Project Beacon")["slug"]
+    real = project.Project.ingest
+
+    def broken(self):
+        if self.slug == min(slug, other):
+            raise TypeError("broken by hand")
+        return real(self)
+
+    monkeypatch.setattr(project.Project, "ingest", broken)
+    assert sorted(watch.once({})) == sorted([slug, other])
+
+
+@pytest.mark.parametrize("engine", ["node", "jsc"])
+def test_the_digest_shows_what_the_results_panel_ranks_first(engine, tmp_path):
+    """The node's corner shows the server's digest, the panel ranks with data.js: on the same records they agree."""
+    import random
+    exe = shutil.which("node") if engine == "node" else (str(JSC) if JSC.exists() else None)
+    if not exe:
+        pytest.skip(f"{engine} is not installed")
+    rng = random.Random(71)
+    cases = []
+    for i in range(400):
+        cases.append([{"id": f"r{i}-{j}", "node": "x", "config": rng.choice(["Ours", "ours", "OURS", "Émile", "emile", "zeta", "BM25", "Ablation-1"]),
+                       "metric": rng.choice(["Recall@10", "recall@10", "latency_ms", "acc"]), "dataset": rng.choice(["", "NQ", "nq", "MS MARCO"]),
+                       "value": rng.choice([0.4, 0.5, 0.41, 12, 48]), "date": rng.choice(["2026-10-18", "2026-10-20", "2026-10-22"]),
+                       **({"baseline": True} if rng.random() < 0.3 else {}), **({"better": rng.choice(["higher", "lower"])} if rng.random() < 0.1 else {})}
+                      for j in range(rng.randint(1, 9))])
+    want = [{k: model.digest(c)[k] for k in ("metric", "dataset", "config", "value")} for c in cases]
+    shutil.copy(PROJECT / "web" / "rmap" / "results" / "data.js", tmp_path / "data.mjs")
+    (tmp_path / "test.mjs").write_text(f"""import {{ compare, groups }} from "./data.mjs";
+const out = typeof print === "function" ? print : console.log.bind(console);
+const CASES = {json.dumps(cases)};
+const WANT = {json.dumps(want)};
+CASES.forEach((rs, i) => {{
+  const g = groups(rs)[0];
+  const row = compare(rs, g.metric, g.dataset).rows.find((r) => !r.baseline) || compare(rs, g.metric, g.dataset).best;
+  const got = {{ metric: g.metric, dataset: g.dataset, config: row.config, value: row.value }};
+  const w = WANT[i];
+  if (got.metric !== w.metric || got.dataset !== w.dataset || got.config !== w.config || Math.abs(got.value - w.value) > 1e-9)
+    throw new Error("case " + i + ": " + JSON.stringify(got) + " vs " + JSON.stringify(w));
+}});
+out("ok");
+""", encoding="utf-8")
+    args = [exe, "-m", "test.mjs"] if engine == "jsc" else [exe, "test.mjs"]
+    r = subprocess.run(args, cwd=tmp_path, capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0 and r.stdout.strip().endswith("ok"), r.stdout + r.stderr
 
 
 def test_writes_that_do_not_touch_results_and_the_canvas_after_them_read_no_results(slug: str, exp, shard_reads):

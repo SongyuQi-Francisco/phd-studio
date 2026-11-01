@@ -247,14 +247,17 @@ reads none.
 
 **Reading (#71).** The map page never gets the records of the whole map. `GET /projects/{slug}` carries a **digest** per
 node instead (`digests.results[node]`: `count`, the most recently measured `metric` and its `dataset`, the latest
-`value` of its best config that is not a baseline and that `config`, and `last`, the latest date; `model.digest`, the
-one place this is worked out). Each node's digest is kept in memory with the signature (name, mtime, size) of its file
+`value` of its best config that is not a baseline and that `config` (ties go to the config first in UTF-16 order, as
+in the panel), `last`, the latest date, and `metrics` / `configs`, the ones measured, most recent first, at most 12 of
+each, which the add form suggests; `model.digest`, the one place this is worked out; a record it cannot read leaves that
+node without a digest and is logged). Each node's digest is kept in memory with the signature (name, mtime, size) of its file
 and conflict copies, so a read of the map opens only the files that changed since the last one: none after a write
 elsewhere, one after a write to one node, all of them once after the app starts (the background round of
 `app/rmap/watch.py` does that one, and refreshes the digests of a map whose files changed, so the page rarely waits). The detail panel's section reads its
 node's records when it is shown (`GET .../attachments/results?node=`, which reads that node's file alone), the results
 panel those of its node, or of the whole map once "all experiments" is picked; both read again when the map's stamp
-changes. Everything else reads only the kinds it uses (`Project.read(attachments=[...])`): the canvas evidence, the peer
+changes, and say so with a retry when a read fails (never "no results"). The panel remembers the metric shown per node
+once that node's records are in. Everything else reads only the kinds it uses (`Project.read(attachments=[...])`): the canvas evidence, the peer
 analysis and suggestions peers and evidence, a proposal the kinds it changes (and, for a measurement it would add, that
 node's file), the CLI's `show` the digests. The time travel replays every kind, results included (a batch event names
 its records and replay takes their fields from the files), and gives each replayed map its digests. A write through `ops.apply` on this kind still reads all the shards (about 1.5 s per 17000 records, so a

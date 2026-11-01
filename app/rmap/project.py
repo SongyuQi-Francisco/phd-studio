@@ -16,6 +16,7 @@ import copy
 import fcntl
 import hashlib
 import json
+import logging
 import os
 import re
 from collections.abc import Iterable
@@ -28,6 +29,7 @@ from . import model, registry
 from .clock import from_iso, parse
 from .records import FieldStore, ShardedStore, child_live, clocks, live_ids, own_live
 
+log = logging.getLogger(__name__)
 HEADER = "# Research map, managed by PhD Studio (研究地图). Edit in the app; see docs/research-map.md.\n"
 EVENTS_HEADER = "# Research map change log, managed by PhD Studio. One record per change; never edited.\n"
 PROJECT_ID = "project"
@@ -162,7 +164,8 @@ class Project:
         """{kind: {node: digest}} for every kind with a digest (registry.AttachmentKind.digest) and every live node
         that has records of it. Such a kind keeps one file per node, and a node's records live and die with it (a
         node delete's tombstones name that node), so a digest depends on its file alone: it is kept with the
-        file's signature (and its conflict copies'), and only the nodes whose file changed are read again."""
+        file's signature (and its conflict copies'), and only the nodes whose file changed are read again. A node
+        whose digest cannot be worked out (a file broken by hand) is logged and left out until its file changes."""
         if live is None:
             live = live_ids(self.map.load(include_deleted=True)["nodes"])
         out: dict[str, dict[str, Any]] = {}
@@ -180,8 +183,8 @@ class Project:
                 key = (str(store.folder), node)
                 hit = _DIGESTS.get(key)
                 if hit is None or hit[0] != sig:
-                    recs = [r for r in store.load_node(node, include_deleted=True) if child_live(r, live) and r.get("node") == node]
-                    hit = _DIGESTS[key] = (sig, kind.digest(recs) if recs else None)
+                    hit = _DIGESTS[key] = (sig, _digest(kind, node, lambda: [
+                        r for r in store.load_node(node, include_deleted=True) if child_live(r, live) and r.get("node") == node]))
                 if hit[1] is not None:
                     book[node] = hit[1]
         return out
@@ -302,6 +305,17 @@ def _chosen(attachments: bool | Iterable[str]) -> dict[str, registry.AttachmentK
     return {n: kinds[n] for n in names if n in kinds}
 
 
+def _digest(kind: registry.AttachmentKind, node: str, records) -> dict[str, Any] | None:
+    """One node's digest (records: a list, or a function that reads it); None when it has no records, or when its
+    file or the kind's digest fails (logged): one broken node must not take the map down."""
+    try:
+        recs = records() if callable(records) else records
+        return kind.digest(recs) if recs else None
+    except Exception:  # noqa: BLE001 - hand-edited YAML can hold anything
+        log.exception("research map: no %s digest for node %s", kind.name, node)
+        return None
+
+
 def digests_of(attachments: dict[str, list[dict[str, Any]]]) -> dict[str, dict[str, Any]]:
     """`digests` of records in hand (a replayed map): {kind: {node: digest}} for the kinds given that have one."""
     out: dict[str, dict[str, Any]] = {}
@@ -310,7 +324,7 @@ def digests_of(attachments: dict[str, list[dict[str, Any]]]) -> dict[str, dict[s
             by_node: dict[str, list[dict[str, Any]]] = {}
             for r in attachments[name]:
                 by_node.setdefault(r.get("node"), []).append(r)
-            out[name] = {nid: d for nid, recs in by_node.items() if (d := kind.digest(recs)) is not None}
+            out[name] = {nid: d for nid, recs in by_node.items() if (d := _digest(kind, nid, recs)) is not None}
     return out
 
 

@@ -8,7 +8,7 @@ import { t } from "/i18n.js";
 import { C } from "/charts.js";
 import { Compare, Spark } from "/rmap/results/charts.js";
 import { compare, datasetsOf, metricsOf, spark } from "/rmap/results/data.js";
-import { ResultsSheet, useResults } from "/rmap/results/panel.js";
+import { LoadError, ResultsSheet, useResults } from "/rmap/results/panel.js";
 
 export const ChartIcon = () => html`<svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V11M10 20V4M16 20v-6M22 20H2" /></svg>`;
 
@@ -17,7 +17,7 @@ export function Section({ node, ctx }) {
   const [pick, setPick] = useState(() => prefs.get("rmap:rs:" + node.id, null));
   useEffect(() => { setOpen(null); setPick(prefs.get("rmap:rs:" + node.id, null)); }, [node.id]);
   const count = ctx.map.digests?.results?.[node.id]?.count || 0;
-  const got = useResults(ctx, node.id, !count);
+  const { rows: got, error, retry } = useResults(ctx, node.id, !count);
   const mine = got || [];
   const n = got ? got.length : count;
   const metrics = metricsOf(mine);
@@ -36,7 +36,8 @@ export function Section({ node, ctx }) {
       <button class="mp-h-btn" title=${t("rmap_results.add")} onClick=${() => setOpen("add")}><${Icon} name="plus" sm /></button>
       <button class="mp-h-btn" title=${t("rmap_results.import")} onClick=${() => setOpen("import")}><${Icon} name="file" sm /></button>
     </div>
-    ${got === null && html`<p class="mp-quiet">${t("rmap_results.loading")}</p>`}
+    ${error && html`<${LoadError} error=${error} retry=${retry} />`}
+    ${got === null && !error && html`<p class="mp-quiet">${t("rmap_results.loading")}</p>`}
     ${!n && html`<p class="mp-quiet">${t("rmap_results.empty_short")}</p>`}
     ${cmp && html`<${Compare} data=${cmp} limit=${4} />`}
     ${sp && sp.values.length > 1 && html`<div class="rs-spark"><span class="rs-mono">${m.toUpperCase()}</span><${Spark} values=${sp.values} labels=${sp.labels} color=${C.aqua} /></div>`}

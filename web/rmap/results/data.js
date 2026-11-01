@@ -54,7 +54,8 @@ export const pick = (records, metric, dataset) =>
   records.filter((r) => same(r.metric, metric) && (dataset == null || (r.dataset || "") === dataset));
 
 // The latest value of every config for one metric (and dataset): runs on the latest date are averaged.
-// Rows come best first; `ref` is the best baseline and every other row gets its gap to it.
+// Rows come best first (equal values: by config, in plain code-unit order, as the server's digest ranks them,
+// app/rmap/results/model.py); `ref` is the best baseline and every other row gets its gap to it.
 export function compare(records, metric, dataset) {
   const rs = pick(records, metric, dataset);
   const dir = rs.length ? dirOf(rs.find((r) => r.better) || rs[0]) : "higher";
@@ -70,7 +71,7 @@ export function compare(records, metric, dataset) {
     return { config, baseline: list.some((r) => r.baseline), value: mean(vals), n: vals.length, lo: Math.min(...vals), hi: Math.max(...vals),
       date: last, ids: at.map((r) => r.id) };
   });
-  rows.sort((a, b) => (dir === "lower" ? a.value - b.value : b.value - a.value) || a.config.localeCompare(b.config));
+  rows.sort((a, b) => (dir === "lower" ? a.value - b.value : b.value - a.value) || (a.config < b.config ? -1 : a.config > b.config ? 1 : 0));
   const ref = rows.find((r) => r.baseline) || null;
   for (const r of rows) {
     if (ref && !r.baseline) {
